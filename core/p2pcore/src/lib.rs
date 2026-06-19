@@ -24,6 +24,7 @@
 pub mod crypto;
 pub mod identity;
 pub mod link;
+pub mod social;
 pub mod transport;
 
 /// One error type for the whole core so the FFI surface stays small.
