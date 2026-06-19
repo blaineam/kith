@@ -1,0 +1,19 @@
+# Rust
+core/target/
+**/*.rs.bk
+
+# Apple / Xcode
+apple/build/
+apple/DerivedData/
+apple/*.xcodeproj
+apple/*.xcworkspace
+*.xcuserstate
+.DS_Store
+
+# Web
+web/node_modules/
+web/dist/
+
+# Generated bindings
+core/p2pcore-ffi/generated/
+*.xcframework

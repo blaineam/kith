@@ -1,0 +1,101 @@
+//! Milestone 1a proof: real hybrid-PQ identity, key establishment, and the
+//! link/ticket system — all verifiable on the host with no devices or network.
+
+use p2pcore::crypto::{decapsulate, encapsulate_to, open, seal};
+use p2pcore::identity::{Identity, KithId};
+use p2pcore::link::KithLink;
+use p2pcore::transport::{select, Path};
+
+#[test]
+fn identity_sign_verify_roundtrip() {
+    let id = Identity::generate();
+    let pubid = id.public();
+    let msg = b"post: family beach day";
+    let sig = id.sign(msg);
+    assert!(pubid.verify(msg, &sig).is_ok());
+    assert!(pubid.verify(b"tampered", &sig).is_err());
+}
+
+#[test]
+fn public_identity_bundle_roundtrips() {
+    let id = Identity::generate();
+    let pubid = id.public();
+    let bytes = pubid.to_bytes();
+    assert_eq!(bytes.len(), 32 + 32 + 1184);
+    let restored = KithId::from_bytes(&bytes).expect("decode bundle");
+    assert_eq!(restored.node_id_bytes(), pubid.node_id_bytes());
+    assert_eq!(restored.verification(), pubid.verification());
+}
+
+#[test]
+fn hybrid_pq_kem_agrees_then_aead_roundtrips() {
+    let bob = Identity::generate();
+
+    // A sender derives a content key *to* Bob using only Bob's public identity and a
+    // fresh ephemeral key — the sender's own identity isn't needed for KEM.
+    let (enc, key_a) = encapsulate_to(&bob.public()).expect("encapsulate");
+    // Bob recovers the identical key from the encapsulation.
+    let key_b = decapsulate(&bob, &enc).expect("decapsulate");
+    assert_eq!(key_a, key_b, "both halves of the hybrid KEM must agree");
+
+    // The key actually protects content (AES-256-GCM).
+    let plaintext = b"a lossless 100GB video, conceptually";
+    let sealed = seal(&key_a, plaintext);
+    let opened = open(&key_b, &sealed).expect("open");
+    assert_eq!(opened, plaintext);
+
+    // A different identity cannot recover the key (so cannot open the content).
+    let mallory = Identity::generate();
+    let key_m = decapsulate(&mallory, &enc).expect("decapsulate runs");
+    assert_ne!(key_a, key_m);
+    assert!(open(&key_m, &sealed).is_err(), "wrong key must fail AEAD");
+
+    // Tampered ciphertext must fail the GCM tag check.
+    let mut bad = sealed.clone();
+    *bad.last_mut().unwrap() ^= 0x01;
+    assert!(open(&key_b, &bad).is_err(), "tamper must be detected");
+}
+
+#[test]
+fn link_roundtrips_and_detects_tampering() {
+    let id = Identity::generate();
+    let pubid = id.public();
+    let link = KithLink::from_identity(&pubid);
+
+    // Deep-link form.
+    let uri = link.to_uri();
+    assert!(uri.starts_with("kith://u/"));
+    assert!(uri.contains('#'));
+    assert_eq!(KithLink::parse(&uri).unwrap(), link);
+
+    // Website form parses to the same payload.
+    let web = link.to_web("kith.link/");
+    assert!(web.starts_with("https://kith.link/u/"));
+    assert_eq!(KithLink::parse(&web).unwrap(), link);
+
+    // A link matches the genuine identity fetched from discovery...
+    assert!(link.matches(&pubid));
+    // ...but not a different identity (substituted keys = MITM).
+    let other = Identity::generate().public();
+    assert!(!link.matches(&other));
+
+    // A link with no verification fragment is rejected, not trusted blindly.
+    assert!(KithLink::parse("kith://u/AAAA").is_err());
+}
+
+#[test]
+fn path_selector_prefers_local_and_protects_bulk() {
+    let all = [Path::Relay, Path::Bluetooth, Path::LocalWifi];
+
+    // Small payload: Bluetooth wins (cheapest, most private, always-on).
+    assert_eq!(select(&all, false), Some(Path::Bluetooth));
+
+    // Bulk payload: skip Bluetooth's tiny pipe, take local WiFi over relay.
+    assert_eq!(select(&all, true), Some(Path::LocalWifi));
+
+    // Only the relay is reachable: use it (last resort) — even for bulk.
+    assert_eq!(select(&[Path::Relay], true), Some(Path::Relay));
+
+    // Nothing reachable.
+    assert_eq!(select(&[], false), None);
+}
