@@ -218,11 +218,11 @@ impl SocialDemo {
     pub fn friend_post(&self, body: String, created_at: u64) -> String {
         self.author_event(false, created_at, EventKind::Post { body, media: vec![], music: None })
     }
-    pub fn comment(&self, target: String, body: String, created_at: u64) -> String {
-        self.author_event(true, created_at, EventKind::Comment { target, body })
+    pub fn comment(&self, target: String, body: String, media: Vec<String>, created_at: u64) -> String {
+        self.author_event(true, created_at, EventKind::Comment { target, body, media })
     }
     pub fn friend_comment(&self, target: String, body: String, created_at: u64) -> String {
-        self.author_event(false, created_at, EventKind::Comment { target, body })
+        self.author_event(false, created_at, EventKind::Comment { target, body, media: vec![] })
     }
     pub fn react(&self, target: String, emoji: String, created_at: u64) -> String {
         self.author_event(true, created_at, EventKind::Reaction { target, emoji })
@@ -261,6 +261,7 @@ impl SocialDemo {
                         author_short: short(&c.author),
                         is_me: c.author == me,
                         body: c.body,
+                        media: c.media,
                         edited: c.edited,
                         unsent: c.unsent,
                     })
@@ -315,6 +316,7 @@ pub struct FeedCommentFfi {
     pub author_short: String,
     pub is_me: bool,
     pub body: String,
+    pub media: Vec<String>,
     pub edited: bool,
     pub unsent: bool,
 }

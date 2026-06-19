@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
-enum MediaKind: String { case image, video }
+enum MediaKind: String { case image, video, audio }
 
 /// A piece of attached media held locally on this device. In the real send path the
 /// underlying bytes are sealed E2E before they leave; here (local demo) they stay on
@@ -31,6 +31,14 @@ final class MediaStore: ObservableObject {
     func addVideo(url: URL) -> String {
         let id = UUID().uuidString
         items[id] = MediaItem(id: id, kind: .video, image: Self.poster(for: url), videoURL: url)
+        return id
+    }
+
+    /// Audio reuses `videoURL` as the file URL.
+    @discardableResult
+    func addAudio(url: URL) -> String {
+        let id = UUID().uuidString
+        items[id] = MediaItem(id: id, kind: .audio, image: nil, videoURL: url)
         return id
     }
 

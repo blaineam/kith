@@ -44,8 +44,8 @@ pub enum EventKind {
     Post { body: String, media: Vec<String>, music: Option<TrackRef> },
     /// A direct/group message (rendered as a post in a 1:1 or chat group).
     Message { body: String },
-    /// A comment on a post/message.
-    Comment { target: String, body: String },
+    /// A comment on a post/message — text and/or media (a rich-media reply).
+    Comment { target: String, body: String, media: Vec<String> },
     /// A reaction (emoji) to a post/message.
     Reaction { target: String, emoji: String },
     /// Edit the body of one of *your own* prior events.
@@ -236,6 +236,7 @@ pub struct FeedComment {
     pub author: String,
     pub created_at: u64,
     pub body: String,
+    pub media: Vec<String>,
     pub edited: bool,
     pub unsent: bool,
 }
@@ -306,7 +307,7 @@ pub fn build_feed(mut events: Vec<Event>) -> Vec<FeedItem> {
                     },
                 );
             }
-            EventKind::Comment { target: _, body } => {
+            EventKind::Comment { target: _, body, media } => {
                 comment_order.push(e.id.clone());
                 comments.insert(
                     e.id.clone(),
@@ -315,6 +316,7 @@ pub fn build_feed(mut events: Vec<Event>) -> Vec<FeedItem> {
                         author: e.author.clone(),
                         created_at: e.created_at,
                         body: body.clone(),
+                        media: media.clone(),
                         edited: false,
                         unsent: false,
                     },
@@ -352,6 +354,7 @@ pub fn build_feed(mut events: Vec<Event>) -> Vec<FeedItem> {
                     if c.author == e.author {
                         c.unsent = true;
                         c.body.clear();
+                        c.media.clear();
                     }
                 }
             }

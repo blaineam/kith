@@ -70,7 +70,7 @@ fn feed_resolves_posts_comments_reactions_edits_unsends() {
     // Alice posts; Bob comments and reacts; Alice edits her post; Alice posts a
     // second thing then unsends it.
     let post = Event::new(&a, 100, EventKind::Post { body: "first".into(), media: vec!["blob1".into()], music: None });
-    let comment = Event::new(&b, 110, EventKind::Comment { target: post.id.clone(), body: "nice!".into() });
+    let comment = Event::new(&b, 110, EventKind::Comment { target: post.id.clone(), body: "nice!".into(), media: vec![] });
     let react1 = Event::new(&b, 120, EventKind::Reaction { target: post.id.clone(), emoji: "❤️".into() });
     let react2 = Event::new(&a, 121, EventKind::Reaction { target: post.id.clone(), emoji: "❤️".into() });
     let edit = Event::new(&a, 130, EventKind::Edit { target: post.id.clone(), body: "first (fixed)".into() });

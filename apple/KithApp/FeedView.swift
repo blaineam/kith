@@ -27,7 +27,7 @@ final class FeedStore: ObservableObject {
         postTick += 1
         refresh()
     }
-    func comment(_ id: String, _ body: String) { _ = demo.comment(target: id, body: body, createdAt: now()); refresh() }
+    func comment(_ id: String, _ body: String, _ media: [String] = []) { _ = demo.comment(target: id, body: body, media: media, createdAt: now()); refresh() }
     func react(_ id: String, _ emoji: String) { _ = demo.react(target: id, emoji: emoji, createdAt: now()); reactionTick += 1; refresh() }
     func edit(_ id: String, _ body: String) { _ = demo.edit(target: id, body: body, createdAt: now()); refresh() }
     func unsend(_ id: String) { _ = demo.unsend(target: id, createdAt: now()); refresh() }
@@ -91,7 +91,7 @@ struct FeedView: View {
                             PostCard(
                                 item: item, friendName: friendName,
                                 onReact: { e in withAnimation(KithTheme.bouncy) { store.react(item.id, e) } },
-                                onComment: { b in withAnimation(KithTheme.smooth) { store.comment(item.id, b) } },
+                                onComment: { b, m in withAnimation(KithTheme.smooth) { store.comment(item.id, b, m) } },
                                 onEdit: { b in withAnimation(KithTheme.smooth) { store.edit(item.id, b) } },
                                 onUnsend: { withAnimation(KithTheme.smooth) { store.unsend(item.id) } },
                                 onFriendReply: { withAnimation(KithTheme.smooth) { store.friendReply(item.id) } }
@@ -213,13 +213,16 @@ private struct PostCard: View {
     let item: FeedItemFfi
     let friendName: String
     let onReact: (String) -> Void
-    let onComment: (String) -> Void
+    let onComment: (String, [String]) -> Void
     let onEdit: (String) -> Void
     let onUnsend: () -> Void
     let onFriendReply: () -> Void
 
     @ObservedObject private var audio = AudioCoordinator.shared
     @State private var commentText = ""
+    @State private var commentMedia: [String] = []
+    @State private var showCommentMediaPicker = false
+    @State private var showAudioRecorder = false
     @State private var showEdit = false
     @State private var editText = ""
     @State private var players: [String: AVPlayer] = [:]
@@ -364,18 +367,21 @@ private struct PostCard: View {
     }
 
     private var commentsList: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(item.comments, id: \.id) { c in
-                HStack(alignment: .top, spacing: 6) {
-                    Text(c.isMe ? "You" : friendName).font(.caption.weight(.semibold))
-                        .foregroundStyle(c.isMe ? KithTheme.pink : .secondary)
-                    if c.unsent {
-                        Text("unsent").font(.caption).italic().foregroundStyle(.secondary)
-                    } else {
-                        Text(c.body).font(.caption)
-                        if c.edited { Text("(edited)").font(.caption2).foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(c.isMe ? "You" : friendName).font(.caption.weight(.semibold))
+                            .foregroundStyle(c.isMe ? KithTheme.pink : .secondary)
+                        if c.unsent {
+                            Text("unsent").font(.caption).italic().foregroundStyle(.secondary)
+                        } else if !c.body.isEmpty {
+                            Text(c.body).font(.caption)
+                            if c.edited { Text("(edited)").font(.caption2).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
                     }
-                    Spacer()
+                    if !c.unsent && !c.media.isEmpty { commentMediaRow(c.media) }
                 }
             }
         }
@@ -383,17 +389,72 @@ private struct PostCard: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var commentField: some View {
-        HStack(spacing: 8) {
-            TextField("Add a comment…", text: $commentText)
-                .font(.caption).padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Color(.tertiarySystemFill), in: Capsule())
-            Button {
-                let t = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !t.isEmpty else { return }
-                onComment(t); commentText = ""
-            } label: { Image(systemName: "arrow.up.circle.fill").imageScale(.large).foregroundStyle(KithTheme.pink) }
-                .buttonStyle(PressableStyle())
+    @ViewBuilder private func commentMediaRow(_ refs: [String]) -> some View {
+        HStack(spacing: 6) {
+            ForEach(refs, id: \.self) { ref in
+                if let m = MediaStore.shared.item(ref) {
+                    switch m.kind {
+                    case .audio:
+                        if let u = m.videoURL { AudioPlayerPill(url: u) }
+                    case .video:
+                        if let img = m.image {
+                            thumb(img).overlay(Image(systemName: "play.circle.fill").foregroundStyle(.white).font(.title3))
+                        }
+                    case .image:
+                        if let img = m.image { thumb(img) }
+                    }
+                }
+            }
         }
+    }
+    private func thumb(_ img: UIImage) -> some View {
+        Image(uiImage: img).resizable().scaledToFill()
+            .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var commentField: some View {
+        VStack(spacing: 6) {
+            if !commentMedia.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) { ForEach(commentMedia, id: \.self) { commentAttachChip($0) } }
+                }
+            }
+            HStack(spacing: 8) {
+                Menu {
+                    Button { showCommentMediaPicker = true } label: { Label("Photo or Video", systemImage: "photo") }
+                    Button { showAudioRecorder = true } label: { Label("Audio reply", systemImage: "mic") }
+                } label: { Image(systemName: "paperclip").foregroundStyle(.secondary) }
+                TextField("Add a reply…", text: $commentText)
+                    .font(.caption).padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+                Button { sendComment() } label: {
+                    Image(systemName: "arrow.up.circle.fill").imageScale(.large).foregroundStyle(KithTheme.pink)
+                }
+                .buttonStyle(PressableStyle())
+            }
+        }
+        .sheet(isPresented: $showCommentMediaPicker) { MediaPicker { refs in commentMedia.append(contentsOf: refs) } }
+        .sheet(isPresented: $showAudioRecorder) { AudioRecorderView { ref in commentMedia.append(ref) } }
+    }
+
+    private func commentAttachChip(_ ref: String) -> some View {
+        let m = MediaStore.shared.item(ref)
+        return ZStack(alignment: .topTrailing) {
+            Group {
+                if let img = m?.image { Image(uiImage: img).resizable().scaledToFill() }
+                else { Image(systemName: "waveform").frame(maxWidth: .infinity, maxHeight: .infinity).background(KithTheme.brandHorizontal.opacity(0.25)) }
+            }
+            .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 8))
+            Button { commentMedia.removeAll { $0 == ref } } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.white).background(Circle().fill(.black.opacity(0.5)))
+            }
+        }
+    }
+
+    private func sendComment() {
+        let t = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty || !commentMedia.isEmpty else { return }
+        onComment(t, commentMedia)
+        commentText = ""; commentMedia = []
     }
 }
