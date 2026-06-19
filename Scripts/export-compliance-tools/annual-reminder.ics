@@ -1,0 +1,32 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Kith//Export Compliance//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:kith-bis-self-classification-annual@blaineam
+DTSTAMP:20260619T180000Z
+DTSTART:20270201T090000
+DURATION:PT30M
+RRULE:FREQ=YEARLY
+SUMMARY:📋 File Kith encryption self-classification report (BIS — DUE TODAY)
+URL:file:///Users/blainemiller/Applications/Send%20Kith%20Compliance%20Report.app
+LOCATION:~/Applications/Send Kith Compliance Report.app
+DESCRIPTION:US export compliance — annual ECCN 5D992.c mass-market self-classification report to BIS + NSA (crypt@bis.doc.gov\, enc@nsa.gov)\, due February 1.\n\nONE CLICK: open “Send Kith Compliance Report” in ~/Applications — it regenerates the report\, attaches the CSV\, and offers to send.
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Kith BIS self-classification report due in 2 weeks (Feb 1). Plenty of time — open “Send Kith Compliance Report” when ready.
+TRIGGER:-P14D
+END:VALARM
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Kith BIS self-classification report due in 4 days (Feb 1).
+TRIGGER:-P4D
+END:VALARM
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:DUE TODAY (Feb 1): file the Kith BIS self-classification report — open “Send Kith Compliance Report”.
+TRIGGER:PT0S
+END:VALARM
+END:VEVENT
+END:VCALENDAR
