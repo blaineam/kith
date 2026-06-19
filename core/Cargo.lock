@@ -2277,6 +2277,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kith-net"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "iroh",
+ "p2pcore",
+ "rustls",
+ "tokio",
+]
+
+[[package]]
 name = "kith_ffi"
 version = "0.0.1"
 dependencies = [

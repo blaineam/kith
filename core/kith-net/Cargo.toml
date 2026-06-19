@@ -1,0 +1,13 @@
+[package]
+name = "kith-net"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "Kith networking: iroh-backed P2P transport carrying sealed social envelopes."
+
+[dependencies]
+p2pcore = { path = "../p2pcore" }
+iroh = "1"
+tokio = { version = "1", features = ["full"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+anyhow = "1"

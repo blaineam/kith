@@ -27,12 +27,19 @@ byte-identical. Runnable: `cargo run -p kith-demo` (see `core/demo/`).
 - Bonus: iroh 1.0 ships `X25519MLKEM768` PQ-transport examples → confirms D4's
   PQ transport is available to switch on later
 
+### Reusable networking node ✅
+- **`kith-net`** crate: a `Node` (iroh) that listens + dials and exchanges opaque
+  payloads. Test: two nodes exchange a real `p2pcore::social::SealedEnvelope` over
+  QUIC and the recipient opens the post with their own keys.
+
 ### Remaining for M1b polish
-- Integrate **iroh-blobs** for content-addressed (BLAKE3) chunked, **resumable**,
-  multi-source transfer (replaces the one-shot read for large/100 GB files)
-- Wrap iroh behind the `Transport` trait + path-selector
-- mDNS/LAN discovery + relay fallback (currently dials an explicit address)
-- True two-device run (currently two endpoints on one host over loopback)
+- **Async FFI** so the iOS app drives a `Node` (connect, send, receive callbacks)
+- **Discovery** (iroh n0 / DHT) so an invite link's node id resolves to a live
+  address over the internet (currently direct/LAN address)
+- Integrate **iroh-blobs** for content-addressed, **resumable**, multi-source
+  transfer (large/100 GB files)
+- Wrap behind the `Transport` trait + path-selector; relay fallback
+- True two-device run (currently two nodes on one host)
 
 ## ✅ M1c — Hybrid PQ signatures (DONE)
 

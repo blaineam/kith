@@ -1,0 +1,41 @@
+//! Two nodes exchange a real sealed social post over QUIC — the networking proof
+//! that turns "waiting to connect" into an actual connection.
+
+use kith_net::Node;
+use p2pcore::identity::Identity;
+use p2pcore::social::{open_event, seal_event, Event, EventKind, Group, SealedEnvelope};
+use tokio::time::{timeout, Duration};
+
+#[tokio::test]
+async fn two_nodes_exchange_a_sealed_post() {
+    let alice = Identity::generate();
+    let bob = Identity::generate();
+    let group = Group::new("fam", vec![alice.public(), bob.public()]);
+
+    // Alice composes and seals a post to the group.
+    let event = Event::new(
+        &alice.public().node_id_bytes(),
+        42,
+        EventKind::Post { body: "hello from across the network 🌍".into(), media: vec![] },
+    );
+    let payload = seal_event(&alice, &group, &event).unwrap().to_bytes();
+
+    // Bob listens; Alice dials Bob and sends the sealed bytes.
+    let mut bob_node = Node::spawn().await.unwrap();
+    let bob_addr = bob_node.local_dial_addr().await.unwrap();
+    let alice_node = Node::spawn().await.unwrap();
+    alice_node.send(bob_addr, &payload).await.unwrap();
+
+    // Bob receives the opaque bytes and opens the post with his own keys.
+    let received = timeout(Duration::from_secs(10), bob_node.recv())
+        .await
+        .expect("recv timed out")
+        .expect("channel closed");
+    let env = SealedEnvelope::from_bytes(&received).unwrap();
+    let opened = open_event(&bob, &alice.public(), &env).unwrap();
+
+    assert_eq!(opened, event, "Bob recovers Alice's exact post over the network");
+
+    alice_node.close().await;
+    bob_node.close().await;
+}
