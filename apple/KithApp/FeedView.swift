@@ -219,6 +219,7 @@ private struct PostCard: View {
     let onFriendReply: () -> Void
 
     @ObservedObject private var audio = AudioCoordinator.shared
+    @ObservedObject private var profile = ProfileStore.shared
     @State private var commentText = ""
     @State private var commentMedia: [String] = []
     @State private var showCommentMediaPicker = false
@@ -313,12 +314,15 @@ private struct PostCard: View {
         return p
     }
 
-    private var avatar: some View {
-        Circle()
-            .fill(item.isMe ? KithTheme.brand
-                  : LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
-            .frame(width: 34, height: 34)
-            .overlay(Text(item.isMe ? "You" : "K").font(.caption2.bold()).foregroundStyle(.white))
+    @ViewBuilder private var avatar: some View {
+        if item.isMe {
+            KithAvatar(image: profile.avatar, emoji: profile.emoji, size: 34)
+        } else {
+            Circle()
+                .fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                .frame(width: 34, height: 34)
+                .overlay(Text(String(friendName.prefix(1))).font(.caption2.bold()).foregroundStyle(.white))
+        }
     }
 
     private var header: some View {

@@ -7,6 +7,8 @@ struct OnboardingView: View {
     @State private var step = 0
     @State private var name = ""
     @State private var emoji = "🌿"
+    @State private var pickedImage: UIImage?
+    @State private var showPhotoPicker = false
 
     var body: some View {
         ZStack {
@@ -56,10 +58,14 @@ struct OnboardingView: View {
                 .font(.title.bold())
                 .multilineTextAlignment(.center)
 
-            Circle()
-                .fill(KithTheme.brand)
-                .frame(width: 92, height: 92)
-                .overlay(Text(emoji).font(.system(size: 44)))
+            KithAvatar(image: pickedImage, emoji: emoji, size: 96)
+                .shadow(color: KithTheme.pink.opacity(0.3), radius: 12, y: 6)
+            Button { showPhotoPicker = true } label: {
+                Label(pickedImage == nil ? "Add a photo" : "Change photo", systemImage: "photo")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered).tint(KithTheme.pink)
+            .sheet(isPresented: $showPhotoPicker) { SingleImagePicker { pickedImage = $0 } }
 
             TextField("Your name or nickname", text: $name)
                 .font(.title3)
@@ -69,7 +75,7 @@ struct OnboardingView: View {
                 .overlay(Capsule().strokeBorder(Color.white.opacity(0.1)))
                 .padding(.horizontal, 20)
 
-            Text("Pick an avatar")
+            Text(pickedImage == nil ? "Or pick an emoji" : "Emoji (shown if you remove your photo)")
                 .font(.footnote).foregroundStyle(.secondary)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
                 ForEach(ProfileStore.avatarChoices, id: \.self) { e in
@@ -131,6 +137,7 @@ struct OnboardingView: View {
         if step == 1 {
             profile.displayName = name.trimmingCharacters(in: .whitespaces)
             profile.emoji = emoji
+            if let pickedImage { profile.setAvatar(pickedImage) }
         }
         if step >= 2 {
             withAnimation(KithTheme.smooth) { profile.onboarded = true }

@@ -11,7 +11,7 @@ struct KithApp: App {
 
 struct RootView: View {
     @StateObject private var accountStore = AccountStore()
-    @StateObject private var profile = ProfileStore()
+    @ObservedObject private var profile = ProfileStore.shared
     @StateObject private var contacts = ContactsStore()
 
     @State private var tab = ProcessInfo.processInfo.environment["KITH_TAB"] ?? "circle"

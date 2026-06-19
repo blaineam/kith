@@ -10,6 +10,7 @@ struct YouView: View {
     var onReset: () -> Void
 
     @State private var showConnect = false
+    @State private var showEditProfile = false
     @State private var appeared = false
 
     var body: some View {
@@ -50,17 +51,23 @@ struct YouView: View {
             .sheet(isPresented: $showConnect) {
                 ConnectView(account: account, contacts: contacts)
             }
+            .sheet(isPresented: $showEditProfile) { EditProfileSheet() }
             .onAppear { withAnimation(KithTheme.smooth) { appeared = true } }
         }
     }
 
     private var profileHeader: some View {
         VStack(spacing: 10) {
-            Circle()
-                .fill(KithTheme.brand)
-                .frame(width: 92, height: 92)
-                .overlay(Text(profile.emoji).font(.system(size: 44)))
-                .shadow(color: KithTheme.pink.opacity(0.35), radius: 16, y: 8)
+            Button { showEditProfile = true } label: {
+                KithAvatar(image: profile.avatar, emoji: profile.emoji, size: 92)
+                    .shadow(color: KithTheme.pink.opacity(0.35), radius: 16, y: 8)
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "pencil.circle.fill")
+                            .font(.title3).foregroundStyle(KithTheme.pink)
+                            .background(Circle().fill(.background))
+                    }
+            }
+            .buttonStyle(.plain)
             Text(profile.displayName.isEmpty ? "You" : profile.displayName)
                 .font(.title2.bold())
             Text("This is just for the people you choose.")
