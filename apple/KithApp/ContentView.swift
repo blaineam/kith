@@ -23,12 +23,25 @@ struct YouView: View {
                         circleCard.entrance(appeared, delay: 0.12)
                         privacyCard.entrance(appeared, delay: 0.18)
                         NavigationLink {
+                            SettingsView()
+                        } label: {
+                            HStack {
+                                Label("Settings", systemImage: "gearshape.fill")
+                                    .font(.subheadline.weight(.medium))
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .kithCard()
+                        .entrance(appeared, delay: 0.22)
+                        NavigationLink {
                             AdvancedView(account: account, onReset: onReset)
                         } label: {
-                            Label("Advanced", systemImage: "gearshape")
+                            Label("Advanced", systemImage: "wrench.and.screwdriver")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
-                        .entrance(appeared, delay: 0.24)
+                        .entrance(appeared, delay: 0.28)
                     }
                     .padding(20)
                 }

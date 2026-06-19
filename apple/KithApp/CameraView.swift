@@ -169,6 +169,10 @@ final class CameraViewController: UIViewController,
     }
 
     @MainActor private func finish(_ refs: [String]) {
+        // If the user has Save to Photos on, captured media lands in their library too.
+        for ref in refs {
+            if let item = MediaStore.shared.item(ref) { PhotoSaver.saveIfEnabled(item) }
+        }
         onCaptured?(refs)
         dismiss(animated: true)
     }
