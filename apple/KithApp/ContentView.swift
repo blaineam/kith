@@ -1,119 +1,178 @@
 import SwiftUI
 import UIKit
 
-struct ContentView: View {
-    @ObservedObject var store: AccountStore
-    @State private var report: SelfTestReport?
-    @State private var runCount = 0
-    @State private var copied = false
+/// The friendly "You" screen: who you are, your circle, and an easy way to invite
+/// people. The technical bits live behind "Advanced".
+struct YouView: View {
+    let account: Account
+    @ObservedObject var profile: ProfileStore
+    @ObservedObject var contacts: ContactsStore
+    var onReset: () -> Void
+
+    @State private var showConnect = false
     @State private var appeared = false
 
-    private let linkDomain = "kith.link"
-
     var body: some View {
-        ZStack {
-            KithBackground()
-            ScrollView {
-                VStack(spacing: 22) {
-                    header.entrance(appeared, delay: 0.00)
-                    qrCard.entrance(appeared, delay: 0.06)
-                    identityCard.entrance(appeared, delay: 0.12)
-                    selfTestCard.entrance(appeared, delay: 0.18)
-                    resetButton.entrance(appeared, delay: 0.24)
+        NavigationStack {
+            ZStack {
+                KithBackground()
+                ScrollView {
+                    VStack(spacing: 20) {
+                        profileHeader.entrance(appeared, delay: 0.00)
+                        inviteButton.entrance(appeared, delay: 0.06)
+                        circleCard.entrance(appeared, delay: 0.12)
+                        privacyCard.entrance(appeared, delay: 0.18)
+                        NavigationLink {
+                            AdvancedView(account: account, onReset: onReset)
+                        } label: {
+                            Label("Advanced", systemImage: "gearshape")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        .entrance(appeared, delay: 0.24)
+                    }
+                    .padding(20)
                 }
-                .padding(20)
             }
-        }
-        .sensoryFeedback(.selection, trigger: copied)
-        .sensoryFeedback(trigger: runCount) { _, _ in
-            report?.allOk == true ? .success : .error
-        }
-        .onAppear { withAnimation(KithTheme.smooth) { appeared = true } }
-    }
-
-    private var header: some View {
-        VStack(spacing: 6) {
-            BrandText(text: "Kith")
-            Text("No email, no phone, no PII — just a hybrid post-quantum keypair on this device.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-    }
-
-    private var qrCard: some View {
-        VStack(spacing: 14) {
-            if let qr = QRCode.image(from: store.account.kithUri()) {
-                Image(uiImage: qr)
-                    .interpolation(.none)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 210, height: 210)
-                    .padding(12)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .shadow(color: KithTheme.violet.opacity(0.25), radius: 16, y: 8)
+            .navigationTitle("You")
+            .sheet(isPresented: $showConnect) {
+                ConnectView(account: account, contacts: contacts)
             }
-            Label("Scan to reach me", systemImage: "qrcode.viewfinder")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+            .onAppear { withAnimation(KithTheme.smooth) { appeared = true } }
         }
-        .frame(maxWidth: .infinity)
-        .kithCard()
     }
 
-    private var identityCard: some View {
+    private var profileHeader: some View {
+        VStack(spacing: 10) {
+            Circle()
+                .fill(KithTheme.brand)
+                .frame(width: 92, height: 92)
+                .overlay(Text(profile.emoji).font(.system(size: 44)))
+                .shadow(color: KithTheme.pink.opacity(0.35), radius: 16, y: 8)
+            Text(profile.displayName.isEmpty ? "You" : profile.displayName)
+                .font(.title2.bold())
+            Text("This is just for the people you choose.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private var inviteButton: some View {
+        Button { showConnect = true } label: {
+            Label("Invite a friend", systemImage: "person.badge.plus")
+        }
+        .buttonStyle(BrandButtonStyle())
+    }
+
+    private var circleCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            infoRow("Node id", String(store.account.nodeIdHex().prefix(24)) + "…")
-            infoRow("Verify", store.account.verificationHex())
-            Button {
-                UIPasteboard.general.string = store.account.kithLink(domain: linkDomain)
-                withAnimation(KithTheme.bouncy) { copied = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                    withAnimation(KithTheme.smooth) { copied = false }
+            Text("Your circle").font(.headline)
+            if contacts.contacts.isEmpty {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .font(.title2).foregroundStyle(KithTheme.pink)
+                    Text("It's just you for now. Invite someone you love to get started.")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-            } label: {
-                Label(copied ? "Copied!" : "Copy reach-me link",
-                      systemImage: copied ? "checkmark.circle.fill" : "link")
-                    .contentTransition(.symbolEffect(.replace))
+            } else {
+                ForEach(contacts.contacts) { c in
+                    HStack(spacing: 12) {
+                        Circle().fill(KithTheme.brand).frame(width: 34, height: 34)
+                            .overlay(Text(String(c.name.prefix(1))).font(.caption.bold()).foregroundStyle(.white))
+                        Text(c.name).font(.subheadline.weight(.medium))
+                        Spacer()
+                        Text("waiting to connect")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
             }
-            .buttonStyle(BrandButtonStyle())
-            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .kithCard()
     }
 
-    private var selfTestCard: some View {
-        VStack(spacing: 16) {
-            Button {
-                withAnimation(KithTheme.bouncy) {
-                    report = selfTest()
-                    runCount += 1
+    private var privacyCard: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "lock.shield.fill")
+                .font(.title2).foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Your circle is private").font(.subheadline.weight(.semibold))
+                Text("Everything you share is locked so only your people can see it. No ads, no tracking — ever.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kithCard()
+    }
+}
+
+/// Tucked-away technical details for the curious.
+struct AdvancedView: View {
+    let account: Account
+    var onReset: () -> Void
+
+    @State private var report: SelfTestReport?
+    @State private var runCount = 0
+
+    var body: some View {
+        ZStack {
+            KithBackground()
+            ScrollView {
+                VStack(spacing: 20) {
+                    detailsCard
+                    privacyCheckCard
+                    Button(role: .destructive) {
+                        onReset()
+                        report = nil
+                    } label: {
+                        Label("Start over (new identity)", systemImage: "arrow.counterclockwise")
+                            .font(.footnote.weight(.medium))
+                    }
+                    .buttonStyle(PressableStyle())
                 }
+                .padding(20)
+            }
+        }
+        .navigationTitle("Advanced")
+        .navigationBarTitleDisplayMode(.inline)
+        .sensoryFeedback(trigger: runCount) { _, _ in report?.allOk == true ? .success : .error }
+    }
+
+    private var detailsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Under the hood").font(.headline)
+            row("Your id", String(account.nodeIdHex().prefix(24)) + "…")
+            row("Safety words", SafetyWords.words(fromHex: account.verificationHex()).joined(separator: " · "))
+            Text("Kith uses hybrid post-quantum encryption (X25519 + ML-KEM-768, Ed25519 + ML-DSA). Your keys never leave this device.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kithCard()
+    }
+
+    private var privacyCheckCard: some View {
+        VStack(spacing: 14) {
+            Button {
+                withAnimation(KithTheme.bouncy) { report = selfTest(); runCount += 1 }
             } label: {
-                Label("Run on-device hybrid-PQ self-test", systemImage: "checkmark.shield.fill")
+                Label("Run privacy check", systemImage: "checkmark.shield.fill")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(KithTheme.pink)
-                    .padding(.vertical, 13)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        Capsule().strokeBorder(KithTheme.brandHorizontal, lineWidth: 1.5)
-                    )
+                    .padding(.vertical, 13).frame(maxWidth: .infinity)
+                    .background(Capsule().strokeBorder(KithTheme.brandHorizontal, lineWidth: 1.5))
             }
             .buttonStyle(PressableStyle())
+            .accessibilityIdentifier("privacyCheck")
 
             if let r = report {
                 VStack(spacing: 10) {
-                    checkRow("Identity generated", r.identityOk, 0)
-                    checkRow("Hybrid KEM + AES-256-GCM (seal → open)", r.hybridKemOk, 1)
-                    checkRow("Hybrid signature (Ed25519 + ML-DSA)", r.signatureOk, 2)
-                    checkRow("Reach-me link round-trip", r.linkOk, 3)
-                    Divider().padding(.vertical, 2)
+                    checkRow("Identity is yours", r.identityOk, 0)
+                    checkRow("Your stuff is locked (seal → open)", r.hybridKemOk, 1)
+                    checkRow("Messages are signed", r.signatureOk, 2)
+                    checkRow("Invite links are safe", r.linkOk, 3)
+                    Divider()
                     Label(r.summary, systemImage: r.allOk ? "checkmark.seal.fill" : "xmark.seal.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(r.allOk ? .green : .red)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center).frame(maxWidth: .infinity)
                 }
             }
         }
@@ -121,20 +180,7 @@ struct ContentView: View {
         .kithCard()
     }
 
-    private var resetButton: some View {
-        Button(role: .destructive) {
-            withAnimation(KithTheme.smooth) {
-                store.reset()
-                report = nil
-            }
-        } label: {
-            Label("Start over (new identity)", systemImage: "arrow.counterclockwise")
-                .font(.footnote.weight(.medium))
-        }
-        .buttonStyle(PressableStyle())
-    }
-
-    private func infoRow(_ label: String, _ value: String) -> some View {
+    private func row(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top) {
             Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
@@ -145,8 +191,7 @@ struct ContentView: View {
     private func checkRow(_ title: String, _ ok: Bool, _ index: Int) -> some View {
         HStack(spacing: 10) {
             Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(ok ? .green : .red)
-                .imageScale(.large)
+                .foregroundStyle(ok ? .green : .red).imageScale(.large)
             Text(title).font(.subheadline)
             Spacer()
         }
@@ -157,7 +202,7 @@ struct ContentView: View {
 }
 
 /// Staggered slide-up entrance for a section.
-private struct Entrance: ViewModifier {
+struct Entrance: ViewModifier {
     let shown: Bool
     let delay: Double
     func body(content: Content) -> some View {
@@ -168,7 +213,7 @@ private struct Entrance: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func entrance(_ shown: Bool, delay: Double) -> some View {
         modifier(Entrance(shown: shown, delay: delay))
     }

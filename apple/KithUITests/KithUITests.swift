@@ -1,42 +1,44 @@
 import XCTest
 
-/// Proves the hybrid post-quantum pipeline runs end-to-end **on the device**:
-/// launches the app, taps the self-test, and asserts every check passes.
+/// On-device proof that the hybrid-PQ engine and social feed work, driven through
+/// the real (human-friendly) UI. Onboarding is bypassed via an env flag.
 final class KithUITests: XCTestCase {
-    func testOnDeviceHybridPQSelfTestPasses() {
+    private func app(tab: String) -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchEnvironment["KITH_SKIP_ONBOARDING"] = "1"
+        app.launchEnvironment["KITH_TAB"] = tab
+        return app
+    }
+
+    /// You → Advanced → Run privacy check → all checks pass.
+    func testPrivacyCheckPasses() {
+        let app = app(tab: "you")
         app.launch()
 
-        // The self-test button is generated on-device at launch.
-        let runButton = app.buttons.containing(
-            NSPredicate(format: "label CONTAINS %@", "self-test")
-        ).firstMatch
-        XCTAssertTrue(runButton.waitForExistence(timeout: 15), "self-test button should exist")
-        runButton.tap()
+        let advanced = app.buttons["Advanced"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 15), "Advanced should be reachable")
+        advanced.tap()
+
+        let check = app.buttons["privacyCheck"]
+        XCTAssertTrue(check.waitForExistence(timeout: 10), "privacy check button should exist")
+        check.tap()
 
         let passed = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS %@", "checks passed")
         ).firstMatch
-        XCTAssertTrue(
-            passed.waitForExistence(timeout: 10),
-            "all on-device hybrid-PQ checks should pass"
-        )
+        XCTAssertTrue(passed.waitForExistence(timeout: 10), "all on-device checks should pass")
     }
 
-    /// Posts to the social feed and confirms it appears — proving the hybrid-PQ
-    /// social engine (seal → open → feed) runs end-to-end on-device.
+    /// Posting to the circle feed round-trips through the social engine into the UI.
     func testSocialFeedPostAppears() {
-        let app = XCUIApplication()
-        app.launchEnvironment["KITH_TAB"] = "feed"
+        let app = app(tab: "circle")
         app.launch()
 
-        // Seeded demo content from the engine should render.
         let seeded = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS %@", "Our own little corner")
         ).firstMatch
         XCTAssertTrue(seeded.waitForExistence(timeout: 15), "seeded feed content should appear")
 
-        // Compose a new post and confirm it round-trips through the engine into the feed.
         let field = app.textFields["composeField"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()

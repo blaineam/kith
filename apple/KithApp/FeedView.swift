@@ -39,11 +39,13 @@ final class FeedStore: ObservableObject {
 
 struct FeedView: View {
     @StateObject private var store: FeedStore
+    let friendName: String
     @State private var compose = ""
     @FocusState private var composing: Bool
 
-    init(seed: Data) {
+    init(seed: Data, friendName: String) {
         _store = StateObject(wrappedValue: FeedStore(seed: seed))
+        self.friendName = friendName
     }
 
     var body: some View {
@@ -52,9 +54,18 @@ struct FeedView: View {
                 KithBackground()
                 ScrollView {
                     LazyVStack(spacing: 16) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "sparkles").foregroundStyle(KithTheme.pink)
+                            Text("Your circle — posts from you and your people live here.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .padding(.top, 4)
+
                         ForEach(store.items, id: \.id) { item in
                             PostCard(
                                 item: item,
+                                friendName: friendName,
                                 onReact: { emoji in withAnimation(KithTheme.bouncy) { store.react(item.id, emoji) } },
                                 onComment: { body in withAnimation(KithTheme.smooth) { store.comment(item.id, body) } },
                                 onEdit: { body in withAnimation(KithTheme.smooth) { store.edit(item.id, body) } },
@@ -116,6 +127,7 @@ struct FeedView: View {
 
 private struct PostCard: View {
     let item: FeedItemFfi
+    let friendName: String
     let onReact: (String) -> Void
     let onComment: (String) -> Void
     let onEdit: (String) -> Void
@@ -166,7 +178,7 @@ private struct PostCard: View {
     private var header: some View {
         HStack(spacing: 10) {
             avatar
-            Text(item.isMe ? "You" : "kin·\(item.authorShort)")
+            Text(item.isMe ? "You" : friendName)
                 .font(.subheadline.weight(.semibold))
             if item.edited {
                 Text("edited")
@@ -216,7 +228,7 @@ private struct PostCard: View {
         VStack(alignment: .leading, spacing: 7) {
             ForEach(item.comments, id: \.id) { c in
                 HStack(alignment: .top, spacing: 6) {
-                    Text(c.isMe ? "You" : "kin·\(c.authorShort)")
+                    Text(c.isMe ? "You" : friendName)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(c.isMe ? KithTheme.pink : .secondary)
                     if c.unsent {
