@@ -43,6 +43,26 @@ the crypto and feed logic here are the real thing.)
 Both flows are covered by `KithUITests` (on-device self-test + feed post round-trip).
 Launch on the Feed tab with the `KITH_TAB=feed` environment variable.
 
+## Ship to TestFlight (rocket)
+
+Kith is wired into the shared `rocket` / `local-ci-archive.sh` pipeline. Config lives
+in [`../.local-ci.conf`](../.local-ci.conf): iOS, scheme `Kith`, team `8ZVSPZYSVF`, and
+a `PREBUILD_CMD` that builds `KithFFI.xcframework` + regenerates the project before
+archiving.
+
+```sh
+# from the Apps root
+node _shared/rocket/rocket.mjs build Kith     # archive + sign + upload to App Store Connect
+# or archive only, no upload:
+SKIP_UPLOAD=1 zsh _shared/local-ci-archive.sh # run from the Kith/ dir
+```
+
+Notes:
+- Bundle id `com.blaineam.kith`; the ASC app is **Kith Community**.
+- Uploaded builds show **Missing Compliance** until you answer the export-compliance
+  question in TestFlight (Kith uses encryption — that's a one-time attestation you make).
+- Bump `CURRENT_PROJECT_VERSION` in `project.yml` for each new build.
+
 ## Layout
 
 ```

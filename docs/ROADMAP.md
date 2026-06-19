@@ -131,8 +131,12 @@ core via a UniFFI XCFramework.
 - **Apple Watch** companion (scoped: messages/photos/reactions/notifications/quick
   replies/audio; *not* bulk video/large files) — see DECISIONS D13
 
-## ⏭️ M9 — Launch surface (pre-submission)
+## 🟡 M9 — Launch surface
 
+- ✅ **TestFlight pipeline** via rocket: `.local-ci.conf` (iOS, scheme Kith, team,
+  XCFramework prebuild) → `rocket build Kith` archives + cloud-signs + uploads.
+  Kith **1.0.0 (2)** uploaded to ASC app "Kith Community" (com.blaineam.kith).
+- ⏭️ Answer export compliance in TestFlight; add testers
 - **Marketing page** at `blaineam.github.io` repo under `/apps/kith/` — only once
   close to App Store submission
 - **Screenshot automation**: wire Kith into the shared capture → **Monkr-frame** →
