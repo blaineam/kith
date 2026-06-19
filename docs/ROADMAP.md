@@ -34,10 +34,12 @@ byte-identical. Runnable: `cargo run -p kith-demo` (see `core/demo/`).
 - mDNS/LAN discovery + relay fallback (currently dials an explicit address)
 - True two-device run (currently two endpoints on one host over loopback)
 
-## ⏭️ M1c — Hybrid PQ signatures
+## ✅ M1c — Hybrid PQ signatures (DONE)
 
-Add **ML-DSA** (FIPS 204) alongside Ed25519 at the `sign`/`verify` seam in
-`identity.rs`. Completes "hybrid PQ everywhere."
+**ML-DSA-65** (FIPS 204) added alongside Ed25519 in `identity.rs`. Signatures are
+now `ed25519(64) ‖ ml-dsa(rest)`; both halves must verify. Tests prove each half is
+enforced (corrupting either fails). "Hybrid PQ everywhere" is complete — KEM *and*
+signatures. 6 core tests green.
 
 ## ⏭️ M2 — Groups, posts, comments, reactions
 

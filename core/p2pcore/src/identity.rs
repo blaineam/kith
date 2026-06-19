@@ -1,21 +1,24 @@
 //! On-device identity. No phone number, no email, no PII — an account is a keypair.
 //!
-//! An identity bundles three things:
-//!   * an **Ed25519** signing key — long-term identity & message authentication,
-//!     and the 32-byte public half doubles as the routable node id ([`KithId`]).
+//! An identity bundles, with **hybrid post-quantum** signing and key exchange:
+//!   * **Ed25519 + ML-DSA-65** signing keys — long-term identity & message
+//!     authentication. Both must verify, so a forger must break classical *and*
+//!     post-quantum signatures. The Ed25519 public half doubles as the compact
+//!     routable node id ([`KithId::node_id_bytes`]).
 //!   * an **X25519** static secret — the classical half of the hybrid KEM.
 //!   * an **ML-KEM-768** decapsulation key — the post-quantum half of the KEM.
 //!
 //! The Ed25519 key is the stable, compact public address that goes in links/QRs.
-//! The bulky ML-KEM public key (1184 B) is *not* shoved into a URL — it travels via
-//! discovery (a signed DHT record keyed by the Ed25519 id), and a short hash of the
-//! full bundle ([`KithId::verification`]) lets a dialer detect tampering once fetched.
-//!
-//! NOTE: Ed25519 is the classical signature for now. Hybrid PQ **signatures**
-//! (Ed25519 + ML-DSA, FIPS 204) are the next crypto addition; the seam is here
-//! (`sign`/`verify` are the only call sites) so adding ML-DSA is local.
+//! The bulky post-quantum public keys travel via discovery (a signed DHT record
+//! keyed by the Ed25519 id), and a short hash of the full bundle
+//! ([`KithId::verification`]) lets a dialer detect tampering once fetched.
 
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ml_dsa::{
+    EncodedSignature, EncodedVerifyingKey, Generate, Keypair as _, MlDsa65,
+    Signature as DsaSignature, Signer as _, SigningKey as DsaSigningKey, Verifier as _,
+    VerifyingKey as DsaVerifyingKey,
+};
 use ml_kem::{Encoded, EncodedSizeUser, KemCore, MlKem768};
 use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey as XPublicKey, StaticSecret as XStaticSecret};
@@ -26,19 +29,24 @@ use crate::{CoreError, Result};
 pub(crate) type EncapKey = <MlKem768 as KemCore>::EncapsulationKey;
 pub(crate) type DecapKey = <MlKem768 as KemCore>::DecapsulationKey;
 
-const ED_LEN: usize = 32;
+const ED_VK_LEN: usize = 32;
 const X_LEN: usize = 32;
 const MLKEM_EK_LEN: usize = 1184;
+/// Fixed-size prefix before the (large) ML-DSA verifying key in the serialized bundle.
+const PREFIX_LEN: usize = ED_VK_LEN + X_LEN + MLKEM_EK_LEN;
+/// Ed25519 signature length; the hybrid signature is this followed by the ML-DSA sig.
+const ED_SIG_LEN: usize = 64;
 
 /// The public, shareable identity of a peer.
-///
-/// `signing` (Ed25519, 32 B) is the compact routable id used in links and as the
-/// future iroh `NodeId`. `kem_x` (32 B) and `kem_pq` (1184 B) are the recipient's
-/// hybrid-KEM public material, normally delivered via discovery rather than a URL.
 #[derive(Clone)]
 pub struct KithId {
+    /// Ed25519 verifying key — also the 32-byte routable node id.
     pub signing: VerifyingKey,
+    /// ML-DSA-65 verifying key — the post-quantum half of the hybrid signature.
+    pub sig_pq: DsaVerifyingKey<MlDsa65>,
+    /// X25519 public — classical half of the hybrid KEM.
     pub kem_x: XPublicKey,
+    /// ML-KEM-768 encapsulation key — post-quantum half of the hybrid KEM.
     pub kem_pq: EncapKey,
 }
 
@@ -54,9 +62,11 @@ impl KithId {
     /// discovery match the keys the link's author intended (tamper / MITM check).
     pub fn verification(&self) -> [u8; 16] {
         let ek = self.kem_pq.as_bytes();
+        let sig_vk = self.sig_pq.encode();
         let mut h = blake3::Hasher::new();
         h.update(b"kith-id-v1");
         h.update(&self.signing.to_bytes());
+        h.update(&sig_vk[..]);
         h.update(self.kem_x.as_bytes());
         h.update(&ek[..]);
         let full = h.finalize();
@@ -65,38 +75,58 @@ impl KithId {
         out
     }
 
-    /// Verify a signature made by this identity's signing key.
+    /// Verify a **hybrid** signature: both Ed25519 and ML-DSA must check out.
+    /// Layout: `ed25519(64) ‖ ml-dsa-65(rest)`.
     pub fn verify(&self, msg: &[u8], sig: &[u8]) -> Result<()> {
-        let sig = ed25519_dalek::Signature::from_slice(sig)
-            .map_err(|_| CoreError::Crypto("bad signature length"))?;
+        if sig.len() <= ED_SIG_LEN {
+            return Err(CoreError::Crypto("hybrid signature too short"));
+        }
+        let (ed_part, dsa_part) = sig.split_at(ED_SIG_LEN);
+
+        let ed_sig = ed25519_dalek::Signature::from_slice(ed_part)
+            .map_err(|_| CoreError::Crypto("bad ed25519 signature length"))?;
         self.signing
-            .verify(msg, &sig)
-            .map_err(|_| CoreError::Crypto("signature verification failed"))
+            .verify(msg, &ed_sig)
+            .map_err(|_| CoreError::Crypto("ed25519 verification failed"))?;
+
+        let enc = EncodedSignature::<MlDsa65>::try_from(dsa_part)
+            .map_err(|_| CoreError::Crypto("bad ml-dsa signature length"))?;
+        let dsa_sig = DsaSignature::<MlDsa65>::decode(&enc)
+            .ok_or(CoreError::Crypto("malformed ml-dsa signature"))?;
+        self.sig_pq
+            .verify(msg, &dsa_sig)
+            .map_err(|_| CoreError::Crypto("ml-dsa verification failed"))?;
+        Ok(())
     }
 
     /// Serialize the full public bundle (for publishing to discovery).
-    /// Layout: ed25519(32) || x25519(32) || ml-kem-ek(1184).
+    /// Layout: ed25519(32) ‖ x25519(32) ‖ ml-kem-ek(1184) ‖ ml-dsa-vk(rest).
     pub fn to_bytes(&self) -> Vec<u8> {
         let ek = self.kem_pq.as_bytes();
-        let mut v = Vec::with_capacity(ED_LEN + X_LEN + MLKEM_EK_LEN);
+        let sig_vk = self.sig_pq.encode();
+        let mut v = Vec::with_capacity(PREFIX_LEN + sig_vk.len());
         v.extend_from_slice(&self.signing.to_bytes());
         v.extend_from_slice(self.kem_x.as_bytes());
         v.extend_from_slice(&ek[..]);
+        v.extend_from_slice(&sig_vk[..]);
         v
     }
 
     /// Inverse of [`KithId::to_bytes`].
     pub fn from_bytes(b: &[u8]) -> Result<Self> {
-        if b.len() != ED_LEN + X_LEN + MLKEM_EK_LEN {
-            return Err(CoreError::Encoding("identity bundle wrong length"));
+        if b.len() <= PREFIX_LEN {
+            return Err(CoreError::Encoding("identity bundle too short"));
         }
-        let signing = VerifyingKey::from_bytes(b[..ED_LEN].try_into().unwrap())
+        let signing = VerifyingKey::from_bytes(b[..ED_VK_LEN].try_into().unwrap())
             .map_err(|_| CoreError::Crypto("bad ed25519 key"))?;
-        let kem_x = XPublicKey::from(<[u8; 32]>::try_from(&b[ED_LEN..ED_LEN + X_LEN]).unwrap());
-        let ek_encoded = Encoded::<EncapKey>::try_from(&b[ED_LEN + X_LEN..])
+        let kem_x = XPublicKey::from(<[u8; 32]>::try_from(&b[ED_VK_LEN..ED_VK_LEN + X_LEN]).unwrap());
+        let ek_encoded = Encoded::<EncapKey>::try_from(&b[ED_VK_LEN + X_LEN..PREFIX_LEN])
             .map_err(|_| CoreError::Crypto("bad ml-kem key length"))?;
         let kem_pq = EncapKey::from_bytes(&ek_encoded);
-        Ok(Self { signing, kem_x, kem_pq })
+        let sig_encoded = EncodedVerifyingKey::<MlDsa65>::try_from(&b[PREFIX_LEN..])
+            .map_err(|_| CoreError::Crypto("bad ml-dsa key length"))?;
+        let sig_pq = DsaVerifyingKey::<MlDsa65>::decode(&sig_encoded);
+        Ok(Self { signing, sig_pq, kem_x, kem_pq })
     }
 }
 
@@ -104,6 +134,7 @@ impl KithId {
 /// Keychain on Apple platforms; never leaves the device.
 pub struct Identity {
     signing: SigningKey,
+    sig_pq: DsaSigningKey<MlDsa65>,
     kem_x: XStaticSecret,
     kem_pq_dk: DecapKey,
     kem_pq_ek: EncapKey,
@@ -114,23 +145,31 @@ impl Identity {
     pub fn generate() -> Self {
         let mut rng = OsRng;
         let signing = SigningKey::generate(&mut rng);
+        let sig_pq = DsaSigningKey::<MlDsa65>::generate();
         let kem_x = XStaticSecret::random_from_rng(&mut rng);
         let (kem_pq_dk, kem_pq_ek) = MlKem768::generate(&mut rng);
-        Self { signing, kem_x, kem_pq_dk, kem_pq_ek }
+        Self { signing, sig_pq, kem_x, kem_pq_dk, kem_pq_ek }
     }
 
     /// The shareable public identity.
     pub fn public(&self) -> KithId {
         KithId {
             signing: self.signing.verifying_key(),
+            sig_pq: self.sig_pq.verifying_key(),
             kem_x: XPublicKey::from(&self.kem_x),
             kem_pq: self.kem_pq_ek.clone(),
         }
     }
 
-    /// Sign a message with the long-term identity key.
+    /// Produce a **hybrid** signature: `ed25519(64) ‖ ml-dsa-65(rest)`.
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        self.signing.sign(msg).to_bytes().to_vec()
+        let ed_sig = self.signing.sign(msg).to_bytes();
+        let dsa_sig: DsaSignature<MlDsa65> = self.sig_pq.sign(msg);
+        let dsa_bytes = dsa_sig.encode();
+        let mut v = Vec::with_capacity(ED_SIG_LEN + dsa_bytes.len());
+        v.extend_from_slice(&ed_sig);
+        v.extend_from_slice(&dsa_bytes[..]);
+        v
     }
 
     // --- accessors used by the KEM in `crypto.rs` ---

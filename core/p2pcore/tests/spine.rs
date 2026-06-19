@@ -14,6 +14,30 @@ fn identity_sign_verify_roundtrip() {
     let sig = id.sign(msg);
     assert!(pubid.verify(msg, &sig).is_ok());
     assert!(pubid.verify(b"tampered", &sig).is_err());
+
+    // A signature from a different identity must not verify.
+    let other = Identity::generate();
+    assert!(pubid.verify(msg, &other.sign(msg)).is_err());
+}
+
+#[test]
+fn hybrid_signature_enforces_both_halves() {
+    let id = Identity::generate();
+    let pubid = id.public();
+    let msg = b"only valid if BOTH ed25519 and ml-dsa check out";
+    let good = id.sign(msg);
+    assert!(pubid.verify(msg, &good).is_ok());
+
+    // Corrupt a byte in the Ed25519 half (first 64 bytes) → must fail.
+    let mut bad_ed = good.clone();
+    bad_ed[10] ^= 0x01;
+    assert!(pubid.verify(msg, &bad_ed).is_err(), "ed25519 half must be checked");
+
+    // Corrupt a byte in the ML-DSA half (after byte 64) → must fail.
+    let mut bad_pq = good.clone();
+    let i = good.len() - 1;
+    bad_pq[i] ^= 0x01;
+    assert!(pubid.verify(msg, &bad_pq).is_err(), "ml-dsa half must be checked");
 }
 
 #[test]
@@ -21,7 +45,8 @@ fn public_identity_bundle_roundtrips() {
     let id = Identity::generate();
     let pubid = id.public();
     let bytes = pubid.to_bytes();
-    assert_eq!(bytes.len(), 32 + 32 + 1184);
+    // ed25519(32) + x25519(32) + ml-kem-ek(1184) + ml-dsa-65-vk(1952)
+    assert_eq!(bytes.len(), 32 + 32 + 1184 + 1952);
     let restored = KithId::from_bytes(&bytes).expect("decode bundle");
     assert_eq!(restored.node_id_bytes(), pubid.node_id_bytes());
     assert_eq!(restored.verification(), pubid.verification());
