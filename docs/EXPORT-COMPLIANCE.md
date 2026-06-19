@@ -5,6 +5,19 @@ Kith uses **real end-to-end, post-quantum encryption**, so it is **non-exempt**
 encryption is non-negotiable — and it does **not** restrict global App Store
 distribution. It only requires US paperwork, which is automated.
 
+## Fully automated via rocket
+
+```sh
+node _shared/rocket/rocket.mjs compliance Kith
+```
+
+This **creates the App Encryption Declaration** in App Store Connect (standard
+algorithms, not proprietary, third-party crypto, available on the French store) and
+**attaches it to the latest build** — so non-exempt builds never hit "Missing
+Compliance" and future builds inherit it. Run it once after the first upload (or after
+`rocket build Kith`); no manual ASC questionnaire needed. (Done — declaration created
+and attached to build 2.)
+
 ## What's declared
 
 - `Info.plist`: **`ITSAppUsesNonExemptEncryption = YES`** (honest; set in `project.yml`).
