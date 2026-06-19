@@ -35,7 +35,7 @@ final class KithUITests: XCTestCase {
         app.launch()
 
         let seeded = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "Our own little corner")
+            NSPredicate(format: "label CONTAINS %@", "Golden hour")
         ).firstMatch
         XCTAssertTrue(seeded.waitForExistence(timeout: 15), "seeded feed content should appear")
 

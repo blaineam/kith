@@ -25,11 +25,23 @@ use crate::crypto::{decapsulate, encapsulate_to, open, seal, Encapsulation};
 use crate::identity::{Identity, KithId};
 use crate::{CoreError, Result};
 
+/// A reference to an Apple Music track attached to a post. This is *reference data
+/// only* — never audio. Each viewer plays it through their own subscription. It is
+/// serialized inside the already-sealed event, so it leaks nothing to a relay.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackRef {
+    pub catalog_id: String,
+    pub title: String,
+    pub artist: String,
+    pub artwork_url: String,
+    pub duration_ms: u64,
+}
+
 /// What a social event *is*. Targets reference another event's id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
-    /// A feed post (optionally with media content-refs).
-    Post { body: String, media: Vec<String> },
+    /// A feed post: text, optional media content-refs, and an optional song.
+    Post { body: String, media: Vec<String>, music: Option<TrackRef> },
     /// A direct/group message (rendered as a post in a 1:1 or chat group).
     Message { body: String },
     /// A comment on a post/message.
@@ -236,6 +248,7 @@ pub struct FeedItem {
     pub created_at: u64,
     pub body: String,
     pub media: Vec<String>,
+    pub music: Option<TrackRef>,
     pub edited: bool,
     pub unsent: bool,
     pub comments: Vec<FeedComment>,
@@ -257,7 +270,7 @@ pub fn build_feed(mut events: Vec<Event>) -> Vec<FeedItem> {
     // Pass 1: create posts/messages and comments.
     for e in &events {
         match &e.kind {
-            EventKind::Post { body, media } => {
+            EventKind::Post { body, media, music } => {
                 order.push(e.id.clone());
                 items.insert(
                     e.id.clone(),
@@ -267,6 +280,7 @@ pub fn build_feed(mut events: Vec<Event>) -> Vec<FeedItem> {
                         created_at: e.created_at,
                         body: body.clone(),
                         media: media.clone(),
+                        music: music.clone(),
                         edited: false,
                         unsent: false,
                         comments: Vec::new(),
@@ -284,6 +298,7 @@ pub fn build_feed(mut events: Vec<Event>) -> Vec<FeedItem> {
                         created_at: e.created_at,
                         body: body.clone(),
                         media: Vec::new(),
+                        music: None,
                         edited: false,
                         unsent: false,
                         comments: Vec::new(),
@@ -331,6 +346,7 @@ pub fn build_feed(mut events: Vec<Event>) -> Vec<FeedItem> {
                         it.unsent = true;
                         it.body.clear();
                         it.media.clear();
+                        it.music = None;
                     }
                 } else if let Some(c) = comments.get_mut(target) {
                     if c.author == e.author {

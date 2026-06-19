@@ -70,8 +70,20 @@ encryption boundary; it's just more sealed bytes.
 
 ## Status
 
-Design + audit complete. Implementation is **device-verified** (camera + MusicKit
-don't run in the Simulator), shipped to TestFlight for on-device validation. Order:
-(1) `TrackRef`/media fields in `p2pcore` + FFI, (2) feed pill + playing animation
-(Simulator-verifiable UI), (3) camera capture sheet, (4) MusicKit picker + playback +
-crossfade (device).
+**Implemented:**
+- ✅ `TrackRef` + `music`/`media` on posts in `p2pcore` + FFI (sealed-event payload).
+- ✅ Feed media rendering + **now-playing pill with audio animation** (Simulator-verified).
+- ✅ Composer attach: Photos/Videos picker (`PHPicker`), in-app **camera**
+  (`AVCaptureSession`, tap=photo / hold=video / flip), **song picker**.
+- ✅ `AudioCoordinator` + video-volume crossfade; muted-video-while-music model.
+- ✅ Privacy usage strings (camera/mic/photos/Apple Music).
+
+**Device-verified / follow-ups (security-relevant):**
+- ⏭️ **EXIF/GPS stripping must run at the seal-and-send boundary.** Today media is
+  local-only (never sent), so nothing leaks; when media send is wired (with networking),
+  strip metadata *before* sealing. Tracked here so it isn't missed.
+- ⏭️ **Real Apple Music** needs the **MusicKit capability + `com.apple.developer.musickit`
+  entitlement** on the App ID. Until enabled, the picker uses sample songs and the
+  `MusicPlayback` seam is a no-op (pill + crossfade structure already work). NOT added
+  to the entitlements yet so TestFlight signing stays green — enable on the App ID first.
+- ⏭️ Camera + MusicKit playback verify on a real device (not the Simulator).

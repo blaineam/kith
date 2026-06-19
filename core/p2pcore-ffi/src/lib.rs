@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use p2pcore::crypto::{decapsulate, encapsulate_to, open, seal};
 use p2pcore::identity::Identity;
 use p2pcore::link::KithLink;
-use p2pcore::social::{build_feed, open_event, seal_event, Event, EventKind, Group};
+use p2pcore::social::{build_feed, open_event, seal_event, Event, EventKind, Group, TrackRef};
 
 uniffi::setup_scaffolding!();
 
@@ -205,11 +205,18 @@ impl SocialDemo {
         hex(&self.state.lock().unwrap().me.public().node_id_bytes())
     }
 
-    pub fn post(&self, body: String, created_at: u64) -> String {
-        self.author_event(true, created_at, EventKind::Post { body, media: vec![] })
+    pub fn post(
+        &self,
+        body: String,
+        media: Vec<String>,
+        music: Option<TrackRefFfi>,
+        created_at: u64,
+    ) -> String {
+        let music = music.map(|m| m.into_core());
+        self.author_event(true, created_at, EventKind::Post { body, media, music })
     }
     pub fn friend_post(&self, body: String, created_at: u64) -> String {
-        self.author_event(false, created_at, EventKind::Post { body, media: vec![] })
+        self.author_event(false, created_at, EventKind::Post { body, media: vec![], music: None })
     }
     pub fn comment(&self, target: String, body: String, created_at: u64) -> String {
         self.author_event(true, created_at, EventKind::Comment { target, body })
@@ -242,6 +249,8 @@ impl SocialDemo {
                 is_me: it.author == me,
                 created_at: it.created_at,
                 body: it.body,
+                media: it.media,
+                music: it.music.map(TrackRefFfi::from_core),
                 edited: it.edited,
                 unsent: it.unsent,
                 comments: it
@@ -310,6 +319,37 @@ pub struct FeedCommentFfi {
     pub unsent: bool,
 }
 
+/// An attached Apple Music track (reference only — never audio).
+#[derive(uniffi::Record, Clone)]
+pub struct TrackRefFfi {
+    pub catalog_id: String,
+    pub title: String,
+    pub artist: String,
+    pub artwork_url: String,
+    pub duration_ms: u64,
+}
+
+impl TrackRefFfi {
+    fn into_core(self) -> TrackRef {
+        TrackRef {
+            catalog_id: self.catalog_id,
+            title: self.title,
+            artist: self.artist,
+            artwork_url: self.artwork_url,
+            duration_ms: self.duration_ms,
+        }
+    }
+    fn from_core(t: TrackRef) -> Self {
+        Self {
+            catalog_id: t.catalog_id,
+            title: t.title,
+            artist: t.artist,
+            artwork_url: t.artwork_url,
+            duration_ms: t.duration_ms,
+        }
+    }
+}
+
 /// A feed item (post/message) for the UI.
 #[derive(uniffi::Record)]
 pub struct FeedItemFfi {
@@ -318,6 +358,8 @@ pub struct FeedItemFfi {
     pub is_me: bool,
     pub created_at: u64,
     pub body: String,
+    pub media: Vec<String>,
+    pub music: Option<TrackRefFfi>,
     pub edited: bool,
     pub unsent: bool,
     pub comments: Vec<FeedCommentFfi>,

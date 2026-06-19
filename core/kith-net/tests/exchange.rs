@@ -16,7 +16,7 @@ async fn two_nodes_exchange_a_sealed_post() {
     let event = Event::new(
         &alice.public().node_id_bytes(),
         42,
-        EventKind::Post { body: "hello from across the network 🌍".into(), media: vec![] },
+        EventKind::Post { body: "hello from across the network 🌍".into(), media: vec![], music: None },
     );
     let payload = seal_event(&alice, &group, &event).unwrap().to_bytes();
 

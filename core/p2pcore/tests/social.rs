@@ -24,7 +24,7 @@ fn sealed_event_is_e2e_to_group_members_only() {
     let event = Event::new(
         &alice.public().node_id_bytes(),
         1000,
-        EventKind::Post { body: "beach day 🏖️".into(), media: vec![] },
+        EventKind::Post { body: "beach day 🏖️".into(), media: vec![], music: None },
     );
     let env = seal_event(&alice, &group, &event).expect("seal");
 
@@ -69,13 +69,13 @@ fn feed_resolves_posts_comments_reactions_edits_unsends() {
 
     // Alice posts; Bob comments and reacts; Alice edits her post; Alice posts a
     // second thing then unsends it.
-    let post = Event::new(&a, 100, EventKind::Post { body: "first".into(), media: vec!["blob1".into()] });
+    let post = Event::new(&a, 100, EventKind::Post { body: "first".into(), media: vec!["blob1".into()], music: None });
     let comment = Event::new(&b, 110, EventKind::Comment { target: post.id.clone(), body: "nice!".into() });
     let react1 = Event::new(&b, 120, EventKind::Reaction { target: post.id.clone(), emoji: "❤️".into() });
     let react2 = Event::new(&a, 121, EventKind::Reaction { target: post.id.clone(), emoji: "❤️".into() });
     let edit = Event::new(&a, 130, EventKind::Edit { target: post.id.clone(), body: "first (fixed)".into() });
 
-    let post2 = Event::new(&a, 200, EventKind::Post { body: "oops".into(), media: vec![] });
+    let post2 = Event::new(&a, 200, EventKind::Post { body: "oops".into(), media: vec![], music: None });
     let unsend = Event::new(&a, 210, EventKind::Unsend { target: post2.id.clone() });
 
     let feed = build_feed(vec![
@@ -108,7 +108,7 @@ fn cannot_edit_someone_elses_post() {
     let a = alice.public().node_id_bytes();
     let b = bob.public().node_id_bytes();
 
-    let post = Event::new(&a, 1, EventKind::Post { body: "mine".into(), media: vec![] });
+    let post = Event::new(&a, 1, EventKind::Post { body: "mine".into(), media: vec![], music: None });
     // Bob tries to edit Alice's post.
     let forged_edit = Event::new(&b, 2, EventKind::Edit { target: post.id.clone(), body: "hacked".into() });
 
