@@ -2,6 +2,21 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
+/// Short relative time ("now", "5m", "3h", "2d") from a unix-millis SENT timestamp —
+/// so people see when something was sent, not when it reached them.
+func relativeTimeShort(_ ms: UInt64) -> String {
+    let secs = Date().timeIntervalSince1970 - Double(ms) / 1000
+    switch secs {
+    case ..<5: return "now"
+    case ..<60: return "\(Int(secs))s"
+    case ..<3600: return "\(Int(secs / 60))m"
+    case ..<86_400: return "\(Int(secs / 3600))h"
+    case ..<604_800: return "\(Int(secs / 86_400))d"
+    case ..<2_592_000: return "\(Int(secs / 604_800))w"
+    default: return "\(Int(secs / 2_592_000))mo"
+    }
+}
+
 /// Reports each post card's on-screen vertical center so the feed can pick the one
 /// nearest the middle of the screen as the "active" (playing) post.
 struct PostCenterKey: PreferenceKey {
@@ -104,6 +119,7 @@ final class FeedStore: ObservableObject {
 
     // Diagnostics accessors.
     var myNodeIdShort: String { social.map { String($0.myNodeHex().prefix(16)) } ?? "—" }
+    var myNodeHex: String { social?.myNodeHex() ?? "" }
     var contactCount: Int { ContactsStore.shared.contacts.count }
     var handshakedCount: Int { social?.contactNodeIds().count ?? 0 }
     /// True once we hold this contact's verified public bundle (handshake complete) —
@@ -342,6 +358,7 @@ final class FeedStore: ObservableObject {
 
 struct FeedView: View {
     @ObservedObject private var store = FeedStore.shared
+    @ObservedObject private var settings = SettingsStore.shared
     let friendName: String
     let seed: Data
 
@@ -403,6 +420,15 @@ struct FeedView: View {
             }
             .navigationTitle("Feed")
             .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { settings.silent.toggle() } label: {
+                        Image(systemName: settings.silent ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    }
+                    .tint(settings.silent ? .secondary : KithTheme.pink)
+                    .accessibilityLabel(settings.silent ? "Unmute app" : "Mute app")
+                }
+            }
             .onAppear { store.configure(seed: seed) }
             .sensoryFeedback(.success, trigger: store.postTick)
             .sensoryFeedback(.impact(weight: .light), trigger: store.reactionTick)
@@ -574,6 +600,8 @@ private struct PostCard: View {
     @State private var players: [String: AVPlayer] = [:]
     @State private var showReactionPicker = false
     @State private var currentPage = 0
+    @State private var showHeart = false
+    @State private var showReactionDetail = false
 
     private var isActive: Bool { audio.centeredPostId == item.id }
 
@@ -595,6 +623,35 @@ private struct PostCard: View {
 
     private func react(_ e: String) { EmojiStore.shared.record(e); onReact(e) }
 
+    /// Double-tap a post to ❤️ it (with an Instagram-style heart pop).
+    private func heartIt() {
+        react("❤️")
+        withAnimation(KithTheme.bouncy) { showHeart = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            withAnimation(KithTheme.smooth) { showHeart = false }
+        }
+    }
+
+    /// Single-tap a post's media to mute/unmute its sound (video audio or its song).
+    private func togglePostMute() {
+        if item.media.contains(where: isVideo) {
+            if audio.activePostId != item.id {
+                audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer)
+            }
+            audio.toggleVideoAudio()
+        } else if item.music != nil {
+            audio.toggleMusic(postId: item.id, track: item.music)
+        }
+    }
+
+    private var heartBurst: some View {
+        Image(systemName: "heart.fill")
+            .font(.system(size: 86)).foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.3), radius: 10)
+            .scaleEffect(showHeart ? 1 : 0.4)
+            .opacity(showHeart ? 0.95 : 0)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -603,7 +660,12 @@ private struct PostCard: View {
                     .font(.subheadline).italic().foregroundStyle(.secondary)
             } else {
                 if !item.body.isEmpty { Text(item.body).font(.body) }
-                if !item.media.isEmpty { mediaView }
+                if !item.media.isEmpty {
+                    mediaView
+                        .overlay { if showHeart { heartBurst } }
+                        .onTapGesture(count: 2) { heartIt() }       // double-tap to heart
+                        .onTapGesture(count: 1) { togglePostMute() } // tap to mute/unmute
+                }
                 if let track = item.music { NowPlayingPill(track: track, animating: true) }
                 reactionsRow
                 if !item.comments.isEmpty { commentsList }
@@ -734,6 +796,7 @@ private struct PostCard: View {
         HStack(spacing: 10) {
             avatar
             Text(authorName).font(.subheadline.weight(.semibold))
+            Text(relativeTimeShort(item.createdAt)).font(.caption2).foregroundStyle(.secondary)
             if item.edited {
                 Text("edited").font(.caption2)
                     .padding(.horizontal, 6).padding(.vertical, 2)
@@ -752,12 +815,15 @@ private struct PostCard: View {
     private var reactionsRow: some View {
         HStack(spacing: 8) {
             ForEach(item.reactions, id: \.emoji) { r in
-                Text("\(r.emoji) \(r.count)")
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(r.mine ? AnyShapeStyle(KithTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Capsule())
-                    .overlay(Capsule().strokeBorder(r.mine ? KithTheme.pink.opacity(0.5) : .clear))
-                    .transition(.scale.combined(with: .opacity))
+                Button { showReactionDetail = true } label: {
+                    Text("\(r.emoji) \(r.count)")
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(r.mine ? AnyShapeStyle(KithTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Capsule())
+                        .overlay(Capsule().strokeBorder(r.mine ? KithTheme.pink.opacity(0.5) : .clear))
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
             Spacer()
             ForEach(EmojiStore.shared.frequent(4), id: \.self) { e in
@@ -772,6 +838,9 @@ private struct PostCard: View {
         .sheet(isPresented: $showReactionPicker) {
             ReactionPicker { e in onReact(e) }
         }
+        .sheet(isPresented: $showReactionDetail) {
+            ReactionDetailView(reactions: item.reactions)
+        }
     }
 
     private var commentsList: some View {
@@ -781,6 +850,7 @@ private struct PostCard: View {
                     HStack(alignment: .top, spacing: 6) {
                         Text(commentAuthorName(c)).font(.caption.weight(.semibold))
                             .foregroundStyle(c.isMe ? KithTheme.pink : .secondary)
+                        Text(relativeTimeShort(c.createdAt)).font(.caption2).foregroundStyle(.tertiary)
                         if c.unsent {
                             Text("unsent").font(.caption).italic().foregroundStyle(.secondary)
                         } else if !c.body.isEmpty {

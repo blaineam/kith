@@ -10,16 +10,22 @@ final class SettingsStore: ObservableObject {
     @Published var autoOptimize: Bool { didSet { d.set(autoOptimize, forKey: kOpt) } }
     /// Auto-delete posts older than this many days (0 = keep forever).
     @Published var retentionDays: Int { didSet { d.set(retentionDays, forKey: kRet) } }
+    /// Global mute — silences post music + video audio so you can browse quietly.
+    @Published var silent: Bool {
+        didSet { d.set(silent, forKey: kSilent); AudioCoordinator.shared.setSilent(silent) }
+    }
 
     private let d = UserDefaults.standard
     private let kSave = "kith.saveToPhotos"
     private let kOpt = "kith.autoOptimize"
     private let kRet = "kith.retentionDays"
+    private let kSilent = "kith.silent"
 
     private init() {
         saveToPhotos = d.object(forKey: kSave) as? Bool ?? true   // default ON
         autoOptimize = d.object(forKey: kOpt) as? Bool ?? true
         retentionDays = d.object(forKey: kRet) as? Int ?? 0       // default forever
+        silent = d.object(forKey: kSilent) as? Bool ?? false
     }
 
     /// Viewer retention in seconds (nil = forever).
@@ -58,6 +64,12 @@ struct SettingsView: View {
         ZStack {
             KithBackground()
             Form {
+                Section {
+                    Toggle("Silent mode", isOn: $settings.silent)
+                        .tint(KithTheme.pink)
+                } footer: {
+                    Text("Mute the whole app — post music and video sound stay quiet so you can browse silently. Also toggleable from the speaker button on your feed.")
+                }
                 Section {
                     Toggle("Save to Photos", isOn: $settings.saveToPhotos)
                         .tint(KithTheme.pink)

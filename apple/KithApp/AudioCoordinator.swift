@@ -35,8 +35,28 @@ final class AudioCoordinator: ObservableObject {
         if let track { MusicPlayback.shared.play(track) }
     }
 
+    /// Tap-to-toggle a music-only post's sound (pause/resume the song).
+    func toggleMusic(postId: String, track: TrackRefFfi?) {
+        guard !SettingsStore.shared.silent else { return }
+        if activePostId != postId { start(postId: postId, track: track, video: nil) }
+        if MusicPlayback.shared.isPlaying { MusicPlayback.shared.duck() }
+        else { MusicPlayback.shared.resume() }
+    }
+
+    /// Globally mute/unmute the app (post music + video audio).
+    func setSilent(_ on: Bool) {
+        if on {
+            MusicPlayback.shared.duck()
+            videoPlayer?.volume = 0
+            videoUnmuted = false
+        } else {
+            ensureMusicPlaying()
+        }
+    }
+
     /// Toggle the video's own audio, crossfading against the song.
     func toggleVideoAudio() {
+        guard !SettingsStore.shared.silent else { return }   // app is muted
         videoUnmuted.toggle()
         if videoUnmuted {
             MusicPlayback.shared.duck()              // music down
@@ -60,7 +80,7 @@ final class AudioCoordinator: ObservableObject {
     /// listening to a video's audio. Called when a post stays active (e.g. after a video
     /// paused it) so the music resumes as long as you haven't scrolled past the post.
     func ensureMusicPlaying() {
-        guard !videoUnmuted else { return }
+        guard !videoUnmuted, !SettingsStore.shared.silent else { return }
         MusicPlayback.shared.resume()
     }
 
@@ -97,9 +117,11 @@ final class MusicPlayback {
     static let shared = MusicPlayback()
     private(set) var current: TrackRefFfi?
     private let player = MPMusicPlayerController.applicationMusicPlayer
+    var isPlaying: Bool { player.playbackState == .playing }
 
     func play(_ track: TrackRefFfi) {
         current = track
+        guard !SettingsStore.shared.silent else { return }   // app is muted
         // Only catalog (store) songs are playable by id; library-only items have no id.
         guard !track.catalogId.isEmpty, track.catalogId != "0" else { return }
         player.setQueue(with: [track.catalogId])

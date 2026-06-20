@@ -266,6 +266,7 @@ impl SocialDemo {
                         id: c.id,
                         author_short: short(&c.author),
                         is_me: c.author == me,
+                        created_at: c.created_at,
                         body: c.body,
                         media: c.media,
                         edited: c.edited,
@@ -279,6 +280,7 @@ impl SocialDemo {
                         emoji: r.emoji,
                         count: r.count,
                         mine: r.authors.contains(&me),
+                        authors: r.authors,
                     })
                     .collect(),
             })
@@ -313,6 +315,8 @@ pub struct ReactionFfi {
     pub emoji: String,
     pub count: u32,
     pub mine: bool,
+    /// Node-id hexes of who reacted with this emoji (so the UI can show names).
+    pub authors: Vec<String>,
 }
 
 /// A comment for the UI.
@@ -321,6 +325,7 @@ pub struct FeedCommentFfi {
     pub id: String,
     pub author_short: String,
     pub is_me: bool,
+    pub created_at: u64,
     pub body: String,
     pub media: Vec<String>,
     pub edited: bool,
@@ -463,6 +468,7 @@ fn map_feed(events: Vec<Event>, me: &str, now_ms: u64, viewer_retention_secs: Op
                     id: c.id,
                     author_short: short(&c.author),
                     is_me: c.author == me,
+                        created_at: c.created_at,
                     body: c.body,
                     media: c.media,
                     edited: c.edited,
@@ -476,6 +482,7 @@ fn map_feed(events: Vec<Event>, me: &str, now_ms: u64, viewer_retention_secs: Op
                     emoji: r.emoji,
                     count: r.count,
                     mine: r.authors.contains(&me.to_string()),
+                    authors: r.authors,
                 })
                 .collect(),
         })
