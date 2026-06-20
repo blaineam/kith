@@ -247,6 +247,7 @@ struct StoryComposerView: View {
     @State private var showSongs = false
     @State private var editingCaption = false
     @State private var captionStyleId = 0
+    @State private var musicStartMs = 0.0
     @FocusState private var captionFocused: Bool
 
     private var style: StoryCaptionStyle { StoryCaptions.style(captionStyleId) }
@@ -284,7 +285,10 @@ struct StoryComposerView: View {
                 topControls
                 Spacer()
                 if captionFocused { CaptionStyleRow(selectedId: $captionStyleId).padding(.bottom, 8) }
-                if let track { nowPlayingChip(track) }
+                if let track {
+                    nowPlayingChip(track)
+                    if track.durationMs > 16000 { musicSectionSlider(track) }
+                }
                 shareBar
             }
         }
@@ -336,6 +340,28 @@ struct StoryComposerView: View {
         }
     }
 
+    /// Pick which section of the song plays with the story (start offset).
+    private func musicSectionSlider(_ t: TrackRefFfi) -> some View {
+        let maxStart = Double(max(1, Int(t.durationMs) - 15_000))
+        return HStack(spacing: 8) {
+            Image(systemName: "scissors").font(.caption2).foregroundStyle(.white.opacity(0.85))
+            Slider(value: $musicStartMs, in: 0...maxStart).tint(KithTheme.pink)
+            Text(fmtTime(musicStartMs)).font(.caption2.monospaced()).foregroundStyle(.white.opacity(0.85))
+        }
+        .padding(.horizontal, 24).padding(.bottom, 6)
+    }
+    private func fmtTime(_ ms: Double) -> String {
+        let s = Int(ms / 1000); return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    /// The track with the chosen section start baked in (artworkUrl = "start:<ms>").
+    private func trackForShare() -> TrackRefFfi? {
+        guard let t = track else { return nil }
+        guard musicStartMs > 0 else { return t }
+        return TrackRefFfi(catalogId: t.catalogId, title: t.title, artist: t.artist,
+                           artworkUrl: "start:\(Int(musicStartMs))", durationMs: t.durationMs)
+    }
+
     private func nowPlayingChip(_ t: TrackRefFfi) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "music.note").font(.caption)
@@ -352,7 +378,7 @@ struct StoryComposerView: View {
         HStack {
             Spacer()
             Button {
-                onShare(draft.mediaRef, StoryCaptions.encode(caption, styleId: captionStyleId), track)
+                onShare(draft.mediaRef, StoryCaptions.encode(caption, styleId: captionStyleId), trackForShare())
                 dismiss()
             } label: {
                 HStack(spacing: 8) {

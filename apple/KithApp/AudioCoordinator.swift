@@ -139,6 +139,10 @@ final class MusicPlayback {
             player.setQueue(with: [track.catalogId])
         }
         player.play()
+        // Stories can pick a section of the song (start offset encoded as "start:<ms>").
+        if track.artworkUrl.hasPrefix("start:"), let ms = Double(track.artworkUrl.dropFirst(6)), ms > 0 {
+            player.currentPlaybackTime = ms / 1000
+        }
     }
     func duck() {
         if player.playbackState == .playing { player.pause() }
