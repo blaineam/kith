@@ -59,16 +59,16 @@ Single-file, zero-dep web app mirroring the iOS look (gradient, cards, story rin
 ## ✅ Shared circle store (#12) — DONE
 seal_bytes/open_bytes group primitive + a real SigV4 S3 client + "Volunteer as tribute": a member keeps a circle-sealed (host can't read) copy of media in their bucket and re-serves it P2P to anyone missing it. No cred sharing.
 
-## 🔨 Now building (last one)
-
-### #11 — P2P calls
-- [ ] CallKit call UI + signaling over the existing P2P channel
-- [ ] Live audio over the iroh transport (video + on-device A/V = follow-on)
+## ✅ P2P voice calls (#11) — DONE (device-test pending)
+CallKit UI + invite/accept/hangup signaling + 16 kHz audio, all over the existing P2P transport — no call server. Call button in DM threads + in-call overlay. Live audio quality needs on-device testing (no mic/CallKit in the simulator); video is the follow-on.
 
 ---
 
-## 🗺️ Everything else: ✅ DONE
-Multi-circle · Mesh relay · DMs · Stories + modern camera · Video trim/mute · Notifications · macOS (Catalyst) · Web client · Shared store
+## 🎉 The whole backlog is done
+Multi-circle · Mesh relay · Direct messages · Stories + modern camera (song + caption) · Video trim/mute · Local notifications · macOS (Mac Catalyst) · Static web client · Shared "volunteer" store · P2P voice calls.
+
+Everything builds (iOS + Mac Catalyst), Rust + UI tests green, all committed + pushed.
+**Next:** device-test the new features (esp. calls + camera), then batch-upload to App Store Connect once the daily limit resets.
 
 ---
 
