@@ -258,8 +258,9 @@ final class FeedStore: ObservableObject {
     }
 
     /// Post a full-screen story to the active circle — auto-expires after 24h (retention).
-    func postStory(media: [String]) {
-        post("", media: media, retentionSecs: 86_400, story: true)
+    /// Stories can carry a caption (the post body) and a song (played in the viewer).
+    func postStory(media: [String], caption: String = "", music: TrackRefFfi? = nil) {
+        post(caption, media: media, music: music, retentionSecs: 86_400, story: true)
     }
 
     /// Stories in the active circle (full-screen, ephemeral), newest first.
@@ -656,7 +657,7 @@ struct FeedView: View {
     @State private var composeRetention: UInt64?
     @State private var showNewCircle = false
     @State private var newCircleName = ""
-    @State private var showStoryPicker = false
+    @State private var showStoryCamera = false
     @State private var showStories = false
     @State private var storyIndex = 0
     @State private var trimmingRef: TrimTarget?
@@ -764,8 +765,10 @@ struct FeedView: View {
             .sheet(isPresented: $showSongPicker) {
                 SongPicker { track in attachedTrack = track }
             }
-            .sheet(isPresented: $showStoryPicker) {
-                MediaPicker { refs in if !refs.isEmpty { store.postStory(media: refs) } }
+            .fullScreenCover(isPresented: $showStoryCamera) {
+                StoryCameraView { ref, caption, track in
+                    store.postStory(media: [ref], caption: caption, music: track)
+                }
             }
             .fullScreenCover(isPresented: $showStories) {
                 StoryViewer(stories: store.stories, index: storyIndex, friendName: friendName)
@@ -798,11 +801,11 @@ struct FeedView: View {
     @ViewBuilder private var storiesTray: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 14) {
-                Button { showStoryPicker = true } label: {
+                Button { showStoryCamera = true } label: {
                     VStack(spacing: 6) {
                         ZStack {
                             Circle().strokeBorder(KithTheme.brandHorizontal, lineWidth: 2).frame(width: 62, height: 62)
-                            Image(systemName: "plus").font(.title2).foregroundStyle(KithTheme.pink)
+                            Image(systemName: "camera.fill").font(.title3).foregroundStyle(KithTheme.pink)
                         }
                         Text("Add").font(.caption2).foregroundStyle(.secondary)
                     }

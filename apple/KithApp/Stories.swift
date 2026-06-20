@@ -1,7 +1,8 @@
 import SwiftUI
 import AVKit
 
-/// Full-screen story viewer: progress bars, auto-advance, tap left/right to navigate.
+/// Full-screen story viewer: progress bars, auto-advance, tap left/right to navigate,
+/// captions, and the song the author attached (played while you watch).
 /// Stories are ordinary posts flagged `story` with a 24h retention, so they expire
 /// on their own — no special server, just the existing retention rule.
 struct StoryViewer: View {
@@ -10,6 +11,7 @@ struct StoryViewer: View {
     let friendName: String
     @Environment(\.dismiss) private var dismiss
     @State private var progress = 0.0
+    @State private var player: AVPlayer?
     private let duration = 5.0
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -26,6 +28,8 @@ struct StoryViewer: View {
             }
         }
         .statusBarHidden()
+        .onAppear { loadCurrent() }
+        .onDisappear { teardown() }
         .onReceive(tick) { _ in
             progress += 0.05 / duration
             if progress >= 1 { next() }
@@ -33,14 +37,10 @@ struct StoryViewer: View {
     }
 
     @ViewBuilder private func content(_ s: FeedItemFfi) -> some View {
-        if let ref = s.media.first, let m = MediaStore.shared.item(ref) {
-            if m.kind == .video, let url = m.videoURL {
-                VideoPlayer(player: AVPlayer(url: url))
-            } else if let img = m.image {
-                Image(uiImage: img).resizable().scaledToFit()
-            } else {
-                missing
-            }
+        if let player {
+            VideoPlayer(player: player)
+        } else if let ref = s.media.first, let img = MediaStore.shared.item(ref)?.image {
+            Image(uiImage: img).resizable().scaledToFit()
         } else {
             missing
         }
@@ -68,7 +68,7 @@ struct StoryViewer: View {
                 }
             }
             .padding(.horizontal).padding(.top, 12)
-            HStack {
+            HStack(spacing: 8) {
                 Text(s.isMe ? "Your story" : (ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName))
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                 Text(relativeTimeShort(s.createdAt)).font(.caption2).foregroundStyle(.white.opacity(0.7))
@@ -77,22 +77,64 @@ struct StoryViewer: View {
                     Image(systemName: "xmark").font(.headline).foregroundStyle(.white)
                 }
             }
-            .padding()
-            if !s.body.isEmpty {
-                Spacer()
-                Text(s.body).foregroundStyle(.white).padding()
-                    .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 12)).padding()
-            }
+            .padding(.horizontal).padding(.top, 4)
             Spacer()
+            if let m = s.music {
+                HStack(spacing: 8) {
+                    Image(systemName: "music.note").font(.caption)
+                    Text("\(m.title) · \(m.artist)").font(.caption.weight(.medium)).lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.black.opacity(0.4), in: Capsule())
+                .padding(.bottom, 8)
+            }
+            if !s.body.isEmpty {
+                Text(s.body)
+                    .font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 24).padding(.bottom, 36)
+            }
         }
+    }
+
+    // MARK: - Playback per story
+
+    private func loadCurrent() {
+        guard stories.indices.contains(index) else { return }
+        let s = stories[index]
+        // The author's song plays while you watch; the video is muted under it.
+        if let m = s.music { MusicPlayback.shared.play(m) } else { MusicPlayback.shared.stop() }
+        if let ref = s.media.first, let item = MediaStore.shared.item(ref),
+           item.kind == .video, let url = item.videoURL {
+            let p = AVPlayer(url: url)
+            p.isMuted = (s.music != nil)
+            NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
+                                                   object: p.currentItem, queue: .main) { _ in
+                p.seek(to: .zero); p.play()
+            }
+            player = p
+            p.play()
+        } else {
+            player = nil
+        }
+    }
+
+    private func teardown() {
+        player?.pause()
+        player = nil
+        MusicPlayback.shared.stop()
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func next() {
         progress = 0
-        if index + 1 < stories.count { index += 1 } else { dismiss() }
+        if index + 1 < stories.count { index += 1; loadCurrent() } else { dismiss() }
     }
     private func prev() {
         progress = 0
-        if index > 0 { index -= 1 }
+        if index > 0 { index -= 1; loadCurrent() }
     }
 }
