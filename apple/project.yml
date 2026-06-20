@@ -25,28 +25,38 @@ targets:
       # iroh's network-discovery deps (netdev, hickory DNS, system_configuration)
       # reference SCDynamicStore* — link SystemConfiguration.
       - sdk: SystemConfiguration.framework
+    info:
+      path: KithApp/Info.plist
+      properties:
+        CFBundleDisplayName: Kith
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: "Kith uses the camera so you can capture photos and videos to share with your circle. Nothing is uploaded — media is encrypted on your device first."
+        NSMicrophoneUsageDescription: "Kith uses the microphone to record sound with your videos."
+        NSPhotoLibraryUsageDescription: "Kith lets you pick photos and videos from your library to share privately with your circle."
+        NSPhotoLibraryAddUsageDescription: "Kith can save photos and videos you share or receive to your Photos library, so they're ready when you open Photos."
+        NSAppleMusicUsageDescription: "Kith lets you add a song to a post; it plays through your own Apple Music."
+        # EAR-exempt (standard mass-market crypto, not shipped to France) → NO. The app
+        # still has full E2E post-quantum encryption; this is only the US export answer.
+        ITSAppUsesNonExemptEncryption: false
+        # Deep link for invite links: kith://u/<id>#<verify> (from wemiller.com/apps/kith).
+        CFBundleURLTypes:
+          - CFBundleURLName: com.blaineam.kith
+            CFBundleURLSchemes: [kith]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blaineam.kith
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Kith
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        INFOPLIST_KEY_NSCameraUsageDescription: "Kith uses the camera so you can capture photos and videos to share with your circle. Nothing is uploaded — media is encrypted on your device first."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Kith uses the microphone to record sound with your videos."
-        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Kith lets you pick photos and videos from your library to share privately with your circle."
-        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Kith can save photos and videos you share or receive to your Photos library, so they're ready when you open Photos."
-        INFOPLIST_KEY_NSAppleMusicUsageDescription: "Kith lets you add a song to a post; it plays through your own Apple Music."
-        # Kith's encryption (standard published algorithms, mass market, not distributed
-        # to France) qualifies for an EAR exemption per Apple's export-compliance
-        # questionnaire → "NO" = does not use NON-exempt encryption. The app still has
-        # full E2E post-quantum encryption; this is only the US export classification.
-        # No documents, no code, no per-build prompt. (France must be excluded in App
-        # Store availability to match this answer.)
-        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: "NO"
+        GENERATE_INFOPLIST_FILE: NO
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "12"
+        CURRENT_PROJECT_VERSION: "13"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64

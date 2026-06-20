@@ -17,6 +17,7 @@ struct RootView: View {
     @State private var tab = ProcessInfo.processInfo.environment["KITH_TAB"] ?? "circle"
     @State private var showConnect = false
     @State private var didPrompt = false
+    @State private var pendingInvite: String?
 
     var body: some View {
         Group {
@@ -28,6 +29,14 @@ struct RootView: View {
             }
         }
         .animation(KithTheme.smooth, value: profile.onboarded)
+        .onOpenURL { url in
+            // Invite deep links: kith://u/<id>#<verify> (opened from wemiller.com/apps/kith).
+            let s = url.absoluteString
+            guard s.contains("/u/") else { return }
+            pendingInvite = s
+            tab = "you"
+            showConnect = true
+        }
     }
 
     private var main: some View {
@@ -46,8 +55,8 @@ struct RootView: View {
             .tabItem { Label("You", systemImage: "person.crop.circle.fill") }
         }
         .tint(KithTheme.pink)
-        .sheet(isPresented: $showConnect) {
-            ConnectView(account: accountStore.account, contacts: contacts)
+        .sheet(isPresented: $showConnect, onDismiss: { pendingInvite = nil }) {
+            ConnectView(account: accountStore.account, contacts: contacts, incomingLink: pendingInvite)
         }
         .onAppear {
             FeedStore.shared.configure(seed: accountStore.account.secretSeed())

@@ -11,6 +11,8 @@ enum KithSite {
 struct ConnectView: View {
     let account: Account
     @ObservedObject var contacts: ContactsStore
+    /// An invite link the app was opened with (deep link) — jumps straight to "Add a friend".
+    var incomingLink: String? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var mode = 0
@@ -42,6 +44,12 @@ struct ConnectView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showScanner) { scannerSheet }
+            .onAppear {
+                guard let link = incomingLink, !link.isEmpty else { return }
+                mode = 1
+                pasted = link
+                lookup()
+            }
         }
     }
 
