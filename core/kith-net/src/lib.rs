@@ -27,6 +27,11 @@ pub type InboundHandler = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
 
 type Conns = Arc<Mutex<HashMap<EndpointId, Connection>>>;
 
+/// Lock that tolerates poisoning (a panic in one task must not cascade-abort others).
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 trait IntoAnyhow<T> {
     fn ah(self) -> Result<T>;
 }
@@ -88,13 +93,13 @@ impl Node {
     /// replies on it).
     async fn conn_for(&self, addr: EndpointAddr) -> Result<Connection> {
         let id = addr.id;
-        if let Some(c) = self.conns.lock().unwrap().get(&id).cloned() {
+        if let Some(c) = lock(&self.conns).get(&id).cloned() {
             if c.close_reason().is_none() {
                 return Ok(c);
             }
         }
         let conn = self.endpoint.connect(addr, ALPN).await.ah()?;
-        self.conns.lock().unwrap().insert(id, conn.clone());
+        lock(&self.conns).insert(id, conn.clone());
         let c = self.conns.clone();
         let h = self.handler.clone();
         let cc = conn.clone();
@@ -142,7 +147,7 @@ async fn accept_loop(endpoint: Endpoint, conns: Conns, handler: InboundHandler) 
             let Ok(conn) = connecting.await else { return };
             // Keep the inbound connection so we can send back to a peer who dialed us
             // (they may be unreachable for us to dial directly).
-            conns.lock().unwrap().insert(conn.remote_id(), conn.clone());
+            lock(&conns).insert(conn.remote_id(), conn.clone());
             read_loop(conn, conns, handler).await;
         });
     }
@@ -156,7 +161,11 @@ async fn read_loop(conn: Connection, conns: Conns, handler: InboundHandler) {
                 let handler = handler.clone();
                 tokio::spawn(async move {
                     if let Ok(payload) = recv.read_to_end(MAX_PAYLOAD).await {
-                        handler(payload);
+                        // The handler crosses into a foreign (Swift) callback — a panic
+                        // there would abort the whole app, so contain it.
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            handler(payload);
+                        }));
                     }
                 });
             }
@@ -164,7 +173,7 @@ async fn read_loop(conn: Connection, conns: Conns, handler: InboundHandler) {
         }
     }
     let id = conn.remote_id();
-    let mut map = conns.lock().unwrap();
+    let mut map = lock(&conns);
     if map.get(&id).map(|c| c.close_reason().is_some()).unwrap_or(false) {
         map.remove(&id);
     }

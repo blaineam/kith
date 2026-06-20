@@ -410,7 +410,10 @@ impl KithNode {
             .map_err(|_| KithError::Invalid { msg: "seed must be 32 bytes".into() })?;
         let identity = Identity::from_seed(&seed);
         let l = listener.clone();
-        let handler: kith_net::InboundHandler = Arc::new(move |payload| l.on_inbound(payload));
+        let handler: kith_net::InboundHandler = Arc::new(move |payload| {
+            // Never let a panic cross back into the foreign (Swift) callback and abort.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| l.on_inbound(payload)));
+        });
         let node = Node::spawn(identity.node_secret_bytes(), handler)
             .await
             .map_err(|e| KithError::Invalid { msg: e.to_string() })?;
