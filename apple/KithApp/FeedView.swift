@@ -214,19 +214,35 @@ final class FeedStore: ObservableObject {
         }
     }
 
-    private func handleHello(_ payload: Data) {
-        guard let social, payload.count >= 4 else { return }
-        let b = [UInt8](payload.prefix(4))
-        let bundleLen = Int(UInt32(b[0]) | UInt32(b[1]) << 8 | UInt32(b[2]) << 16 | UInt32(b[3]) << 24)
-        guard bundleLen >= 32, payload.count >= 4 + bundleLen else { return }
-        let bundle = payload.subdata(in: 4..<(4 + bundleLen))
-        let profileBlob = payload.subdata(in: (4 + bundleLen)..<payload.count)
+    private func nodeHex(_ d: Data) -> String { d.map { String(format: "%02x", $0) }.joined() }
+    private func isContact(_ idHex: String) -> Bool {
+        ContactsStore.shared.contacts.contains { $0.idHex == idHex }
+    }
 
-        let nodeHex = bundle.prefix(32).map { String(format: "%02x", $0) }.joined()
-        // Only accept a bundle from someone in our circle, verified against the hash
-        // from their reach-me link (MITM guard).
-        guard ContactsStore.shared.contacts.contains(where: { $0.idHex == nodeHex }) else { return }
-        if let expected = ContactsStore.shared.verification(forNodePrefix: nodeHex),
+    private func handleHello(_ payload: Data) {
+        guard let social else { return }
+        // Accept BOTH handshake formats (so a version-skewed pair still connects):
+        //   legacy: payload = bundle
+        //   current: payload = [u32 bundleLen][bundle][signed profile]
+        let bundle: Data
+        let profileBlob: Data
+        if payload.count >= 32, isContact(nodeHex(payload.prefix(32))) {
+            bundle = Data(payload)
+            profileBlob = Data()
+        } else if payload.count >= 36 {
+            let b = [UInt8](payload.prefix(4))
+            let n = Int(UInt32(b[0]) | UInt32(b[1]) << 8 | UInt32(b[2]) << 16 | UInt32(b[3]) << 24)
+            guard n >= 32, payload.count >= 4 + n,
+                  isContact(nodeHex(payload.subdata(in: 4..<36))) else { return }
+            bundle = payload.subdata(in: 4..<(4 + n))
+            profileBlob = payload.subdata(in: (4 + n)..<payload.count)
+        } else {
+            return
+        }
+
+        let idHex = nodeHex(bundle.prefix(32))
+        // Verify the bundle against the hash from their reach-me link (MITM guard).
+        if let expected = ContactsStore.shared.verification(forNodePrefix: idHex),
            let actual = try? social.bundleVerificationHex(bundle: bundle),
            expected != actual {
             return
@@ -234,16 +250,17 @@ final class FeedStore: ObservableObject {
         guard (try? social.addContactBundle(bundle: bundle)) != nil else { return }
         persist()   // contact's bundle is now known — keep it
         // The name they signed wins over any local nickname (owner has authority).
-        if let authName = social.verifyProfile(bundle: bundle, blob: profileBlob), !authName.isEmpty {
-            ContactsStore.shared.setAuthoritativeName(idHex: nodeHex, authName)
+        if !profileBlob.isEmpty,
+           let authName = social.verifyProfile(bundle: bundle, blob: profileBlob), !authName.isEmpty {
+            ContactsStore.shared.setAuthoritativeName(idHex: idHex, authName)
         }
         // Reply so the link is mutual + back-fill our posts to them (both transports).
         if let hello = helloPayload() {
-            sendIroh(0, hello, to: nodeHex)
+            sendIroh(0, hello, to: idHex)
             nearbyBroadcast(0, hello)
         }
         let envs = social.syncEnvelopes()
-        for env in envs { sendIroh(1, env, to: nodeHex); nearbyBroadcast(1, env) }
+        for env in envs { sendIroh(1, env, to: idHex); nearbyBroadcast(1, env) }
         refresh()
     }
 
