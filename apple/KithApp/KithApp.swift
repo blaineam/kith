@@ -56,6 +56,9 @@ struct RootView: View {
                 .id(accountStore.account.nodeIdHex())
                 .tag("circle")
                 .tabItem { Label("Circle", systemImage: "sparkles") }
+            NavigationStack { MessagesView(account: accountStore.account) }
+                .tag("messages")
+                .tabItem { Label("Messages", systemImage: "bubble.left.and.bubble.right.fill") }
             YouView(
                 account: accountStore.account,
                 accountStore: accountStore,

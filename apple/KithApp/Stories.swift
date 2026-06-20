@@ -69,6 +69,7 @@ struct StoryViewer: View {
             }
             .padding(.horizontal).padding(.top, 12)
             HStack(spacing: 8) {
+                sharerAvatar(s)
                 Text(s.isMe ? "Your story" : (ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName))
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                 Text(relativeTimeShort(s.createdAt)).font(.caption2).foregroundStyle(.white.opacity(0.7))
@@ -127,6 +128,16 @@ struct StoryViewer: View {
         player = nil
         MusicPlayback.shared.stop()
         NotificationCenter.default.removeObserver(self)
+    }
+
+    @ViewBuilder private func sharerAvatar(_ s: FeedItemFfi) -> some View {
+        if s.isMe {
+            KithAvatar(image: ProfileStore.shared.avatar, emoji: ProfileStore.shared.emoji, size: 30)
+        } else {
+            let name = ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName
+            Circle().fill(KithTheme.brand).frame(width: 30, height: 30)
+                .overlay(Text(String(name.prefix(1))).font(.caption.bold()).foregroundStyle(.white))
+        }
     }
 
     private func next() {

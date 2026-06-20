@@ -310,7 +310,8 @@ final class FeedStore: ObservableObject {
     }
 
     /// The current user's own posts — their personal archive.
-    var myPosts: [FeedItemFfi] { items.filter(\.isMe) }
+    var myPosts: [FeedItemFfi] { items.filter { $0.isMe && !$0.story } }
+    var myStories: [FeedItemFfi] { items.filter { $0.isMe && $0.story && !$0.unsent && !$0.media.isEmpty } }
 
     // MARK: - Authoring (seal locally, then broadcast to contacts)
 
@@ -1510,6 +1511,8 @@ struct ProfileView: View {
     @ObservedObject private var store = FeedStore.shared
     @ObservedObject private var profile = ProfileStore.shared
     let friendName: String
+    @State private var showStories = false
+    @State private var storyIndex = 0
 
     var body: some View {
         ZStack {
@@ -1517,6 +1520,7 @@ struct ProfileView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
+                    if !store.myStories.isEmpty { storiesRow }
                     if store.myPosts.isEmpty {
                         ContentUnavailableView(
                             "No posts yet",
@@ -1541,6 +1545,34 @@ struct ProfileView: View {
         }
         .navigationTitle("Your posts")
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(isPresented: $showStories) {
+            StoryViewer(stories: store.myStories, index: storyIndex, friendName: friendName)
+        }
+    }
+
+    private var storiesRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your stories").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(Array(store.myStories.enumerated()), id: \.element.id) { idx, s in
+                        Button { storyIndex = idx; showStories = true } label: {
+                            ZStack {
+                                Circle().fill(LinearGradient(colors: [KithTheme.violet, KithTheme.pink, KithTheme.amber],
+                                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                                    .frame(width: 64, height: 64)
+                                if let img = s.media.first.flatMap({ MediaStore.shared.item($0)?.image }) {
+                                    Image(uiImage: img).resizable().scaledToFill().frame(width: 56, height: 56).clipShape(Circle())
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
     }
 
     private var header: some View {

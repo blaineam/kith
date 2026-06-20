@@ -23,17 +23,6 @@ struct YouView: View {
                     VStack(spacing: 20) {
                         profileHeader.entrance(appeared, delay: 0.00)
                         inviteButton.entrance(appeared, delay: 0.06)
-                        NavigationLink { MessagesView(account: account) } label: {
-                            HStack {
-                                Label("Messages", systemImage: "bubble.left.and.bubble.right.fill")
-                                    .font(.subheadline.weight(.medium))
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .kithCard()
-                        .entrance(appeared, delay: 0.09)
                         NavigationLink { CircleView(account: account) } label: { circleCard }
                             .buttonStyle(.plain)
                             .entrance(appeared, delay: 0.12)
