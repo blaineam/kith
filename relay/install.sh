@@ -5,17 +5,17 @@
 # SEALED (the bridge can't read it) and re-served to anyone who's offline, so messages
 # arrive even when the sender and receiver are never online at the same time.
 #
-# This script self-hosts that bucket with MinIO (open-source, S3-compatible) — via
-# Docker (any OS) or a native binary (Linux/macOS) — and prints the exact settings to
-# paste into Kith. If you'd rather use a managed bucket (AWS S3 / Cloudflare R2 /
-# Backblaze B2), you don't need this script at all — see README.md.
+# This self-hosts that bucket with `rclone serve s3` (rclone is MIT-licensed, a single
+# cross-platform binary). It serves a plain folder over the S3 API — and because rclone
+# can serve ANY of its 70+ backends, you can later point it at your own cloud drive,
+# another S3, SFTP, etc. Prefer a managed bucket (S3 / R2 / B2)? You don't need this
+# script — see README.md.
 #
 # Usage:   curl -fsSL https://wemiller.com/apps/kith/bridge/install.sh | sh
-#   or:    sh install.sh [--native] [--port 9000] [--dir ~/kith-bridge]
+#   or:    sh install.sh [--native] [--port 8333] [--dir ~/kith-bridge]
 set -eu
 
-PORT=9000
-CONSOLE_PORT=9001
+PORT=8333
 DATADIR="${KITH_BRIDGE_DIR:-$HOME/kith-bridge}"
 MODE=docker
 BUCKET=kith
@@ -32,9 +32,9 @@ done
 
 OS="$(uname -s 2>/dev/null || echo unknown)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
-mkdir -p "$DATADIR"
+mkdir -p "$DATADIR/data/$BUCKET"   # the folder named '$BUCKET' IS the S3 bucket
 
-# A stable, random-ish credential pair derived once and saved (so re-runs are stable).
+# Stable random credentials, generated once and saved (so re-runs don't change them).
 CREDFILE="$DATADIR/.kith-bridge-creds"
 if [ -f "$CREDFILE" ]; then
   . "$CREDFILE"
@@ -45,67 +45,49 @@ else
   chmod 600 "$CREDFILE"
 fi
 
-echo "▸ Kith Bridge setup  (OS=$OS ARCH=$ARCH mode=$MODE)"
+echo "▸ Kith Bridge (rclone serve s3 — MIT)  OS=$OS ARCH=$ARCH mode=$MODE"
 echo "▸ Data dir: $DATADIR"
 
 start_docker() {
-  if ! command -v docker >/dev/null 2>&1; then
-    echo "✗ Docker not found. Install Docker, or re-run with --native (Linux/macOS)."
-    exit 1
-  fi
+  command -v docker >/dev/null 2>&1 || { echo "✗ Docker not found. Install it, or re-run with --native."; exit 1; }
   docker rm -f kith-bridge >/dev/null 2>&1 || true
   docker run -d --name kith-bridge --restart unless-stopped \
-    -p "$PORT:9000" -p "$CONSOLE_PORT:9001" \
-    -e "MINIO_ROOT_USER=$AKEY" -e "MINIO_ROOT_PASSWORD=$SKEY" \
+    -p "$PORT:8333" \
     -v "$DATADIR/data:/data" \
-    minio/minio server /data --console-address ":9001" >/dev/null
-  echo "✓ MinIO running in Docker (container: kith-bridge, auto-restarts)."
+    rclone/rclone serve s3 /data --addr :8333 --auth-key "$AKEY,$SKEY" >/dev/null
+  echo "✓ rclone serve s3 running in Docker (container: kith-bridge, auto-restarts)."
 }
 
 start_native() {
-  BIN="$DATADIR/minio"
-  if [ ! -x "$BIN" ]; then
+  BIN="$DATADIR/rclone"
+  if ! command -v rclone >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
     case "$OS-$ARCH" in
-      Linux-x86_64)  URL="https://dl.min.io/server/minio/release/linux-amd64/minio" ;;
-      Linux-aarch64) URL="https://dl.min.io/server/minio/release/linux-arm64/minio" ;;
-      Darwin-arm64)  URL="https://dl.min.io/server/minio/release/darwin-arm64/minio" ;;
-      Darwin-x86_64) URL="https://dl.min.io/server/minio/release/darwin-amd64/minio" ;;
-      *) echo "✗ No native MinIO for $OS-$ARCH. Use Docker (drop --native)."; exit 1 ;;
+      Linux-x86_64)  RC="linux-amd64" ;;
+      Linux-aarch64) RC="linux-arm64" ;;
+      Darwin-arm64)  RC="osx-arm64" ;;
+      Darwin-x86_64) RC="osx-amd64" ;;
+      *) echo "✗ No native rclone build for $OS-$ARCH. Use Docker (drop --native)."; exit 1 ;;
     esac
-    echo "▸ Downloading MinIO for $OS-$ARCH…"
-    curl -fsSL "$URL" -o "$BIN"
-    chmod +x "$BIN"
+    echo "▸ Downloading rclone ($RC)…"
+    curl -fsSL "https://downloads.rclone.org/rclone-current-${RC}.zip" -o "$DATADIR/rclone.zip"
+    unzip -oj "$DATADIR/rclone.zip" '*/rclone' -d "$DATADIR" >/dev/null
+    rm -f "$DATADIR/rclone.zip"; chmod +x "$BIN"
   fi
-  # Run in the background; install a service for always-on (best-effort).
-  MINIO_ROOT_USER="$AKEY" MINIO_ROOT_PASSWORD="$SKEY" \
-    nohup "$BIN" server "$DATADIR/data" --address ":$PORT" --console-address ":$CONSOLE_PORT" \
-    >"$DATADIR/minio.log" 2>&1 &
-  echo "✓ MinIO running natively (pid $!, log: $DATADIR/minio.log)."
+  RCLONE="$(command -v rclone || echo "$BIN")"
+  nohup "$RCLONE" serve s3 "$DATADIR/data" --addr ":$PORT" --auth-key "$AKEY,$SKEY" \
+    >"$DATADIR/rclone.log" 2>&1 &
+  echo "✓ rclone serve s3 running natively (pid $!, log: $DATADIR/rclone.log)."
   echo "  For always-on, see README.md (systemd / launchd snippets)."
 }
 
 [ "$MODE" = docker ] && start_docker || start_native
 
-# Create the bucket via the S3 API (wait for MinIO to come up).
-echo "▸ Creating bucket '$BUCKET'…"
-i=0
-while [ $i -lt 30 ]; do
-  if curl -fsS "http://127.0.0.1:$PORT/minio/health/ready" >/dev/null 2>&1; then break; fi
-  i=$((i+1)); sleep 1
-done
-# mc (MinIO client) via docker if available; else the bucket is auto-creatable on first PUT
-if command -v docker >/dev/null 2>&1; then
-  docker run --rm --network host minio/mc sh -c \
-    "mc alias set b http://127.0.0.1:$PORT $AKEY $SKEY >/dev/null 2>&1 && mc mb -p b/$BUCKET >/dev/null 2>&1" || true
-fi
-
-# Figure out a reachable address (LAN ip) for other devices.
 LANIP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
 
 cat <<EOF
 
 ═══════════════════════════════════════════════════════════════
-✓ Your Kith bridge is live.
+✓ Your Kith bridge is live (rclone serve s3 — MIT, fully open source).
 
 Paste these into Kith → You → Advanced → Storage → Custom S3 bucket,
 then turn on "Volunteer as tribute":
@@ -117,9 +99,10 @@ then turn on "Volunteer as tribute":
    Secret key:  $SKEY
 
 • Reachable on your network at  http://$LANIP:$PORT
-• Admin console:                http://$LANIP:$CONSOLE_PORT
 • For your circle to reach it from anywhere, expose the port (router
-  port-forward, Tailscale, or a $5 VPS). Everything stored is sealed —
+  port-forward, Tailscale, or a small VPS). Everything stored is sealed —
   the bridge never sees your messages.
+• rclone can serve other backends too (your cloud drive, another S3, SFTP):
+  rclone serve s3 myremote:path --addr :$PORT --auth-key "KEY,SECRET"
 ═══════════════════════════════════════════════════════════════
 EOF

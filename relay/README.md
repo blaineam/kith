@@ -12,20 +12,30 @@ account on anyone's platform, no plaintext anywhere.
 
 ## The easiest way: one command (self-hosted)
 
-Runs MinIO (open-source, S3-compatible) on your machine — a Pi, a NAS, an old laptop,
-or a cheap VPS — and prints the exact settings to paste into Kith.
+Runs `rclone serve s3` (rclone is **MIT-licensed**, a single cross-platform binary) on
+your machine — a Pi, a NAS, an old laptop, or a cheap VPS — serving a plain folder over
+the S3 API, and prints the exact settings to paste into Kith.
 
 ```sh
 curl -fsSL https://wemiller.com/apps/kith/bridge/install.sh | sh
 # or, from this folder:
 sh install.sh            # Docker (any OS)
-sh install.sh --native   # native binary (Linux / macOS, no Docker)
+sh install.sh --native   # native rclone binary (Linux / macOS, no Docker)
 ```
 
 Or with Docker Compose:
 
 ```sh
-KITH_BRIDGE_USER=you KITH_BRIDGE_PASSWORD='a-strong-password' docker compose up -d
+KITH_BRIDGE_KEY=you KITH_BRIDGE_SECRET='a-strong-password' docker compose up -d
+mkdir -p data/kith    # the folder named 'kith' is the bucket
+```
+
+**Why rclone?** It's MIT, ubiquitous, and `serve s3` can expose *any* of rclone's 70+
+backends — a local folder, your own cloud drive, another S3, SFTP — so your bridge
+storage is whatever you already trust:
+
+```sh
+rclone serve s3 myremote:path --addr :8333 --auth-key "KEY,SECRET"
 ```
 
 Then in the app: **You → Advanced → Storage → Custom S3 bucket**, paste the endpoint /

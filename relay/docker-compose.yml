@@ -1,32 +1,20 @@
-# Kith Bridge — a self-hosted, S3-compatible mailbox for your circle.
+# Kith Bridge — a self-hosted, S3-compatible mailbox for your circle, via rclone (MIT).
 # Stores only SEALED blobs it cannot read. Start with:  docker compose up -d
 #
-# Then set a strong user/password below (or via a .env file) and paste the endpoint,
-# bucket, and these credentials into Kith → Advanced → Storage → Custom S3 bucket,
-# and turn on "Volunteer as tribute".
+# Set a strong key/secret below (or via a .env file), make a folder named 'kith' inside
+# ./data (that folder IS the bucket), then paste the endpoint, bucket, and these
+# credentials into Kith → Advanced → Storage → Custom S3 bucket, and turn on
+# "Volunteer as tribute".
 services:
   kith-bridge:
-    image: minio/minio
+    image: rclone/rclone
     container_name: kith-bridge
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    command: >
+      serve s3 /data
+      --addr :8333
+      --auth-key "${KITH_BRIDGE_KEY:-kithadmin},${KITH_BRIDGE_SECRET:-change-me-please}"
     ports:
-      - "9000:9000"   # S3 API  (point Kith here)
-      - "9001:9001"   # admin console
-    environment:
-      MINIO_ROOT_USER: "${KITH_BRIDGE_USER:-kithadmin}"
-      MINIO_ROOT_PASSWORD: "${KITH_BRIDGE_PASSWORD:-change-me-please}"
+      - "8333:8333"   # S3 API — point Kith here
     volumes:
-      - ./data:/data
-
-  # One-shot: create the 'kith' bucket on startup.
-  createbucket:
-    image: minio/mc
-    depends_on:
-      - kith-bridge
-    entrypoint: >
-      /bin/sh -c "
-      until mc alias set b http://kith-bridge:9000 $${KITH_BRIDGE_USER:-kithadmin} $${KITH_BRIDGE_PASSWORD:-change-me-please}; do sleep 1; done;
-      mc mb -p b/kith;
-      exit 0;
-      "
+      - ./data:/data   # ./data/kith/ is the 'kith' bucket
