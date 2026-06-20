@@ -21,7 +21,13 @@ struct CircleView: View {
                             .listRowBackground(Color.clear)
                     }
                     ForEach(contacts.contacts) { c in
-                        row(c).listRowBackground(Color.clear)
+                        row(c)
+                            .listRowBackground(Color.clear)
+                            .swipeActions(edge: .leading) {
+                                Button { store.forceSync() } label: {
+                                    Label("Reconnect", systemImage: "arrow.clockwise")
+                                }.tint(KithTheme.pink)
+                            }
                     }
                     .onDelete { offsets in
                         offsets.map { contacts.contacts[$0] }.forEach(contacts.remove)
@@ -45,7 +51,7 @@ struct CircleView: View {
     }
 
     private func row(_ c: Contact) -> some View {
-        let connected = store.isHandshaked(c.idHex)
+        let connected = store.isConnected(c.idHex)
         return HStack(spacing: 12) {
             Circle().fill(KithTheme.brand).frame(width: 38, height: 38)
                 .overlay(Text(String(c.displayName.prefix(1))).font(.subheadline.bold()).foregroundStyle(.white))

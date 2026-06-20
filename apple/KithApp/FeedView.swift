@@ -27,6 +27,9 @@ final class FeedStore: ObservableObject {
     @Published private(set) var internetReady = false
     @Published private(set) var nodeError: String?
     @Published private(set) var lastSendError: String?
+    /// Per-contact time we last received a valid frame from them — the basis for a
+    /// truthful "Connected" (a live two-way link), not just "we hold their keys".
+    @Published private(set) var lastHeard: [String: Date] = [:]
     static let shared = FeedStore()
 
     private var social: KithSocial?
@@ -104,9 +107,15 @@ final class FeedStore: ObservableObject {
     var contactCount: Int { ContactsStore.shared.contacts.count }
     var handshakedCount: Int { social?.contactNodeIds().count ?? 0 }
     /// True once we hold this contact's verified public bundle (handshake complete) —
-    /// the point at which we can actually seal to / open from them.
+    /// the point at which we can seal to / open from them.
     func isHandshaked(_ idHex: String) -> Bool {
         social?.contactNodeIds().contains(idHex) ?? false
+    }
+    /// True only if we've actually heard from them recently — a real live link, not
+    /// just holding (possibly stale) keys.
+    func isConnected(_ idHex: String) -> Bool {
+        guard let t = lastHeard[idHex] else { return false }
+        return Date().timeIntervalSince(t) < 120
     }
     func forceSync() { syncWithContacts() }
 
@@ -253,6 +262,7 @@ final class FeedStore: ObservableObject {
             return
         }
         guard (try? social.addContactBundle(bundle: bundle)) != nil else { return }
+        lastHeard[idHex] = Date()   // a real, current ping from them
         persist()   // contact's bundle is now known — keep it
         // The name they signed wins over any local nickname (owner has authority).
         if !profileBlob.isEmpty,
