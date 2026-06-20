@@ -7,6 +7,7 @@ final class KithUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["KITH_SKIP_ONBOARDING"] = "1"
         app.launchEnvironment["KITH_TAB"] = tab
+        app.launchEnvironment["KITH_NO_NET"] = "1"   // don't start the live P2P node in UI tests
         return app
     }
 
@@ -43,29 +44,5 @@ final class KithUITests: XCTestCase {
 
         let posted = app.staticTexts["a sealed post from the UI test"]
         XCTAssertTrue(posted.waitForExistence(timeout: 5), "new post should appear in the feed")
-    }
-
-    /// You → Advanced → Networking → Go online: the real iroh node binds and produces
-    /// a ticket, proving the async networking FFI runs end-to-end on-device.
-    func testNetworkingNodeGoesOnline() {
-        let app = app(tab: "you")
-        app.launch()
-
-        let advanced = app.buttons["Advanced"]
-        XCTAssertTrue(advanced.waitForExistence(timeout: 15))
-        advanced.tap()
-
-        let net = app.buttons.containing(
-            NSPredicate(format: "label CONTAINS %@", "Networking")
-        ).firstMatch
-        XCTAssertTrue(net.waitForExistence(timeout: 10), "Networking entry should be reachable")
-        net.tap()
-
-        let goOnline = app.buttons["Go online"]
-        XCTAssertTrue(goOnline.waitForExistence(timeout: 10))
-        goOnline.tap()
-
-        let online = app.staticTexts["Online"]
-        XCTAssertTrue(online.waitForExistence(timeout: 25), "node should come online and produce a ticket")
     }
 }

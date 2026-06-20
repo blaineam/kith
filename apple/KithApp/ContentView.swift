@@ -22,7 +22,7 @@ struct YouView: View {
                         profileHeader.entrance(appeared, delay: 0.00)
                         inviteButton.entrance(appeared, delay: 0.06)
                         circleCard.entrance(appeared, delay: 0.12)
-                        NavigationLink { ProfileView(friendName: "Sam") } label: {
+                        NavigationLink { ProfileView(friendName: "Friend") } label: {
                             HStack {
                                 Label("Your posts", systemImage: "square.stack.fill")
                                     .font(.subheadline.weight(.medium))
@@ -150,16 +150,6 @@ struct AdvancedView: View {
                 VStack(spacing: 20) {
                     detailsCard
                     privacyCheckCard
-                    NavigationLink { NetworkingView(seed: account.secretSeed()) } label: {
-                        HStack {
-                            Label("Networking (beta)", systemImage: "wifi")
-                                .font(.subheadline.weight(.medium))
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .kithCard()
                     Button(role: .destructive) {
                         onReset()
                         report = nil

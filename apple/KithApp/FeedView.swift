@@ -18,38 +18,135 @@ final class FeedStore: ObservableObject {
     @Published private(set) var items: [FeedItemFfi] = []
     @Published private(set) var postTick = 0
     @Published private(set) var reactionTick = 0
+    @Published private(set) var online = false
     static let shared = FeedStore()
-    private var demo: SocialDemo?
+
+    private var social: KithSocial?
+    private var node: KithNode?
+    private var listener: InboundBridge?
+    private var syncTimer: Timer?
     private init() {}
 
-    /// Initialize the local social session once (idempotent).
+    /// Initialize the real networked store once (idempotent) and bring the P2P node
+    /// online. The feed works offline too; the node just enables real delivery.
     func configure(seed: Data) {
-        guard demo == nil else { return }
-        demo = (try? SocialDemo(accountSeed: seed)) ?? {
-            fatalError("SocialDemo requires a 32-byte seed")
-        }()
+        guard social == nil else { return }
+        social = try? KithSocial(accountSeed: seed)
         refresh()
+        guard ProcessInfo.processInfo.environment["KITH_NO_NET"] != "1" else { return }
+        bringOnline(seed: seed)
+    }
+
+    private func bringOnline(seed: Data) {
+        let bridge = InboundBridge { [weak self] data in
+            Task { @MainActor in self?.handleInbound(data) }
+        }
+        listener = bridge
+        Task { @MainActor in
+            guard let n = try? await KithNode.start(accountSeed: seed, listener: bridge) else { return }
+            self.node = n
+            self.online = true
+            self.syncWithContacts()
+            self.startSyncTimer()
+        }
+    }
+
+    private func startSyncTimer() {
+        syncTimer?.invalidate()
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.syncWithContacts() }
+        }
     }
 
     private func now() -> UInt64 { UInt64(Date().timeIntervalSince1970 * 1000) }
     func refresh() {
-        items = demo?.feed(nowMs: now(), viewerRetentionSecs: SettingsStore.shared.retentionSecs) ?? []
+        items = social?.feed(nowMs: now(), viewerRetentionSecs: SettingsStore.shared.retentionSecs) ?? []
     }
 
-    /// The current user's own posts — their personal archive (a local copy of
-    /// everything they've shared).
+    /// The current user's own posts — their personal archive.
     var myPosts: [FeedItemFfi] { items.filter(\.isMe) }
 
+    // MARK: - Authoring (seal locally, then broadcast to contacts)
+
     func post(_ body: String, media: [String] = [], music: TrackRefFfi? = nil, retentionSecs: UInt64? = nil) {
-        guard let demo else { return }
-        _ = demo.post(body: body, media: media, music: music, retentionSecs: retentionSecs, createdAt: now())
-        postTick += 1
+        guard let social, let env = try? social.post(body: body, media: media, music: music, retentionSecs: retentionSecs, createdAt: now()) else { return }
+        broadcastEvent(env); postTick += 1; refresh()
+    }
+    func comment(_ id: String, _ body: String, _ media: [String] = []) {
+        guard let social, let env = try? social.comment(target: id, body: body, media: media, createdAt: now()) else { return }
+        broadcastEvent(env); refresh()
+    }
+    func react(_ id: String, _ emoji: String) {
+        guard let social, let env = try? social.react(target: id, emoji: emoji, createdAt: now()) else { return }
+        broadcastEvent(env); reactionTick += 1; refresh()
+    }
+    func edit(_ id: String, _ body: String) {
+        guard let social, let env = try? social.edit(target: id, body: body, createdAt: now()) else { return }
+        broadcastEvent(env); refresh()
+    }
+    func unsend(_ id: String) {
+        guard let social, let env = try? social.unsend(target: id, createdAt: now()) else { return }
+        broadcastEvent(env); refresh()
+    }
+
+    // MARK: - Wire protocol  [type byte][payload]: 0 = Hello(bundle), 1 = Event(envelope)
+
+    /// Called when a contact is added or the node comes online: hand each contact our
+    /// bundle (Hello) + our posts, so connections become mutual and back-fill.
+    func syncWithContacts() {
+        guard let social, node != nil else { return }
+        let bundle = social.myBundle()
+        let envs = social.syncEnvelopes()
+        for contact in ContactsStore.shared.contacts {
+            send(0, bundle, to: contact.idHex)
+            for env in envs { send(1, env, to: contact.idHex) }
+        }
+    }
+
+    private func broadcastEvent(_ env: Data) {
+        for contact in ContactsStore.shared.contacts { send(1, env, to: contact.idHex) }
+    }
+
+    private func send(_ type: UInt8, _ payload: Data, to nodeHex: String) {
+        guard let node else { return }
+        var frame = Data([type]); frame.append(payload)
+        Task { try? await node.sendToNode(nodeIdHex: nodeHex, payload: frame) }
+    }
+
+    private func handleInbound(_ data: Data) {
+        guard let type = data.first else { return }
+        let payload = Data(data.dropFirst())
+        switch type {
+        case 0: handleHello(payload)
+        case 1: handleEvent(payload)
+        default: break
+        }
+    }
+
+    private func handleHello(_ bundle: Data) {
+        guard let social, bundle.count >= 32 else { return }
+        let nodeHex = bundle.prefix(32).map { String(format: "%02x", $0) }.joined()
+        // Only accept a bundle from someone in our circle, verified against the hash
+        // from their reach-me link (MITM guard).
+        guard ContactsStore.shared.contacts.contains(where: { $0.idHex == nodeHex }) else { return }
+        if let expected = ContactsStore.shared.verification(forNodePrefix: nodeHex),
+           let actual = try? social.bundleVerificationHex(bundle: bundle),
+           expected != actual {
+            return
+        }
+        guard (try? social.addContactBundle(bundle: bundle)) != nil else { return }
+        // Reply so the link is mutual + back-fill our posts to them.
+        send(0, social.myBundle(), to: nodeHex)
+        for env in social.syncEnvelopes() { send(1, env, to: nodeHex) }
         refresh()
     }
-    func comment(_ id: String, _ body: String, _ media: [String] = []) { guard let demo else { return }; _ = demo.comment(target: id, body: body, media: media, createdAt: now()); refresh() }
-    func react(_ id: String, _ emoji: String) { guard let demo else { return }; _ = demo.react(target: id, emoji: emoji, createdAt: now()); reactionTick += 1; refresh() }
-    func edit(_ id: String, _ body: String) { guard let demo else { return }; _ = demo.edit(target: id, body: body, createdAt: now()); refresh() }
-    func unsend(_ id: String) { guard let demo else { return }; _ = demo.unsend(target: id, createdAt: now()); refresh() }
+
+    private func handleEvent(_ env: Data) {
+        guard let social else { return }
+        if (try? social.receive(envelope: env)) == true {
+            refresh()
+        }
+    }
 }
 
 struct FeedView: View {
@@ -145,9 +242,11 @@ struct FeedView: View {
     }
 
     private var banner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "sparkles").foregroundStyle(KithTheme.pink)
-            Text("Your circle — posts from you and your people live here.")
+        HStack(spacing: 8) {
+            Circle().fill(store.online ? Color.green : Color.secondary).frame(width: 8, height: 8)
+            Text(store.online
+                 ? "Connected — your circle syncs peer-to-peer"
+                 : "Offline — posts sync when you reconnect")
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
         }
@@ -279,6 +378,16 @@ private struct PostCard: View {
     @State private var currentPage = 0
 
     private var isActive: Bool { audio.centeredPostId == item.id }
+
+    /// Display name for the post's author — resolved from your contacts by node id.
+    private var authorName: String {
+        if item.isMe { return "You" }
+        return ContactsStore.shared.name(forNodePrefix: item.authorShort) ?? friendName
+    }
+    private func commentAuthorName(_ c: FeedCommentFfi) -> String {
+        if c.isMe { return "You" }
+        return ContactsStore.shared.name(forNodePrefix: c.authorShort) ?? friendName
+    }
 
     private var primaryVideoPlayer: AVPlayer? {
         guard item.media.count == 1, let ref = item.media.first, isVideo(ref) else { return nil }
@@ -419,14 +528,14 @@ private struct PostCard: View {
             Circle()
                 .fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
                 .frame(width: 34, height: 34)
-                .overlay(Text(String(friendName.prefix(1))).font(.caption2.bold()).foregroundStyle(.white))
+                .overlay(Text(String(authorName.prefix(1))).font(.caption2.bold()).foregroundStyle(.white))
         }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             avatar
-            Text(item.isMe ? "You" : friendName).font(.subheadline.weight(.semibold))
+            Text(authorName).font(.subheadline.weight(.semibold))
             if item.edited {
                 Text("edited").font(.caption2)
                     .padding(.horizontal, 6).padding(.vertical, 2)
@@ -472,7 +581,7 @@ private struct PostCard: View {
             ForEach(item.comments, id: \.id) { c in
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .top, spacing: 6) {
-                        Text(c.isMe ? "You" : friendName).font(.caption.weight(.semibold))
+                        Text(commentAuthorName(c)).font(.caption.weight(.semibold))
                             .foregroundStyle(c.isMe ? KithTheme.pink : .secondary)
                         if c.unsent {
                             Text("unsent").font(.caption).italic().foregroundStyle(.secondary)

@@ -166,9 +166,11 @@ struct ConnectView: View {
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("friendName")
             Button("Add to my circle") {
-                let name = friendName.trimmingCharacters(in: .whitespaces)
-                contacts.add(name: name.isEmpty ? "Friend" : name, idHex: f.idHex)
-                withAnimation(KithTheme.bouncy) { addedName = name.isEmpty ? "Friend" : name }
+                let trimmed = friendName.trimmingCharacters(in: .whitespaces)
+                let name = trimmed.isEmpty ? "Friend" : trimmed
+                contacts.add(name: name, idHex: f.idHex, verificationHex: f.verificationHex)
+                FeedStore.shared.syncWithContacts()   // say hello over the network
+                withAnimation(KithTheme.bouncy) { addedName = name }
             }
             .buttonStyle(BrandButtonStyle())
             Text("You'll be connected the moment you're both online.")

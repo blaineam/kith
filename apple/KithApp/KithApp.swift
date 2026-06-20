@@ -12,7 +12,7 @@ struct KithApp: App {
 struct RootView: View {
     @StateObject private var accountStore = AccountStore()
     @ObservedObject private var profile = ProfileStore.shared
-    @StateObject private var contacts = ContactsStore()
+    @ObservedObject private var contacts = ContactsStore.shared
 
     @State private var tab = ProcessInfo.processInfo.environment["KITH_TAB"] ?? "circle"
     @State private var showConnect = false
@@ -41,7 +41,7 @@ struct RootView: View {
 
     private var main: some View {
         TabView(selection: $tab) {
-            FeedView(seed: accountStore.account.secretSeed(), friendName: "Sam")
+            FeedView(seed: accountStore.account.secretSeed(), friendName: "Friend")
                 .id(accountStore.account.nodeIdHex())
                 .tag("circle")
                 .tabItem { Label("Circle", systemImage: "sparkles") }
