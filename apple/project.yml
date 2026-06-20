@@ -35,16 +35,15 @@ targets:
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Kith lets you pick photos and videos from your library to share privately with your circle."
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Kith can save photos and videos you share or receive to your Photos library, so they're ready when you open Photos."
         INFOPLIST_KEY_NSAppleMusicUsageDescription: "Kith lets you add a song to a post; it plays through your own Apple Music."
-        # Kith uses real E2E post-quantum encryption → non-exempt. This is the honest
-        # declaration; US compliance is automated (Scripts/export-compliance.mjs) and
-        # it does NOT restrict global App Store distribution.
-        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: "YES"
-        # Predefine compliance once you've completed the App Encryption Declaration in
-        # App Store Connect once: Apple issues a compliance code — paste it here and
-        # uncomment to skip the export-compliance prompt on every future build.
-        # INFOPLIST_KEY_ITSEncryptionExportComplianceCode: "PASTE-CODE-FROM-ASC"
+        # Kith's encryption (standard published algorithms, mass market, not distributed
+        # to France) qualifies for an EAR exemption per Apple's export-compliance
+        # questionnaire → "NO" = does not use NON-exempt encryption. The app still has
+        # full E2E post-quantum encryption; this is only the US export classification.
+        # No documents, no code, no per-build prompt. (France must be excluded in App
+        # Store availability to match this answer.)
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: "NO"
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "5"
+        CURRENT_PROJECT_VERSION: "6"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
