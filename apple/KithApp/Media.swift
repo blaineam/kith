@@ -51,10 +51,11 @@ final class MediaStore: ObservableObject {
     @discardableResult
     func addImage(_ image: UIImage) -> String {
         let ref = "img_\(UUID().uuidString)"
-        // Optimize: downscale large photos + compress, so they're light to seal+send.
+        // Optimize: downscale very large photos + compress, so they're light to send —
+        // but keep it high-res (longest edge up to 2560, well above 1080p).
         let optimize = SettingsStore.shared.autoOptimize
-        let img = optimize ? Self.downscale(image, maxDimension: 2048) : image
-        let quality: CGFloat = optimize ? 0.82 : 0.95
+        let img = optimize ? Self.downscale(image, maxDimension: 2560) : image
+        let quality: CGFloat = optimize ? 0.88 : 0.95
         if let data = img.jpegData(compressionQuality: quality), let url = fileURL(ref) {
             try? data.write(to: url)
         }
@@ -93,10 +94,11 @@ final class MediaStore: ObservableObject {
         }
     }
 
-    /// Transcode a video to a small, watchable, network-friendly MP4 (≈540p H.264).
+    /// Transcode a video to a network-friendly 1080p H.264 MP4 (full HD, just
+    /// re-encoded smaller than the camera original).
     static func optimizeVideo(_ src: URL, to dst: URL) async -> Bool {
         let asset = AVURLAsset(url: src)
-        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset960x540) else {
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080) else {
             return false
         }
         export.outputURL = dst
