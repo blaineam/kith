@@ -2,6 +2,15 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
+/// Reports each post card's on-screen vertical center so the feed can pick the one
+/// nearest the middle of the screen as the "active" (playing) post.
+struct PostCenterKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { a, _ in a }
+    }
+}
+
 /// Drives the live social demo: every action goes through the real hybrid-PQ social
 /// engine (seal → open → feed) in `p2pcore`. Posts can carry media + a song.
 @MainActor
@@ -82,6 +91,10 @@ struct FeedView: View {
                                 onEdit: { b in withAnimation(KithTheme.smooth) { store.edit(item.id, b) } },
                                 onUnsend: { withAnimation(KithTheme.smooth) { store.unsend(item.id) } }
                             )
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(key: PostCenterKey.self,
+                                                       value: [item.id: geo.frame(in: .global).midY])
+                            })
                             .transition(.asymmetric(
                                 insertion: .move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.96)),
                                 removal: .opacity))
@@ -92,6 +105,12 @@ struct FeedView: View {
                     .padding(.bottom, 130)
                 }
                 .scrollDismissesKeyboard(.immediately)
+                .onPreferenceChange(PostCenterKey.self) { centers in
+                    // The post nearest the vertical center of the screen becomes active.
+                    let target = UIScreen.main.bounds.midY
+                    let nearest = centers.min { abs($0.value - target) < abs($1.value - target) }
+                    AudioCoordinator.shared.center(nearest?.key)
+                }
                 composerBar
             }
             .navigationTitle("Feed")
@@ -257,6 +276,9 @@ private struct PostCard: View {
     @State private var editText = ""
     @State private var players: [String: AVPlayer] = [:]
     @State private var showReactionPicker = false
+    @State private var currentPage = 0
+
+    private var isActive: Bool { audio.centeredPostId == item.id }
 
     private var primaryVideoPlayer: AVPlayer? {
         guard item.media.count == 1, let ref = item.media.first, isVideo(ref) else { return nil }
@@ -282,9 +304,10 @@ private struct PostCard: View {
             }
         }
         .kithCard()
-        .onAppear {
-            if let track = item.music { audio.start(postId: item.id, track: track, video: primaryVideoPlayer) }
-        }
+        .onAppear { syncPlayback() }
+        .onDisappear { pauseVideos() }
+        .onChange(of: audio.centeredPostId) { syncPlayback() }
+        .onChange(of: currentPage) { if isActive { playVisibleVideo() } }
         .alert("Edit post", isPresented: $showEdit) {
             TextField("New text", text: $editText)
             Button("Save") { if !editText.isEmpty { onEdit(editText) } }
@@ -295,8 +318,10 @@ private struct PostCard: View {
     @ViewBuilder private var mediaView: some View {
         if item.media.count > 1 {
             // Swipeable carousel for multiple photos/videos, with page dots.
-            TabView {
-                ForEach(item.media, id: \.self) { ref in mediaPage(ref) }
+            TabView(selection: $currentPage) {
+                ForEach(Array(item.media.enumerated()), id: \.offset) { idx, ref in
+                    mediaPage(ref).tag(idx)
+                }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .indexViewStyle(.page(backgroundDisplayMode: .interactive))
@@ -339,8 +364,40 @@ private struct PostCard: View {
         if let p = players[ref] { return p }
         let p = AVPlayer(url: url)
         p.volume = 0
-        DispatchQueue.main.async { players[ref] = p }
+        p.actionAtItemEnd = .none
+        DispatchQueue.main.async {
+            players[ref] = p
+            if isActive { playVisibleVideo() }
+        }
         return p
+    }
+
+    /// Drive this card's media from whether it's the centered post: the active post
+    /// plays its song + the visible carousel video; an inactive post pauses everything.
+    private func syncPlayback() {
+        if isActive {
+            audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer)
+            playVisibleVideo()
+        } else {
+            pauseVideos()
+        }
+    }
+
+    private func pauseVideos() { players.values.forEach { $0.pause() } }
+
+    private func playVisibleVideo() {
+        guard isActive else { return }
+        let visibleRef: String? = item.media.isEmpty
+            ? nil
+            : item.media[min(max(currentPage, 0), item.media.count - 1)]
+        for (ref, player) in players {
+            if ref == visibleRef && isVideo(ref) {
+                player.seek(to: .zero)
+                player.play()
+            } else {
+                player.pause()
+            }
+        }
     }
 
     @ViewBuilder private var avatar: some View {

@@ -12,6 +12,14 @@ final class AudioCoordinator: ObservableObject {
 
     @Published private(set) var activePostId: String?
     @Published private(set) var videoUnmuted = false
+    /// The post currently centered in the feed (drives which post's media plays).
+    @Published var centeredPostId: String?
+
+    /// Called by the feed as the user scrolls; one post is "centered" at a time.
+    func center(_ id: String?) {
+        guard centeredPostId != id else { return }
+        centeredPostId = id
+    }
 
     private var videoPlayer: AVPlayer?
     private var fadeTimer: Timer?

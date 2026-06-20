@@ -7,22 +7,18 @@ import Security
 /// Crucially: Kith never hosts any API keys or client secrets — S3 keys live in the
 /// Keychain on-device, and drive logins use OAuth 2.0 + PKCE (public clients, no secret).
 enum StorageProvider: String, CaseIterable, Identifiable {
-    case icloud, s3, googleDrive, dropbox
+    case icloud, s3
     var id: String { rawValue }
     var title: String {
         switch self {
         case .icloud: return "Your iCloud"
         case .s3: return "Custom S3 bucket"
-        case .googleDrive: return "Google Drive"
-        case .dropbox: return "Dropbox"
         }
     }
     var icon: String {
         switch self {
         case .icloud: return "icloud.fill"
         case .s3: return "externaldrive.fill"
-        case .googleDrive: return "tray.full.fill"
-        case .dropbox: return "shippingbox.fill"
         }
     }
 }
@@ -53,7 +49,6 @@ final class StorageStore: ObservableObject {
 
 struct StorageSettingsView: View {
     @ObservedObject private var store = StorageStore.shared
-    @State private var connecting: StorageProvider?
 
     var body: some View {
         ZStack {
@@ -73,7 +68,6 @@ struct StorageSettingsView: View {
                 footer: { Text("Your media is end-to-end encrypted before it's stored anywhere. Kith never holds your keys or any provider secrets.") }
 
                 if store.provider == .s3 { s3Section }
-                if store.provider == .googleDrive || store.provider == .dropbox { oauthSection }
             }
             .scrollContentBackground(.hidden)
         }
@@ -95,48 +89,10 @@ struct StorageSettingsView: View {
         footer: { Text("Works with AWS S3, Cloudflare R2, Backblaze B2, MinIO, etc. Keys are stored only in this device's Keychain — never on any server.") }
     }
 
-    private var oauthSection: some View {
-        Section {
-            Button {
-                connecting = store.provider
-            } label: {
-                Label("Connect \(store.provider.title)", systemImage: "link")
-            }
-        } footer: {
-            Text("Connects securely with OAuth (PKCE) — you sign in on \(store.provider.title)'s own page. Kith never sees your password and stores no client secret; only a token kept in your Keychain.")
-        }
-        .sheet(item: $connecting) { p in OAuthConnectSheet(provider: p) }
-    }
 }
 
-/// The OAuth connect flow uses PKCE (a *public* client) so there is no client secret
-/// to host. Full token exchange + upload lands with the storage/send path (M5); the
-/// PKCE values and the security shape are here now.
-struct OAuthConnectSheet: View {
-    let provider: StorageProvider
-    @Environment(\.dismiss) private var dismiss
-    private let verifier = PKCE.verifier()
-
-    var body: some View {
-        ZStack {
-            KithBackground()
-            VStack(spacing: 18) {
-                Image(systemName: provider.icon).font(.system(size: 44)).foregroundStyle(KithTheme.brand)
-                Text("Connect \(provider.title)").font(.title3.bold())
-                Text("You'll sign in on \(provider.title)'s own page. Kith uses OAuth 2.0 with PKCE — a public client with **no secret to store anywhere**. We only keep an access token, in your Keychain.")
-                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Text("PKCE challenge: \(PKCE.challenge(verifier).prefix(16))…")
-                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                Button("Continue") { dismiss() }.buttonStyle(BrandButtonStyle())
-                Button("Cancel") { dismiss() }.foregroundStyle(.secondary)
-            }
-            .padding(30)
-        }
-        .presentationDetents([.medium])
-    }
-}
-
-/// OAuth 2.0 PKCE helpers (public client — no secret).
+/// OAuth 2.0 PKCE helpers (public client — no secret). Retained for a future
+/// cloud-drive integration; not wired to any provider today (iCloud + S3 only).
 enum PKCE {
     static func verifier() -> String { base64url(randomBytes(32)) }
     static func challenge(_ verifier: String) -> String {
