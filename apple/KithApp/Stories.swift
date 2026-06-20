@@ -12,7 +12,7 @@ struct StoryViewer: View {
     @Environment(\.dismiss) private var dismiss
     @State private var progress = 0.0
     @State private var player: AVPlayer?
-    private let duration = 5.0
+    @State private var slideDuration = 5.0   // photos 5s; videos last their clip (≤15s)
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -31,7 +31,7 @@ struct StoryViewer: View {
         .onAppear { loadCurrent() }
         .onDisappear { teardown() }
         .onReceive(tick) { _ in
-            progress += 0.05 / duration
+            progress += 0.05 / slideDuration
             if progress >= 1 { next() }
         }
     }
@@ -115,8 +115,16 @@ struct StoryViewer: View {
             }
             player = p
             p.play()
+            // Let the slide last the clip's length, capped at the per-slide max.
+            slideDuration = MediaStore.storySlideMax
+            Task {
+                if let d = try? await AVURLAsset(url: url).load(.duration) {
+                    await MainActor.run { slideDuration = min(MediaStore.storySlideMax, max(2, d.seconds)) }
+                }
+            }
         } else {
             player = nil
+            slideDuration = 5
         }
     }
 

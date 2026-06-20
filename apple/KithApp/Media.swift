@@ -152,6 +152,43 @@ final class MediaStore: ObservableObject {
         return ref
     }
 
+    static let storySlideMax: Double = 15.0   // max seconds per story slide
+    static let storyMaxSlides = 5             // a long video splits into at most this many
+
+    /// Split a long video into up to 5 consecutive ≤15s segments for a story. Photos and
+    /// short videos pass through unchanged (returns [ref]).
+    func splitStoryVideo(_ ref: String) async -> [String] {
+        guard let m = item(ref), m.kind == .video, let src = storagePath(for: ref) else { return [ref] }
+        let asset = AVURLAsset(url: src)
+        let dur = ((try? await asset.load(.duration))?.seconds) ?? 0
+        if dur <= Self.storySlideMax { return [ref] }
+        let count = min(Self.storyMaxSlides, Int(ceil(dur / Self.storySlideMax)))
+        var refs: [String] = []
+        for i in 0..<count {
+            let start = Double(i) * Self.storySlideMax
+            let len = min(Self.storySlideMax, dur - start)
+            if len <= 0.5 { break }
+            if let seg = await exportSegment(asset: asset, start: start, duration: len) { refs.append(seg) }
+        }
+        return refs.isEmpty ? [ref] : refs
+    }
+
+    private func exportSegment(asset: AVAsset, start: Double, duration: Double) async -> String? {
+        let newRef = "vid_\(UUID().uuidString)"
+        guard let dst = fileURL(newRef),
+              let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080) else { return nil }
+        export.outputURL = dst
+        export.outputFileType = .mp4
+        export.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
+                                       duration: CMTime(seconds: duration, preferredTimescale: 600))
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            export.exportAsynchronously { c.resume() }
+        }
+        guard export.status == .completed else { return nil }
+        cache[newRef] = MediaItem(id: newRef, kind: .video, image: Self.poster(for: dst), videoURL: dst)
+        return newRef
+    }
+
     /// Produce a muted copy of a video (audio track stripped); returns a new ref.
     func muteVideo(_ ref: String) async -> String? {
         guard let src = storagePath(for: ref) else { return nil }

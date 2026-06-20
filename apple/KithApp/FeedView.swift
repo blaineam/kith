@@ -908,7 +908,11 @@ struct FeedView: View {
             }
             .fullScreenCover(isPresented: $showStoryCamera) {
                 StoryCameraView { ref, caption, track in
-                    store.postStory(media: [ref], caption: caption, music: track)
+                    Task { @MainActor in
+                        // A long video becomes up to 5 consecutive story slides.
+                        let refs = await MediaStore.shared.splitStoryVideo(ref)
+                        for r in refs { store.postStory(media: [r], caption: caption, music: track) }
+                    }
                 }
             }
             .sheet(isPresented: $showRequests) { ConnectionRequestsView() }
