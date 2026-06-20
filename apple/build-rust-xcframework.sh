@@ -11,12 +11,13 @@ CORE="$HERE/../core"
 CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"
 RUSTUP="${RUSTUP:-$HOME/.cargo/bin/rustup}"
 
-echo "▸ Ensuring iOS targets…"
-"$RUSTUP" target add aarch64-apple-ios aarch64-apple-ios-sim >/dev/null
+echo "▸ Ensuring Apple targets (iOS device + sim + Mac Catalyst)…"
+"$RUSTUP" target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-ios-macabi >/dev/null
 
-echo "▸ Building static libs (device + simulator)…"
+echo "▸ Building static libs (device + simulator + Mac Catalyst)…"
 ( cd "$CORE" && "$CARGO" build -p kith_ffi --lib --release --target aarch64-apple-ios )
 ( cd "$CORE" && "$CARGO" build -p kith_ffi --lib --release --target aarch64-apple-ios-sim )
+( cd "$CORE" && "$CARGO" build -p kith_ffi --lib --release --target aarch64-apple-ios-macabi )
 
 echo "▸ Generating Swift bindings…"
 ( cd "$CORE" && "$CARGO" build -q -p kith_ffi --lib )   # host dylib for the generator
@@ -32,6 +33,7 @@ cp "$HERE/Generated/kith_ffiFFI.modulemap" "$HERE/build/headers/module.modulemap
 xcodebuild -create-xcframework \
   -library "$CORE/target/aarch64-apple-ios/release/libkith_ffi.a" -headers "$HERE/build/headers" \
   -library "$CORE/target/aarch64-apple-ios-sim/release/libkith_ffi.a" -headers "$HERE/build/headers" \
+  -library "$CORE/target/aarch64-apple-ios-macabi/release/libkith_ffi.a" -headers "$HERE/build/headers" \
   -output "$HERE/KithFFI.xcframework" >/dev/null
 
 echo "✓ Done. Next:  cd apple && xcodegen generate && open Kith.xcodeproj"

@@ -41,20 +41,23 @@ Messages list, contact picker, chat-bubble thread; DMs hidden from the feed swit
 ## ✅ Stories (#10) — DONE
 `story` flag on posts (24h retention auto-expiry); stories tray (rings) at the top of the feed; full-screen viewer with progress bars + tap nav.
 
+## ✅ Video mute + trim (#3) — DONE
+Attached video chips get a Trim (system editor) + Mute-audio (strip audio track) menu.
+
+## ✅ Notifications (#6) — DONE
+Local-only, no server/third party. BGAppRefreshTask wakes → syncs → local notification for anything new; live inbound notifies directly (deduped, foreground-suppressed).
+
 ## 🔨 Now building
 
-### #3 — Video mute + in-app trim (before posting)
-- [ ] Trim an attached video in-app (system trimmer)
-- [ ] Toggle a video's audio off before sending (strip the audio track)
+### macOS build (adapt the iOS app)
+- [ ] Add a macOS target sharing the engine + SwiftUI code
 
 ---
 
 ## 🗺️ Queue (in order)
-1. ~~#4 Multi-circle~~ ✅ · ~~#13 Mesh~~ ✅ · ~~#9 DMs~~ ✅ · ~~#10 Stories~~ ✅
-2. **#3 Video mute/trim** ← here · #6 notifications
-3. **macOS** build · **Static web client**
-- Hardest, last: #11 calls · #12 shared-S3 store
-- Backlog: #6 notifications (background fetch, no server) · #3 video trim + mute · #11 calls · #12 shared-circle S3 store
+1. ~~#4 Multi-circle~~ ✅ · ~~#13 Mesh~~ ✅ · ~~#9 DMs~~ ✅ · ~~#10 Stories~~ ✅ · ~~#3 Video~~ ✅ · ~~#6 Notifications~~ ✅
+2. **macOS** build ← here · **Static web client**
+3. Hardest, last: #11 calls · #12 shared-S3 store
 
 ---
 

@@ -2,6 +2,19 @@ import SwiftUI
 import AVFoundation
 import UIKit
 
+#if targetEnvironment(macCatalyst)
+/// Mac Catalyst has no UIVideoEditorController; trim isn't offered there (canTrim → false).
+struct VideoTrimmer: UIViewControllerRepresentable {
+    let path: String
+    var onTrimmed: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    func makeUIViewController(context: Context) -> UIViewController {
+        DispatchQueue.main.async { dismiss() }
+        return UIViewController()
+    }
+    func updateUIViewController(_ vc: UIViewController, context: Context) {}
+}
+#else
 /// The system video trimmer (UIVideoEditorController) wrapped for SwiftUI.
 struct VideoTrimmer: UIViewControllerRepresentable {
     let path: String
@@ -33,6 +46,7 @@ struct VideoTrimmer: UIViewControllerRepresentable {
         func videoEditorController(_ editor: UIVideoEditorController, didFailWithError error: Error) { parent.dismiss() }
     }
 }
+#endif
 
 enum MediaKind: String {
     case image, video, audio
@@ -250,10 +264,14 @@ final class MediaStore: ObservableObject {
         return item
     }
 
-    /// Can this video be trimmed by the system editor?
+    /// Can this video be trimmed by the system editor? (Not on Mac Catalyst.)
     func canTrim(_ ref: String) -> Bool {
+        #if targetEnvironment(macCatalyst)
+        return false
+        #else
         guard let url = storagePath(for: ref) else { return false }
         return UIVideoEditorController.canEditVideo(atPath: url.path)
+        #endif
     }
 
     /// Extract a poster frame so videos show something before playback.
