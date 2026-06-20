@@ -253,6 +253,8 @@ final class FeedStore: ObservableObject {
             }
             nearbyBroadcast(0, hello)
             for env in envs { nearbyBroadcast(1, eventPayload(circle.id, env)) }
+            // Mesh: let a relay carry our handshake to members we can't reach directly.
+            originateRelay(dests: Array(targets), inner: frame(0, hello))
         }
         requestMissingMedia()
     }
@@ -286,8 +288,10 @@ final class FeedStore: ObservableObject {
 
     private func broadcastEvent(_ circleId: String, _ env: Data) {
         let payload = eventPayload(circleId, env)
-        for nodeHex in (social?.contactNodeIds(circleId: circleId) ?? []) { sendIroh(1, payload, to: nodeHex) }
+        let members = social?.contactNodeIds(circleId: circleId) ?? []
+        for nodeHex in members { sendIroh(1, payload, to: nodeHex) }
         nearbyBroadcast(1, payload)
+        originateRelay(dests: members, inner: frame(1, payload))   // reach members behind a relay
         persist()   // we just authored something — save it
     }
 
@@ -331,8 +335,89 @@ final class FeedStore: ObservableObject {
         case 1: handleEvent(payload)
         case 3: handleMediaRequest(payload)
         case 5: handleMediaChunk(payload)
+        case 9: handleRelay(payload)
         default: break
         }
+    }
+
+    // MARK: - Mesh relay  [9] payload = [msgId(16)][ttl(1)][destCount(1)][dest×32…][inner frame]
+    // Lets an internet-connected nearby peer forward a sealed frame it can't read toward
+    // its destination. The routing header is cleartext (dest ids + msg id + ttl); the
+    // wrapped payload stays end-to-end encrypted. Relays never decrypt — they just route.
+
+    private static let relayTTL: UInt8 = 4
+    private var seenRelay = Set<String>()
+
+    /// Originate a relayable copy of a frame, flooded over the nearby mesh.
+    private func originateRelay(dests: [String], inner: Data) {
+        var id = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        seenRelay.insert(id.map { String(format: "%02x", $0) }.joined())
+        emitRelay(msgId: &id, ttl: Self.relayTTL, dests: dests, inner: inner)
+    }
+
+    private func emitRelay(msgId: inout Data, ttl: UInt8, dests: [String], inner: Data) {
+        let destBytes = dests.compactMap { nodeIdBytes($0) }
+        guard !destBytes.isEmpty else { return }
+        var p = Data()
+        p.append(msgId)
+        p.append(ttl)
+        p.append(UInt8(min(destBytes.count, 255)))
+        for d in destBytes.prefix(255) { p.append(d) }
+        p.append(inner)
+        nearby?.broadcast(frame(9, p))
+    }
+
+    private func handleRelay(_ payload: Data) {
+        guard payload.count >= 18 else { return }
+        let s = payload.startIndex
+        var msgId = payload.subdata(in: s..<(s + 16))
+        let key = msgId.map { String(format: "%02x", $0) }.joined()
+        guard !seenRelay.contains(key) else { return }   // dedup / loop protection
+        seenRelay.insert(key)
+        if seenRelay.count > 2000 { seenRelay.removeAll() }
+        let ttl = payload[s + 16]
+        let destCount = Int(payload[s + 17])
+        var off = 18
+        guard payload.count >= off + destCount * 32 else { return }
+        var dests: [String] = []
+        for _ in 0..<destCount {
+            dests.append(nodeHex(payload.subdata(in: (s + off)..<(s + off + 32))))
+            off += 32
+        }
+        let inner = payload.subdata(in: (s + off)..<payload.endIndex)
+        guard !inner.isEmpty else { return }
+
+        let me = myNodeHex
+        // If it's for me, process it as a normal inbound frame.
+        if dests.contains(me) {
+            handleInbound(inner, viaNearby: true)
+        }
+        // Forward to any other destinations we can reach, and keep it hopping nearby.
+        guard ttl > 0 else { return }
+        for dest in dests where dest != me {
+            sendRaw(inner, to: dest)            // over the internet, if we can reach them
+        }
+        emitRelay(msgId: &msgId, ttl: ttl - 1, dests: dests, inner: inner)   // re-flood nearby
+    }
+
+    /// Send an already-framed payload as-is (used to forward relayed frames).
+    private func sendRaw(_ framed: Data, to nodeHex: String) {
+        guard let node else { return }
+        Task { [weak self] in
+            do { try await node.sendToNode(nodeIdHex: nodeHex, payload: framed) }
+            catch { await MainActor.run { self?.lastSendError = error.localizedDescription } }
+        }
+    }
+
+    private func nodeIdBytes(_ hexStr: String) -> Data? {
+        guard hexStr.count == 64 else { return nil }
+        var d = Data(); var i = hexStr.startIndex
+        while i < hexStr.endIndex {
+            let j = hexStr.index(i, offsetBy: 2)
+            guard let b = UInt8(hexStr[i..<j], radix: 16) else { return nil }
+            d.append(b); i = j
+        }
+        return d
     }
 
     // MARK: - Media transfer  [3] request(ref) → [4] sealed media back
