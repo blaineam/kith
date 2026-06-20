@@ -110,9 +110,9 @@ fn link_roundtrips_and_detects_tampering() {
     assert!(uri.contains('#'));
     assert_eq!(KithLink::parse(&uri).unwrap(), link);
 
-    // Website form parses to the same payload.
-    let web = link.to_web("kith.link/");
-    assert!(web.starts_with("https://kith.link/u/"));
+    // Website form (with a subpath, as the app uses) parses to the same payload.
+    let web = link.to_web("wemiller.com/apps/kith");
+    assert!(web.starts_with("https://wemiller.com/apps/kith/u/"));
     assert_eq!(KithLink::parse(&web).unwrap(), link);
 
     // A link matches the genuine identity fetched from discovery...

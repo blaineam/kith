@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Where Kith's web invite links live. The static landing page at
+/// `wemiller.com/apps/kith/` resolves `/u/<id>#<verify>` into an "open in Kith" page.
+enum KithSite {
+    static let inviteDomain = "wemiller.com/apps/kith"
+}
+
 /// The guided "make a connection" flow: show your invite, or add a friend from
 /// theirs — in plain language, with friendly safety words instead of hex.
 struct ConnectView: View {
@@ -56,7 +62,7 @@ struct ConnectView: View {
                     .shadow(color: KithTheme.violet.opacity(0.25), radius: 16, y: 8)
             }
 
-            if let url = URL(string: account.kithLink(domain: "kith.link")) {
+            if let url = URL(string: account.kithLink(domain: KithSite.inviteDomain)) {
                 ShareLink(item: url) {
                     Label("Share invite link", systemImage: "square.and.arrow.up")
                 }
