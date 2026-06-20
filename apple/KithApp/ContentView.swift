@@ -151,6 +151,16 @@ struct AdvancedView: View {
                 VStack(spacing: 20) {
                     detailsCard
                     privacyCheckCard
+                    NavigationLink { ConnectionView() } label: {
+                        HStack {
+                            Label("Connection", systemImage: "antenna.radiowaves.left.and.right")
+                                .font(.subheadline.weight(.medium))
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .kithCard()
                     Button(role: .destructive) {
                         showResetConfirm = true
                     } label: {

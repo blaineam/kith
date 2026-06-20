@@ -489,6 +489,14 @@ struct NetState {
     seen: HashSet<String>,
 }
 
+/// On-disk form of the store so posts + contacts survive app restarts and updates.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistState {
+    events: Vec<Event>,
+    /// Contacts as their public-bundle bytes (KithId isn't directly Serialize).
+    contacts: Vec<Vec<u8>>,
+}
+
 /// The real networked social store: your identity + your contacts' public bundles +
 /// the event log. Unlike `SocialDemo` it seals to your actual circle and ingests posts
 /// received from contacts over the network. Transport-agnostic: the same sealed
@@ -656,6 +664,36 @@ impl KithSocial {
         let me = hex(&st.me.public().node_id_bytes());
         map_feed(st.events.clone(), &me, now_ms, viewer_retention_secs)
     }
+
+    /// Serialize the store (events + contacts) for on-disk persistence.
+    pub fn export_state(&self) -> Vec<u8> {
+        let st = self.state.lock().unwrap();
+        let ps = PersistState {
+            events: st.events.clone(),
+            contacts: st.contacts.iter().map(|c| c.to_bytes()).collect(),
+        };
+        serde_json::to_vec(&ps).unwrap_or_default()
+    }
+
+    /// Merge a previously-exported store back in (dedup by event id / contact node id),
+    /// so posts and connections survive restarts and app updates.
+    pub fn import_state(&self, data: Vec<u8>) {
+        let Ok(ps) = serde_json::from_slice::<PersistState>(&data) else { return };
+        let mut st = self.state.lock().unwrap();
+        for cb in ps.contacts {
+            if let Ok(id) = KithId::from_bytes(&cb) {
+                if !st.contacts.iter().any(|c| c.node_id_bytes() == id.node_id_bytes()) {
+                    st.contacts.push(id);
+                }
+            }
+        }
+        for e in ps.events {
+            if !st.seen.contains(&e.id) {
+                st.seen.insert(e.id.clone());
+                st.events.push(e);
+            }
+        }
+    }
 }
 
 impl KithSocial {
@@ -713,5 +751,12 @@ mod net_tests {
         let last = forged.len() - 1;
         forged[last] ^= 0xff;
         assert!(bob.verify_profile(alice.my_bundle(), forged).is_none(), "tampered name rejected");
+
+        // Persistence: export Bob's store, reload into a fresh instance → posts survive.
+        let saved = bob.export_state();
+        let bob2 = KithSocial::new([2u8; 32].to_vec()).unwrap();
+        bob2.import_state(saved);
+        assert_eq!(bob2.feed(2_000, None).len(), 1, "posts survive a restart");
+        assert_eq!(bob2.contact_node_ids(), bob.contact_node_ids(), "contacts survive too");
     }
 }

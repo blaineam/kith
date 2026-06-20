@@ -23,6 +23,10 @@ final class FeedStore: ObservableObject {
     /// so the UI can show whether the internet and/or nearby links are really working.
     @Published private(set) var internetActive = false
     @Published private(set) var nearbyActive = false
+    // Diagnostics surfaced in Advanced → Connection.
+    @Published private(set) var internetReady = false
+    @Published private(set) var nodeError: String?
+    @Published private(set) var lastSendError: String?
     static let shared = FeedStore()
 
     private var social: KithSocial?
@@ -37,9 +41,26 @@ final class FeedStore: ObservableObject {
     func configure(seed: Data) {
         guard social == nil else { return }
         social = try? KithSocial(accountSeed: seed)
+        loadPersisted()
         refresh()
         guard ProcessInfo.processInfo.environment["KITH_NO_NET"] != "1" else { return }
         bringOnline(seed: seed)
+    }
+
+    // MARK: - Persistence (so posts + contacts survive restarts and updates)
+
+    private var stateURL: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("kith-feed.json")
+    }
+    private func loadPersisted() {
+        guard let social, let data = try? Data(contentsOf: stateURL) else { return }
+        social.importState(data: data)
+    }
+    private func persist() {
+        guard let social else { return }
+        try? social.exportState().write(to: stateURL, options: .atomic)
     }
 
     private func bringOnline(seed: Data) {
@@ -60,18 +81,29 @@ final class FeedStore: ObservableObject {
         }
         listener = bridge
         Task { @MainActor in
-            guard let n = try? await KithNode.start(accountSeed: seed, listener: bridge) else { return }
-            self.node = n
-            self.online = true
-            self.startSyncTimer()
-            // Sync soon (discovery needs a moment to resolve), then keep retrying.
-            for delay in [1.0, 4.0, 10.0] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    self?.syncWithContacts()
+            do {
+                let n = try await KithNode.start(accountSeed: seed, listener: bridge)
+                self.node = n
+                self.internetReady = true
+                self.online = true
+                self.startSyncTimer()
+                // Sync soon (discovery needs a moment to resolve), then keep retrying.
+                for delay in [1.0, 4.0, 10.0] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        self?.syncWithContacts()
+                    }
                 }
+            } catch {
+                self.nodeError = error.localizedDescription
             }
         }
     }
+
+    // Diagnostics accessors.
+    var myNodeIdShort: String { social.map { String($0.myNodeHex().prefix(16)) } ?? "—" }
+    var contactCount: Int { ContactsStore.shared.contacts.count }
+    var handshakedCount: Int { social?.contactNodeIds().count ?? 0 }
+    func forceSync() { syncWithContacts() }
 
     private func startSyncTimer() {
         syncTimer?.invalidate()
@@ -153,6 +185,7 @@ final class FeedStore: ObservableObject {
     private func broadcastEvent(_ env: Data) {
         for contact in ContactsStore.shared.contacts { sendIroh(1, env, to: contact.idHex) }
         nearbyBroadcast(1, env)
+        persist()   // we just authored something — save it
     }
 
     private func frame(_ type: UInt8, _ payload: Data) -> Data {
@@ -161,7 +194,10 @@ final class FeedStore: ObservableObject {
     private func sendIroh(_ type: UInt8, _ payload: Data, to nodeHex: String) {
         guard let node else { return }
         let f = frame(type, payload)
-        Task { try? await node.sendToNode(nodeIdHex: nodeHex, payload: f) }
+        Task { [weak self] in
+            do { try await node.sendToNode(nodeIdHex: nodeHex, payload: f) }
+            catch { await MainActor.run { self?.lastSendError = error.localizedDescription } }
+        }
     }
     private func nearbyBroadcast(_ type: UInt8, _ payload: Data) {
         nearby?.broadcast(frame(type, payload))
@@ -196,6 +232,7 @@ final class FeedStore: ObservableObject {
             return
         }
         guard (try? social.addContactBundle(bundle: bundle)) != nil else { return }
+        persist()   // contact's bundle is now known — keep it
         // The name they signed wins over any local nickname (owner has authority).
         if let authName = social.verifyProfile(bundle: bundle, blob: profileBlob), !authName.isEmpty {
             ContactsStore.shared.setAuthoritativeName(idHex: nodeHex, authName)
@@ -213,6 +250,7 @@ final class FeedStore: ObservableObject {
     private func handleEvent(_ env: Data) {
         guard let social else { return }
         if (try? social.receive(envelope: env)) == true {
+            persist()   // a new post arrived — save it
             refresh()
         }
     }
