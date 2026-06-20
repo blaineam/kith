@@ -33,7 +33,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if !profile.onboarded {
-                OnboardingView(profile: profile)
+                OnboardingView(profile: profile, accountStore: accountStore)
                     .transition(.opacity)
             } else {
                 main
@@ -58,6 +58,7 @@ struct RootView: View {
                 .tabItem { Label("Circle", systemImage: "sparkles") }
             YouView(
                 account: accountStore.account,
+                accountStore: accountStore,
                 profile: profile,
                 contacts: contacts,
                 onReset: { accountStore.reset() }

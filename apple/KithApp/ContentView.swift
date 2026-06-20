@@ -5,6 +5,7 @@ import UIKit
 /// people. The technical bits live behind "Advanced".
 struct YouView: View {
     let account: Account
+    let accountStore: AccountStore
     @ObservedObject var profile: ProfileStore
     @ObservedObject var contacts: ContactsStore
     @ObservedObject private var feed = FeedStore.shared
@@ -62,7 +63,7 @@ struct YouView: View {
                         .kithCard()
                         .entrance(appeared, delay: 0.22)
                         NavigationLink {
-                            AdvancedView(account: account, onReset: onReset)
+                            AdvancedView(account: account, accountStore: accountStore, onReset: onReset)
                         } label: {
                             Label("Advanced", systemImage: "wrench.and.screwdriver")
                                 .font(.footnote).foregroundStyle(.secondary)
@@ -161,11 +162,13 @@ struct YouView: View {
 /// Tucked-away technical details for the curious.
 struct AdvancedView: View {
     let account: Account
+    let accountStore: AccountStore
     var onReset: () -> Void
 
     @State private var report: SelfTestReport?
     @State private var runCount = 0
     @State private var showResetConfirm = false
+    @State private var iCloudSync = AccountStore.iCloudSyncEnabled
 
     var body: some View {
         ZStack {
@@ -184,6 +187,7 @@ struct AdvancedView: View {
                     }
                     .buttonStyle(.plain)
                     .kithCard()
+                    identityCard
                     Button(role: .destructive) {
                         showResetConfirm = true
                     } label: {
@@ -208,6 +212,38 @@ struct AdvancedView: View {
         } message: {
             Text("This permanently erases your identity, your whole circle, and every post on this device — and the people you've connected with will no longer recognize you. This can't be undone.")
         }
+    }
+
+    private var identityCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your identity on your devices").font(.headline)
+            Toggle(isOn: $iCloudSync) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Sync across my Apple devices", systemImage: "icloud.fill").font(.subheadline.weight(.medium))
+                    Text("Use the same identity on your iPhone, iPad, and Mac via iCloud Keychain (end-to-end encrypted by Apple).")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .tint(KithTheme.pink)
+            .onChange(of: iCloudSync) { _, on in accountStore.setICloudSync(on) }
+            Divider()
+            NavigationLink { TransferIdentityView(accountStore: accountStore) } label: {
+                HStack {
+                    Label("Move to another device", systemImage: "qrcode").font(.subheadline.weight(.medium))
+                    Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+            NavigationLink { RestoreIdentityView(accountStore: accountStore, onRestored: {}) } label: {
+                HStack {
+                    Label("Restore identity here", systemImage: "arrow.down.circle").font(.subheadline.weight(.medium))
+                    Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .kithCard()
     }
 
     private var detailsCard: some View {

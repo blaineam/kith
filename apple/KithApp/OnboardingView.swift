@@ -4,11 +4,13 @@ import SwiftUI
 /// works → into the app.
 struct OnboardingView: View {
     @ObservedObject var profile: ProfileStore
+    var accountStore: AccountStore
     @State private var step = 0
     @State private var name = ""
     @State private var emoji = "🌿"
     @State private var pickedImage: UIImage?
     @State private var showPhotoPicker = false
+    @State private var showRestore = false
 
     var body: some View {
         ZStack {
@@ -23,6 +25,13 @@ struct OnboardingView: View {
                 controls
             }
             .padding(24)
+        }
+        .sheet(isPresented: $showRestore) {
+            NavigationStack {
+                RestoreIdentityView(accountStore: accountStore) {
+                    withAnimation(KithTheme.smooth) { profile.onboarded = true }
+                }
+            }
         }
     }
 
@@ -47,6 +56,10 @@ struct OnboardingView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            Button { showRestore = true } label: {
+                Text("I already have Kith — restore my identity").font(.subheadline.weight(.medium))
+            }
+            .tint(KithTheme.pink)
             Spacer()
         }
     }

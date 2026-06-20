@@ -65,6 +65,18 @@ final class FeedStore: ObservableObject {
 
     /// Initialize the real networked store once (idempotent) and bring the P2P node
     /// online. The feed works offline too; the node just enables real delivery.
+    /// Re-initialize for a different identity (e.g. after restoring from a transfer code).
+    /// Tears down the old engine, networking, and on-disk state, then configures fresh.
+    func reconfigure(seed: Data) {
+        node = nil
+        nearby = nil
+        social = nil
+        items.removeAll()
+        circles.removeAll()
+        try? FileManager.default.removeItem(at: stateURL)
+        configure(seed: seed)
+    }
+
     func configure(seed: Data) {
         guard social == nil else { return }
         social = try? KithSocial(accountSeed: seed)
