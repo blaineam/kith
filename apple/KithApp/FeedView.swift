@@ -148,6 +148,11 @@ final class FeedStore: ObservableObject {
         return "Direct message"
     }
 
+    /// The other person's node id in a DM (for placing a call).
+    func dmPartnerHex(_ circleId: String) -> String? {
+        (social?.contactNodeIds(circleId: circleId) ?? []).first { $0 != myNodeHex }
+    }
+
     /// Messages of a circle (for a DM thread) without disturbing the main feed.
     func messages(in circleId: String) -> [FeedItemFfi] {
         social?.feed(circleId: circleId, nowMs: now(), viewerRetentionSecs: SettingsStore.shared.retentionSecs) ?? []
@@ -392,8 +397,17 @@ final class FeedStore: ObservableObject {
         case 3: handleMediaRequest(payload)
         case 5: handleMediaChunk(payload)
         case 9: handleRelay(payload)
+        case 10: CallManager.shared.handleInvite(payload)
+        case 11: CallManager.shared.handleAccept(payload)
+        case 12: CallManager.shared.handleHangup(payload)
+        case 13: CallManager.shared.handleAudio(payload)
         default: break
         }
+    }
+
+    /// Send a call signaling/audio frame to a peer (direct, over the internet transport).
+    func sendCallFrame(_ type: UInt8, _ payload: Data, to nodeHex: String) {
+        sendIroh(type, payload, to: nodeHex)
     }
 
     // MARK: - Mesh relay  [9] payload = [msgId(16)][ttl(1)][destCount(1)][dest×32…][inner frame]

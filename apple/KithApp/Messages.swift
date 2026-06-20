@@ -107,6 +107,16 @@ struct DMThreadView: View {
         }
         .navigationTitle(store.dmPartnerName(circleId))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    if let hex = store.dmPartnerHex(circleId) {
+                        CallManager.shared.startCall(peerHex: hex, name: store.dmPartnerName(circleId))
+                    }
+                } label: { Image(systemName: "phone.fill") }
+                .disabled(store.dmPartnerHex(circleId) == nil)
+            }
+        }
         .onAppear { store.forceSync() }
     }
 

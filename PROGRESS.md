@@ -53,18 +53,22 @@ Same engine + SwiftUI app builds + runs on macOS (Apple Silicon). Added the maca
 ## ✅ Modern story camera — DONE
 Instagram-style: live camera (tap=photo, hold=video, flip, library), then a composer to add a **song** + an easy **caption**, then Share to story. Viewer plays the song while watching.
 
-## 🔨 Now building
+## ✅ Static web client — DONE
+Single-file, zero-dep web app mirroring the iOS look (gradient, cards, story rings, tab bar, DM threads, You page, story viewer). Interactive on local data; deployed to apps/kith/app/.
 
-### Static web client (matching the iOS look)
-- [ ] A faithful visual web app — Kith brand gradient, cards, typography, feed layout
-- [ ] Landing + invite-link handling (foundation for a WASM core later)
+## ✅ Shared circle store (#12) — DONE
+seal_bytes/open_bytes group primitive + a real SigV4 S3 client + "Volunteer as tribute": a member keeps a circle-sealed (host can't read) copy of media in their bucket and re-serves it P2P to anyone missing it. No cred sharing.
+
+## 🔨 Now building (last one)
+
+### #11 — P2P calls
+- [ ] CallKit call UI + signaling over the existing P2P channel
+- [ ] Live audio over the iroh transport (video + on-device A/V = follow-on)
 
 ---
 
-## 🗺️ Queue (in order)
-1. ~~Multi-circle~~ ✅ · ~~Mesh~~ ✅ · ~~DMs~~ ✅ · ~~Stories + camera~~ ✅ · ~~Video~~ ✅ · ~~Notifications~~ ✅ · ~~macOS~~ ✅
-2. **Static web client** ← here
-3. Hardest, last: #11 calls · #12 shared-S3 store
+## 🗺️ Everything else: ✅ DONE
+Multi-circle · Mesh relay · DMs · Stories + modern camera · Video trim/mute · Notifications · macOS (Catalyst) · Web client · Shared store
 
 ---
 

@@ -66,6 +66,7 @@ struct RootView: View {
             .tabItem { Label("You", systemImage: "person.crop.circle.fill") }
         }
         .tint(KithTheme.pink)
+        .overlay { CallOverlay().animation(KithTheme.smooth, value: CallManager.shared.inCall) }
         .sheet(isPresented: $showConnect, onDismiss: { pendingInvite = nil }) {
             ConnectView(account: accountStore.account, contacts: contacts, incomingLink: pendingInvite)
         }
