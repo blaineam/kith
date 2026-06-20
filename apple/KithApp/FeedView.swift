@@ -626,7 +626,18 @@ final class FeedStore: ObservableObject {
             persist()
             refresh()
             requestMissingMedia()   // pull any photos/videos it references
+            notifyNewest(in: circleId)
         }
+    }
+
+    /// Post a local notification for the newest inbound item in a circle (no server).
+    private func notifyNewest(in circleId: String) {
+        let inbound = messages(in: circleId).filter { !$0.isMe && !$0.unsent }
+        guard let newest = inbound.max(by: { $0.createdAt < $1.createdAt }) else { return }
+        let name = ContactsStore.shared.name(forNodePrefix: newest.authorShort) ?? "Someone"
+        let body = newest.story ? "shared a story" : (newest.body.isEmpty ? "sent you media" : newest.body)
+        let title = circleId.hasPrefix("dm:") ? name : "\(name) in your circle"
+        NotificationManager.shared.notify(title: title, body: body, dedupeKey: newest.id)
     }
 }
 

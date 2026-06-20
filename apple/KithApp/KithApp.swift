@@ -2,9 +2,20 @@ import SwiftUI
 
 @main
 struct KithApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        // Register the background-refresh task at launch (required before didFinishLaunching).
+        NotificationManager.shared.registerBackgroundTask()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
+                .onAppear { NotificationManager.shared.requestAuthorization() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { NotificationManager.shared.scheduleRefresh() }
         }
     }
 }

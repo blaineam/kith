@@ -59,6 +59,13 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.blaineam.kith
             CFBundleURLSchemes: [kith]
+        # Local notifications only — no push server. A background-refresh wake briefly
+        # brings up P2P networking, syncs, and posts LOCAL notifications for anything new.
+        UIBackgroundModes:
+          - fetch
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.blaineam.kith.refresh
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blaineam.kith
