@@ -117,6 +117,49 @@ final class FeedStore: ObservableObject {
         refresh()
     }
 
+    // MARK: - Direct messages (a DM is a private 2-person circle)
+
+    /// Non-DM circles for the feed's circle switcher.
+    var feedCircles: [CircleInfoFfi] { circles.filter { !$0.id.hasPrefix("dm:") } }
+    /// DM circles (shown in Messages, hidden from the feed switcher).
+    var dmCircles: [CircleInfoFfi] { circles.filter { $0.id.hasPrefix("dm:") } }
+
+    /// Deterministic DM circle id (identical on both sides).
+    func dmCircleId(with idHex: String) -> String {
+        let pair = [myNodeHex, idHex].sorted()
+        return "dm:" + pair[0].prefix(16) + "-" + pair[1].prefix(16)
+    }
+
+    /// Start or open a DM with a known contact; returns the dm circle id.
+    @discardableResult
+    func startDM(with idHex: String, name: String) -> String {
+        let id = dmCircleId(with: idHex)
+        guard let social else { return id }
+        social.createCircle(id: id, name: name)
+        try? social.addExistingToCircle(circleId: id, nodeHex: idHex)
+        persist(); refreshCircles(); syncWithContacts()
+        return id
+    }
+
+    /// The other person in a DM (resolved from the non-me member), for display.
+    func dmPartnerName(_ circleId: String) -> String {
+        let others = (social?.contactNodeIds(circleId: circleId) ?? []).filter { $0 != myNodeHex }
+        if let id = others.first { return ContactsStore.shared.name(forNodePrefix: id) ?? "Direct message" }
+        return "Direct message"
+    }
+
+    /// Messages of a circle (for a DM thread) without disturbing the main feed.
+    func messages(in circleId: String) -> [FeedItemFfi] {
+        social?.feed(circleId: circleId, nowMs: now(), viewerRetentionSecs: SettingsStore.shared.retentionSecs) ?? []
+    }
+
+    /// Send a text message into a DM circle + broadcast it.
+    func sendMessage(to circleId: String, _ body: String) {
+        guard let social, let env = try? social.post(circleId: circleId, body: body, media: [], music: nil, retentionSecs: nil, createdAt: now()) else { return }
+        broadcastEvent(circleId, env)
+        postTick += 1
+    }
+
     /// Node ids in a circle for whom we hold keys (handshake complete).
     func handshaked(in circleId: String) -> [String] {
         social?.contactNodeIds(circleId: circleId) ?? []
@@ -646,7 +689,7 @@ struct FeedView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Menu {
-                        ForEach(store.circles, id: \.id) { c in
+                        ForEach(store.feedCircles, id: \.id) { c in
                             Button { store.setActiveCircle(c.id) } label: {
                                 Label(c.name, systemImage: c.id == store.activeCircleId ? "checkmark" : "circle.dashed")
                             }
