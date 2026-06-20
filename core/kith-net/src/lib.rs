@@ -13,8 +13,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use data_encoding::BASE32_NOPAD;
 use iroh::{
-    endpoint::{presets::Empty, Endpoint},
-    EndpointAddr, RelayMode,
+    endpoint::{presets::N0, Endpoint},
+    EndpointAddr, EndpointId, SecretKey,
 };
 
 const ALPN: &[u8] = b"kith/social/0";
@@ -38,19 +38,33 @@ pub struct Node {
 }
 
 impl Node {
-    /// Bind a node (relays disabled / direct) and start its accept loop, which hands
-    /// every inbound payload to `handler`.
-    pub async fn spawn(handler: InboundHandler) -> Result<Self> {
-        let endpoint = Endpoint::builder(Empty)
-            .crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
+    /// Bind a node **using the owning identity's Ed25519 key** (so `node_id_hex()`
+    /// equals that identity's `node_id_bytes`), with the n0 preset: free public
+    /// discovery (DNS/pkarr) + relays, so a contact can dial you by the id in your
+    /// reach-me link, across networks. Starts the accept loop feeding `handler`.
+    pub async fn spawn(secret: [u8; 32], handler: InboundHandler) -> Result<Self> {
+        let endpoint = Endpoint::builder(N0)
+            .secret_key(SecretKey::from_bytes(&secret))
             .alpns(vec![ALPN.to_vec()])
-            .relay_mode(RelayMode::Disabled)
             .bind()
             .await
             .ah()?;
         let ep = endpoint.clone();
         tokio::spawn(async move { accept_loop(ep, handler).await });
         Ok(Self { endpoint })
+    }
+
+    /// This node's id (== the owning identity's `node_id_bytes`), as hex.
+    pub fn node_id_hex(&self) -> String {
+        hex(self.endpoint.id().as_bytes())
+    }
+
+    /// Send a payload to a contact by their hex node id (== their Kith id). Discovery
+    /// resolves the live address; no ticket / IP needed.
+    pub async fn send_to_node(&self, node_id_hex: &str, payload: &[u8]) -> Result<()> {
+        let bytes = decode_hex32(node_id_hex)?;
+        let id = EndpointId::from_bytes(&bytes).map_err(|e| anyhow!("{e:?}"))?;
+        self.send(EndpointAddr::new(id), payload).await
     }
 
     /// A shareable ticket (base32 of this node's address) for a peer to dial.
@@ -111,6 +125,22 @@ async fn accept_loop(endpoint: Endpoint, handler: InboundHandler) {
             let _ = conn.closed().await;
         });
     }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn decode_hex32(s: &str) -> Result<[u8; 32]> {
+    let s = s.trim();
+    if s.len() != 64 {
+        return Err(anyhow!("node id must be 64 hex chars"));
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| anyhow!("bad hex"))?;
+    }
+    Ok(out)
 }
 
 async fn wait_for_direct_addr(endpoint: &Endpoint) -> Result<EndpointAddr> {

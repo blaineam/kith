@@ -184,6 +184,13 @@ impl Identity {
         self.seed
     }
 
+    /// The 32-byte Ed25519 signing-key seed. This is the key material the transport
+    /// (iroh) binds to, so the network node id equals this identity's `node_id_bytes()`
+    /// — letting a contact dial you by the id in your reach-me link. Secret; never share.
+    pub fn node_secret_bytes(&self) -> [u8; 32] {
+        self.signing.to_bytes()
+    }
+
     /// The shareable public identity.
     pub fn public(&self) -> KithId {
         KithId {

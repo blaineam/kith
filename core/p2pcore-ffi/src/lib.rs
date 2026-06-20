@@ -392,23 +392,42 @@ pub struct KithNode {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl KithNode {
-    /// Start a node; inbound payloads are delivered to `listener`.
+    /// Start a node bound to this account's identity (so its node id equals the
+    /// account's Kith id); inbound payloads are delivered to `listener`.
     #[uniffi::constructor]
-    pub async fn start(listener: Arc<dyn InboundListener>) -> Result<Arc<Self>, KithError> {
+    pub async fn start(account_seed: Vec<u8>, listener: Arc<dyn InboundListener>) -> Result<Arc<Self>, KithError> {
+        let seed: [u8; 32] = account_seed
+            .try_into()
+            .map_err(|_| KithError::Invalid { msg: "seed must be 32 bytes".into() })?;
+        let identity = Identity::from_seed(&seed);
         let l = listener.clone();
         let handler: kith_net::InboundHandler = Arc::new(move |payload| l.on_inbound(payload));
-        let node = Node::spawn(handler)
+        let node = Node::spawn(identity.node_secret_bytes(), handler)
             .await
             .map_err(|e| KithError::Invalid { msg: e.to_string() })?;
         Ok(Arc::new(Self { node }))
     }
 
-    /// A shareable ticket a peer dials to reach this node.
+    /// This node's id (== the account's Kith id), as hex.
+    pub fn node_id_hex(&self) -> String {
+        self.node.node_id_hex()
+    }
+
+    /// A shareable ticket a peer dials to reach this node (full address form).
     pub async fn ticket(&self) -> Result<String, KithError> {
         self.node.ticket().await.map_err(|e| KithError::Invalid { msg: e.to_string() })
     }
 
-    /// Send sealed bytes to a peer identified by their ticket.
+    /// Send sealed bytes to a contact by their hex node id (== their Kith id),
+    /// resolving the live address via discovery.
+    pub async fn send_to_node(&self, node_id_hex: String, payload: Vec<u8>) -> Result<(), KithError> {
+        self.node
+            .send_to_node(&node_id_hex, &payload)
+            .await
+            .map_err(|e| KithError::Invalid { msg: e.to_string() })
+    }
+
+    /// Send sealed bytes to a peer identified by their full-address ticket.
     pub async fn send(&self, ticket: String, payload: Vec<u8>) -> Result<(), KithError> {
         self.node
             .send_ticket(&ticket, &payload)

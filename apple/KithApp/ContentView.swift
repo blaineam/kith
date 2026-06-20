@@ -150,7 +150,7 @@ struct AdvancedView: View {
                 VStack(spacing: 20) {
                     detailsCard
                     privacyCheckCard
-                    NavigationLink { NetworkingView() } label: {
+                    NavigationLink { NetworkingView(seed: account.secretSeed()) } label: {
                         HStack {
                             Label("Networking (beta)", systemImage: "wifi")
                                 .font(.subheadline.weight(.medium))

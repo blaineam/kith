@@ -12,7 +12,7 @@ final class NetNode: ObservableObject {
     private var node: KithNode?
     private var listener: InboundBridge?
 
-    func start() async {
+    func start(seed: Data) async {
         guard node == nil else { return }
         status = "Starting…"
         let bridge = InboundBridge { [weak self] data in
@@ -20,7 +20,7 @@ final class NetNode: ObservableObject {
         }
         listener = bridge
         do {
-            let n = try await KithNode.start(listener: bridge)
+            let n = try await KithNode.start(accountSeed: seed, listener: bridge)
             node = n
             ticket = try await n.ticket()
             status = "Online"
@@ -53,6 +53,7 @@ final class InboundBridge: InboundListener {
 /// A minimal, two-device-testable networking screen: go online, share your ticket,
 /// paste a peer's, and send bytes over a real QUIC connection.
 struct NetworkingView: View {
+    let seed: Data
     @StateObject private var net = NetNode()
     @State private var peerTicket = ""
     @State private var copied = false
@@ -67,7 +68,7 @@ struct NetworkingView: View {
                         .foregroundStyle(net.status == "Online" ? .green : .secondary)
 
                     if net.ticket.isEmpty {
-                        Button("Go online") { Task { await net.start() } }
+                        Button("Go online") { Task { await net.start(seed: seed) } }
                             .buttonStyle(BrandButtonStyle())
                         Text("Starts a real peer-to-peer node (QUIC). Two devices on the same network can exchange a sealed message directly — no server.")
                             .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)

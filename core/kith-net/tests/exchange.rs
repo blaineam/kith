@@ -23,10 +23,13 @@ async fn two_nodes_exchange_a_sealed_post() {
     let payload = seal_event(&alice, &group, &event).unwrap().to_bytes();
 
     // Bob listens (inbound payloads go to a channel); Alice dials Bob and sends.
+    // Each node binds to its identity's key, so its transport id == its Kith id.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let bob_node = Node::spawn(Arc::new(move |p| { let _ = tx.send(p); })).await.unwrap();
+    let bob_node = Node::spawn(bob.node_secret_bytes(), Arc::new(move |p| { let _ = tx.send(p); })).await.unwrap();
+    assert_eq!(bob_node.node_id_hex(), hex32(&bob.public().node_id_bytes()),
+               "transport node id must equal the Kith identity id");
     let bob_addr = bob_node.local_dial_addr().await.unwrap();
-    let alice_node = Node::spawn(Arc::new(|_| {})).await.unwrap();
+    let alice_node = Node::spawn(alice.node_secret_bytes(), Arc::new(|_| {})).await.unwrap();
     alice_node.send(bob_addr, &payload).await.unwrap();
 
     // Bob receives the opaque bytes and opens the post with his own keys.
@@ -41,4 +44,8 @@ async fn two_nodes_exchange_a_sealed_post() {
 
     alice_node.close().await;
     bob_node.close().await;
+}
+
+fn hex32(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
