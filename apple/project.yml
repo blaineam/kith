@@ -29,6 +29,9 @@ targets:
       path: KithApp/Info.plist
       properties:
         CFBundleDisplayName: Kith
+        # Track the build settings (a managed Info.plist won't do this automatically).
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
