@@ -117,14 +117,27 @@ final class MusicPlayback {
     static let shared = MusicPlayback()
     private(set) var current: TrackRefFfi?
     private let player = MPMusicPlayerController.applicationMusicPlayer
+    private var authed = false
     var isPlaying: Bool { player.playbackState == .playing }
 
     func play(_ track: TrackRefFfi) {
         current = track
         guard !SettingsStore.shared.silent else { return }   // app is muted
-        // Only catalog (store) songs are playable by id; library-only items have no id.
         guard !track.catalogId.isEmpty, track.catalogId != "0" else { return }
-        player.setQueue(with: [track.catalogId])
+        // Playing through the system player needs media-library authorization.
+        if !authed {
+            MPMediaLibrary.requestAuthorization { _ in }
+            authed = true
+        }
+        if track.catalogId.hasPrefix("lib:"), let pid = UInt64(track.catalogId.dropFirst(4)) {
+            // Library-only song: queue by persistent id via a media query.
+            let q = MPMediaQuery.songs()
+            q.addFilterPredicate(MPMediaPropertyPredicate(value: pid, forProperty: MPMediaItemPropertyPersistentID))
+            player.setQueue(with: q)
+        } else {
+            // Apple Music catalog song: queue by store id.
+            player.setQueue(with: [track.catalogId])
+        }
         player.play()
     }
     func duck() {

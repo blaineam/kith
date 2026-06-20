@@ -1276,6 +1276,13 @@ private struct PostCard: View {
     }
 
     @ViewBuilder private func mediaPage(_ ref: String) -> some View {
+        mediaPageContent(ref)
+            .contextMenu {
+                Button { MediaSaver.save(ref) } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
+            }
+    }
+
+    @ViewBuilder private func mediaPageContent(_ ref: String) -> some View {
         if let m = MediaStore.shared.item(ref) {
             if m.kind == .video, let url = m.videoURL {
                 VideoPlayer(player: playerFor(ref, url))

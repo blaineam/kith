@@ -1,6 +1,31 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import Photos
+
+/// Save a post's media (photo or video) into the user's Photos library.
+@MainActor
+enum MediaSaver {
+    static func save(_ ref: String) {
+        guard let m = MediaStore.shared.item(ref) else { return }
+        let imageURL = MediaStore.shared.storagePath(for: ref)
+        let kind = m.kind
+        let videoURL = m.videoURL
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else { return }
+            PHPhotoLibrary.shared().performChanges {
+                switch kind {
+                case .video:
+                    if let url = videoURL { PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: url) }
+                case .image:
+                    if let url = imageURL { PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: url) }
+                case .audio:
+                    break
+                }
+            } completionHandler: { _, _ in }
+        }
+    }
+}
 
 #if targetEnvironment(macCatalyst)
 /// Mac Catalyst has no UIVideoEditorController; trim isn't offered there (canTrim → false).

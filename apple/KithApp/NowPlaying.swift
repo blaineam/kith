@@ -11,7 +11,9 @@ struct NowPlayingPill: View {
     /// Apple Music deep link for the shared catalog song (nil for library-only items
     /// that have no store id).
     private var appleMusicURL: URL? {
-        guard !track.catalogId.isEmpty, track.catalogId != "0" else { return nil }
+        // Library-only songs (lib:<id>) aren't catalog items — no Apple Music link.
+        guard !track.catalogId.isEmpty, track.catalogId != "0",
+              !track.catalogId.hasPrefix("lib:") else { return nil }
         return URL(string: "https://music.apple.com/song/\(track.catalogId)")
     }
 
