@@ -56,7 +56,7 @@ and the provider only ever sees sealed blobs:
 | **Cloudflare R2** | `<acct>.r2.cloudflarestorage.com` | no egress fees, generous free tier |
 | **Backblaze B2** | `s3.us-west-004.backblazeb2.com` | cheap storage |
 | **AWS S3** | `s3.amazonaws.com` | the original |
-| **MinIO** (self-host) | `your-host:9000` | the install script above |
+| **rclone serve s3** (self-host) | `your-host:8333` | the install script above |
 
 Create a bucket, make an access key, paste into Kith, enable "Volunteer as tribute."
 
@@ -81,7 +81,7 @@ slower than S3, so it's offered as an alternative backend rather than the defaul
 
 ```
   you ──post(sealed)──▶  bucket/mailbox/<circle>/<hash>  ◀──poll+get──  mom (later, offline-friendly)
-        (S3 / R2 / B2 / MinIO / IPFS)   ← bridge holds only ciphertext
+        (S3 / R2 / B2 / rclone / IPFS)   ← bridge holds only ciphertext
 ```
 
 Every Kith client (iPhone, Mac, web) can both **write** to and **poll** the mailbox, so

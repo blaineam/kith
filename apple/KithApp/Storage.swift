@@ -91,7 +91,7 @@ struct StorageSettingsView: View {
                 Label("Saved on this device", systemImage: "checkmark.seal.fill").foregroundStyle(.green).font(.caption)
             }
         } header: { Text("Your S3-compatible bucket") }
-        footer: { Text("Works with AWS S3, Cloudflare R2, Backblaze B2, MinIO, etc. Keys are stored only in this device's Keychain — never on any server.") }
+        footer: { Text("Works with AWS S3, Cloudflare R2, Backblaze B2, rclone serve s3, etc. Keys are stored only in this device's Keychain — never on any server.") }
 
         if store.s3Configured {
             Section {

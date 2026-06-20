@@ -12,7 +12,7 @@ nothing you hold can be used to bypass a user's storage.
 | **Custom S3 bucket** | user enters endpoint + region + bucket + access key + secret; stored only in the device **Keychain** | nothing |
 | **Google Drive / Dropbox** | **OAuth 2.0 + PKCE** — user signs in on the provider's page; Kith keeps only a token in the Keychain | nothing |
 
-Works with AWS S3, Cloudflare R2, Backblaze B2, MinIO, etc. for the S3 path.
+Works with AWS S3, Cloudflare R2, Backblaze B2, rclone serve s3, etc. for the S3 path.
 
 ## Why no secrets to host — PKCE
 

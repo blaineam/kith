@@ -7,7 +7,7 @@ import CryptoKit
 /// "volunteering as tribute") stores opaque blobs it cannot read. Keys live only in the
 /// device Keychain (see StorageStore) — never on any Kith server.
 ///
-/// Works with AWS S3, Cloudflare R2, Backblaze B2, MinIO, etc.
+/// Works with AWS S3, Cloudflare R2, Backblaze B2, rclone serve s3, etc.
 struct S3Client {
     let endpoint: String
     let region: String
