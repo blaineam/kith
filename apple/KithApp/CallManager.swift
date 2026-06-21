@@ -14,6 +14,7 @@ final class CallManager: ObservableObject {
     static let shared = CallManager()
     @Published private(set) var inCall = false
     @Published private(set) var connecting = false
+    @Published private(set) var ringing = false
     @Published private(set) var peerName = ""
     func startCall(peerHex: String, name: String) {}
     func handleInvite(_ payload: Data) {}
@@ -44,6 +45,10 @@ final class CallManager: NSObject, ObservableObject {
     /// Whether our camera is on, and the latest decoded frame from the peer.
     @Published private(set) var videoOn = false
     @Published private(set) var remoteFrame: UIImage?
+    @Published private(set) var localFrame: UIImage?     // our own camera, for the PiP preview
+    /// An incoming call is ringing (drives the in-app accept/decline UI, independent of CallKit).
+    @Published private(set) var ringing = false
+    @Published private(set) var speakerOn = false
 
     private let provider: CXProvider
     private let controller = CXCallController()
@@ -94,10 +99,31 @@ final class CallManager: NSObject, ObservableObject {
         guard from.count == 64 else { return }
         peerHex = from; peerName = name
         let id = UUID(); callId = id
+        ringing = true   // show the in-app incoming-call UI no matter what CallKit does
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.hasVideo = false
         provider.reportNewIncomingCall(with: id, update: update) { _ in }
+    }
+
+    /// Accept an incoming call from the in-app UI (works even if CallKit's UI never showed).
+    func accept() {
+        guard ringing else { return }
+        ringing = false; inCall = true
+        FeedStore.shared.sendCallFrame(11, Data(myHex.utf8), to: peerHex)
+        startAudio()
+    }
+    /// Decline a ringing call.
+    func decline() {
+        guard ringing else { return }
+        if !peerHex.isEmpty { FeedStore.shared.sendCallFrame(12, Data(myHex.utf8), to: peerHex) }
+        teardown()
+    }
+
+    /// Route audio to the speaker (audio-only calls) or back to the earpiece.
+    func toggleSpeaker() {
+        speakerOn.toggle()
+        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(speakerOn ? .speaker : .none)
     }
 
     func handleAccept(_ payload: Data) {
@@ -124,15 +150,25 @@ final class CallManager: NSObject, ObservableObject {
     /// JPEG-encoded at ~10fps, and streamed to the peer over frame type 15.
     func toggleVideo() {
         if videoOn {
-            videoOn = false
+            videoOn = false; localFrame = nil
             videoCapturer.stop()
-        } else {
-            guard inCall || connecting else { return }   // allow turning the camera on while ringing
-            videoCapturer.onFrame = { [weak self] jpeg in
-                Task { @MainActor in self?.sendVideo(jpeg) }
+            return
+        }
+        guard inCall || connecting else { return }
+        // Camera needs explicit permission the first time, or start() silently no-ops.
+        AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+            guard granted else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                self.videoCapturer.onFrame = { [weak self] jpeg in
+                    Task { @MainActor in
+                        self?.sendVideo(jpeg)
+                        self?.localFrame = UIImage(data: jpeg)   // our own camera → PiP preview
+                    }
+                }
+                self.videoCapturer.start()
+                self.videoOn = true
             }
-            videoCapturer.start()
-            videoOn = true
         }
     }
 
@@ -161,7 +197,8 @@ final class CallManager: NSObject, ObservableObject {
     private func teardown() {
         stopAudio()
         if videoOn { videoCapturer.stop() }
-        videoOn = false; remoteFrame = nil
+        if speakerOn { try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none) }
+        videoOn = false; remoteFrame = nil; localFrame = nil; ringing = false; speakerOn = false
         callId = nil; inCall = false; connecting = false; peerHex = ""; peerName = ""
     }
 
@@ -290,42 +327,92 @@ final class VideoCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 struct CallOverlay: View {
     @ObservedObject private var call = CallManager.shared
     var body: some View {
-        if call.inCall || call.connecting {
-            ZStack {
-                if let frame = call.remoteFrame {
-                    Image(uiImage: frame).resizable().scaledToFill().ignoresSafeArea()
-                    LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.55)],
-                                   startPoint: .top, endPoint: .bottom).ignoresSafeArea()
-                } else {
-                    KithTheme.brand.opacity(0.96).ignoresSafeArea()
+        if call.ringing {
+            incoming
+        } else if call.inCall || call.connecting {
+            active
+        }
+    }
+
+    private var incoming: some View {
+        ZStack {
+            KithTheme.brand.opacity(0.96).ignoresSafeArea()
+            VStack(spacing: 16) {
+                Spacer()
+                Image(systemName: "phone.fill.arrow.down.left").font(.system(size: 40)).foregroundStyle(.white)
+                Text(call.peerName.isEmpty ? "Call" : call.peerName).font(.title2.weight(.semibold)).foregroundStyle(.white)
+                Text("Incoming call…").font(.subheadline).foregroundStyle(.white.opacity(0.8))
+                Spacer()
+                HStack(spacing: 60) {
+                    Button { CallManager.shared.decline() } label: {
+                        Image(systemName: "phone.down.fill").font(.title).foregroundStyle(.white)
+                            .frame(width: 70, height: 70).background(Color.red, in: Circle())
+                    }
+                    Button { CallManager.shared.accept() } label: {
+                        Image(systemName: "phone.fill").font(.title).foregroundStyle(.white)
+                            .frame(width: 70, height: 70).background(Color.green, in: Circle())
+                    }
                 }
-                VStack(spacing: 16) {
-                    Spacer()
-                    if call.remoteFrame == nil {
-                        Image(systemName: "phone.fill.arrow.up.right").font(.system(size: 40)).foregroundStyle(.white)
+                .padding(.bottom, 60)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
+        .transition(.move(edge: .bottom))
+    }
+
+    private var active: some View {
+        ZStack {
+            if let frame = call.remoteFrame {
+                Image(uiImage: frame).resizable().scaledToFill().ignoresSafeArea()
+                LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.55)],
+                               startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+            } else {
+                KithTheme.brand.opacity(0.96).ignoresSafeArea()
+            }
+            // Local camera preview (picture-in-picture) when our video is on.
+            if let mine = call.localFrame {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(uiImage: mine).resizable().scaledToFill()
+                            .frame(width: 96, height: 128).clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.6)))
+                            .padding(.top, 60).padding(.trailing, 16)
                     }
-                    Text(call.peerName.isEmpty ? "Call" : call.peerName).font(.title2.weight(.semibold)).foregroundStyle(.white)
-                    Text(call.connecting ? "Calling…" : "Connected").font(.subheadline).foregroundStyle(.white.opacity(0.8))
                     Spacer()
-                    HStack(spacing: 36) {
-                        Button { CallManager.shared.toggleVideo() } label: {
-                            Image(systemName: call.videoOn ? "video.fill" : "video.slash.fill").font(.title2)
-                                .foregroundStyle(.white).frame(width: 64, height: 64)
-                                .background(call.videoOn ? AnyShapeStyle(.white.opacity(0.25)) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
-                        }
-                        Button { CallManager.shared.endCall() } label: {
-                            Image(systemName: "phone.down.fill").font(.title)
-                                .foregroundStyle(.white).frame(width: 70, height: 70)
-                                .background(Color.red, in: Circle())
-                        }
-                    }
-                    .padding(.bottom, 60)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea()
-            .transition(.move(edge: .bottom))
+            VStack(spacing: 16) {
+                Spacer()
+                if call.remoteFrame == nil {
+                    Image(systemName: "phone.fill.arrow.up.right").font(.system(size: 40)).foregroundStyle(.white)
+                }
+                Text(call.peerName.isEmpty ? "Call" : call.peerName).font(.title2.weight(.semibold)).foregroundStyle(.white)
+                Text(call.connecting ? "Calling…" : "Connected").font(.subheadline).foregroundStyle(.white.opacity(0.8))
+                Spacer()
+                HStack(spacing: 28) {
+                    Button { CallManager.shared.toggleSpeaker() } label: {
+                        callButton(call.speakerOn ? "speaker.wave.3.fill" : "speaker.fill", on: call.speakerOn)
+                    }
+                    Button { CallManager.shared.toggleVideo() } label: {
+                        callButton(call.videoOn ? "video.fill" : "video.slash.fill", on: call.videoOn)
+                    }
+                    Button { CallManager.shared.endCall() } label: {
+                        Image(systemName: "phone.down.fill").font(.title)
+                            .foregroundStyle(.white).frame(width: 70, height: 70)
+                            .background(Color.red, in: Circle())
+                    }
+                }
+                .padding(.bottom, 60)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
+        .transition(.move(edge: .bottom))
+    }
+
+    private func callButton(_ symbol: String, on: Bool) -> some View {
+        Image(systemName: symbol).font(.title2).foregroundStyle(.white).frame(width: 64, height: 64)
+            .background(on ? AnyShapeStyle(.white.opacity(0.25)) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
     }
 }
 

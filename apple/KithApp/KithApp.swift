@@ -91,6 +91,7 @@ struct RootView: View {
             CallOverlay()
                 .animation(KithTheme.smooth, value: CallManager.shared.connecting)
                 .animation(KithTheme.smooth, value: CallManager.shared.inCall)
+                .animation(KithTheme.smooth, value: CallManager.shared.ringing)
         }
         // Manual "add a friend" (onboarding / the + button) — no incoming link.
         .sheet(isPresented: $showConnect) {

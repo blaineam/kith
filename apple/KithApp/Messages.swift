@@ -20,6 +20,11 @@ struct MessagesView: View {
                 ForEach(store.dmCircles, id: \.id) { c in
                     NavigationLink { DMThreadView(circleId: c.id) } label: { rowLabel(c.id) }
                         .listRowBackground(Color.clear)
+                        .swipeActions {
+                            Button(role: .destructive) { store.deleteConversation(c.id) } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                 }
             }
             .scrollContentBackground(.hidden)

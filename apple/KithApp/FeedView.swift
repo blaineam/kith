@@ -86,8 +86,7 @@ final class FeedStore: ObservableObject {
         guard social == nil else { return }
         social = try? KithSocial(accountSeed: seed)
         loadPersisted()
-        refreshCircles()
-        purgeDMIntruders()   // repair any DM circle the old broadcast-Hello bug contaminated
+        refreshCircles()     // also purges any contaminated DM membership (see refreshCircles)
         refresh()
         guard ProcessInfo.processInfo.environment["KITH_NO_NET"] != "1" else { return }
         bringOnline(seed: seed)
@@ -104,7 +103,26 @@ final class FeedStore: ObservableObject {
 
     // MARK: - Circles
 
-    func refreshCircles() { circles = social?.circles() ?? [] }
+    func refreshCircles() {
+        purgeDMIntrudersRaw()           // clean DM membership every time we read circles
+        circles = social?.circles() ?? []
+    }
+
+    /// Evict anyone who isn't one of a DM's two parties (full-id match). Operates directly
+    /// on the engine so it can run inside refreshCircles without recursing.
+    @discardableResult
+    private func purgeDMIntrudersRaw() -> Bool {
+        guard let social else { return false }
+        var fixed = false
+        for circle in social.circles() where circle.id.hasPrefix("dm:") {
+            for nodeHex in social.contactNodeIds(circleId: circle.id) where !dmCircleAllows(circle.id, nodeHex) {
+                social.removeFromCircle(circleId: circle.id, nodeHex: nodeHex)
+                fixed = true
+            }
+        }
+        if fixed { persist() }
+        return fixed
+    }
 
     var activeCircleName: String {
         circles.first { $0.id == activeCircleId }?.name ?? "My Circle"
@@ -118,13 +136,15 @@ final class FeedStore: ObservableObject {
     }
 
     /// Create a circle from scratch and switch to it. Add existing contacts next.
-    func createCircle(name: String) {
+    func createCircle(name: String, memberIds: [String] = []) {
         guard let social else { return }
         let id = UUID().uuidString
         social.createCircle(id: id, name: name)
+        for m in memberIds { try? social.addExistingToCircle(circleId: id, nodeHex: m) }
         persist(); refreshCircles()
         activeCircleId = id
         refresh()
+        if !memberIds.isEmpty { syncWithContacts() }   // greet + back-fill to the new members
     }
 
     /// Add a known contact to the active circle, then sync so the circle forms on theirs.
@@ -158,33 +178,24 @@ final class FeedStore: ObservableObject {
     /// DM circles (shown in Messages, hidden from the feed switcher).
     var dmCircles: [CircleInfoFfi] { circles.filter { $0.id.hasPrefix("dm:") } }
 
-    /// Deterministic DM circle id (identical on both sides).
+    /// Deterministic DM circle id (identical on both sides). Uses the FULL sorted node ids
+    /// — never truncated prefixes — so two different people can never collide into one DM.
     func dmCircleId(with idHex: String) -> String {
         let pair = [myNodeHex, idHex].sorted()
-        return "dm:" + pair[0].prefix(16) + "-" + pair[1].prefix(16)
+        return "dm:" + pair[0] + "-" + pair[1]
     }
 
-    /// True only if `nodeHex` is one of the two parties encoded in a `dm:` circle id —
-    /// the guard that stops a third party from handshaking their way into a private DM.
+    /// True only if `nodeHex` is exactly one of the two full ids encoded in a `dm:` circle
+    /// id — the guard that stops a third party from handshaking their way into a private DM.
+    /// (Old short-prefix ids fail this and get cleaned out by purge — a fresh DM is made.)
     func dmCircleAllows(_ circleId: String, _ nodeHex: String) -> Bool {
         let parts = circleId.dropFirst(3).split(separator: "-").map(String.init)
         guard parts.count == 2 else { return false }
-        return parts.contains(String(nodeHex.prefix(16)))
+        return parts.contains(nodeHex)
     }
 
     /// One-time repair for the old broadcast-Hello bug: drop anyone who wrongly ended up
     /// inside a DM circle, so existing threads stop leaking to non-participants.
-    func purgeDMIntruders() {
-        guard let social else { return }
-        var fixed = false
-        for circle in circles where circle.id.hasPrefix("dm:") {
-            for nodeHex in social.contactNodeIds(circleId: circle.id) where !dmCircleAllows(circle.id, nodeHex) {
-                social.removeFromCircle(circleId: circle.id, nodeHex: nodeHex)
-                fixed = true
-            }
-        }
-        if fixed { persist(); refreshCircles() }
-    }
 
     /// Start or open a DM with a known contact; returns the dm circle id.
     @discardableResult
@@ -278,6 +289,13 @@ final class FeedStore: ObservableObject {
     func deleteMessage(in circleId: String, _ id: String) {
         guard let social, let env = try? social.unsend(circleId: circleId, target: id, createdAt: now()) else { return }
         broadcastEvent(circleId, env); postTick += 1; refresh()
+    }
+
+    /// Delete a whole DM conversation locally (also clears any old contaminated thread).
+    func deleteConversation(_ circleId: String) {
+        guard let social, circleId.hasPrefix("dm:") else { return }
+        social.leaveCircle(id: circleId)
+        persist(); refreshCircles(); refresh()
     }
 
     /// Node ids in a circle for whom we hold keys (handshake complete).
@@ -1041,15 +1059,8 @@ struct FeedView: View {
                     .accessibilityLabel(settings.silent ? "Unmute app" : "Mute app")
                 }
             }
-            .alert("New circle", isPresented: $showNewCircle) {
-                TextField("Circle name", text: $newCircleName)
-                Button("Create") {
-                    let n = newCircleName.trimmingCharacters(in: .whitespaces)
-                    if !n.isEmpty { store.createCircle(name: n) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Make a separate space — like “Family” or “Roommates”. Add people to it from Your circle.")
+            .sheet(isPresented: $showNewCircle) {
+                NewCircleView { name, members in store.createCircle(name: name, memberIds: members) }
             }
             .onAppear { store.configure(seed: seed) }
             .sensoryFeedback(.success, trigger: store.postTick)
@@ -1816,6 +1827,61 @@ struct UserProfileView: View {
             Button("Clear", role: .destructive) { ContactsStore.shared.setNickname(idHex: authorHex, "") }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Set how \(name) shows up for you.") }
+    }
+}
+
+/// Create a custom circle and pick which contacts go in it.
+struct NewCircleView: View {
+    var onCreate: (String, [String]) -> Void
+    @ObservedObject private var contacts = ContactsStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var selected: Set<String> = []
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                KithBackground()
+                Form {
+                    Section("Name") { TextField("Circle name (e.g. Family)", text: $name) }
+                    Section("Who's in it") {
+                        if contacts.contacts.isEmpty {
+                            Text("Add some people first.").foregroundStyle(.secondary)
+                        }
+                        ForEach(contacts.contacts) { c in
+                            Button {
+                                if selected.contains(c.idHex) { selected.remove(c.idHex) } else { selected.insert(c.idHex) }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Circle().fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                                        .frame(width: 34, height: 34)
+                                        .overlay(Text(String(c.displayName.prefix(1)).uppercased()).font(.subheadline.bold()).foregroundStyle(.white))
+                                    Text(c.displayName).foregroundStyle(.primary)
+                                    Spacer()
+                                    Image(systemName: selected.contains(c.idHex) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(selected.contains(c.idHex) ? KithTheme.pink : .secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            .navigationTitle("New circle")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Create") {
+                        onCreate(name.trimmingCharacters(in: .whitespaces), Array(selected))
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
     }
 }
 
