@@ -1,4 +1,4 @@
-# Kith
+# Haven
 
 > *Kith and kin* — your friends *and* your family. That's the whole product.
 
