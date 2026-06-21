@@ -302,7 +302,7 @@ function renderThread(){
 
 function renderYou(){
   const nodeId = engine ? engine.node_id_hex() : "…";
-  const link = engine ? engine.invite_link("wemiller.com") : "";
+  const link = engine ? engine.invite_link("wemiller.com/apps/haven") : "";
   const ok = engine ? engine.self_test() : false;
   screen().innerHTML = `
     <div class="you-head"><div class="you-av">Y</div>

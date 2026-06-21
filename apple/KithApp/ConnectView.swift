@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Where Kith's web invite links live. The static landing page at
-/// `wemiller.com/apps/kith/` resolves `/u/<id>#<verify>` into an "open in Kith" page.
+/// `wemiller.com/apps/haven/` resolves `/u/<id>#<verify>` into an "open in Kith" page.
 enum KithSite {
-    static let inviteDomain = "wemiller.com/apps/kith"
+    static let inviteDomain = "wemiller.com/apps/haven"
 }
 
 /// The guided "make a connection" flow: show your invite, or add a friend from
