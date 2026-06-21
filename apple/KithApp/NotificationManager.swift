@@ -27,7 +27,9 @@ final class NotificationManager {
     func registerBackgroundTask() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskId, using: nil) { task in
             guard let refresh = task as? BGAppRefreshTask else { task.setTaskCompleted(success: false); return }
-            MainActor.assumeIsolated { self.handleRefresh(refresh) }
+            // The launch handler runs on a PRIVATE (non-main) queue, so MainActor.assumeIsolated
+            // would trap. Hop onto the main actor properly instead — this was the BG crash.
+            Task { @MainActor in self.handleRefresh(refresh) }
         }
     }
 
