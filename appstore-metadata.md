@@ -43,7 +43,7 @@ What's new:
 Now also on Mac, with a matching web app.
 
 ## marketing_url
-https://wemiller.com/apps/kith/
+https://wemiller.com/apps/haven/
 
 ## support_url
 https://wemiller.com/

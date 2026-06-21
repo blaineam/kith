@@ -11,7 +11,7 @@
 # another S3, SFTP, etc. Prefer a managed bucket (S3 / R2 / B2)? You don't need this
 # script — see README.md.
 #
-# Usage:   curl -fsSL https://wemiller.com/apps/kith/bridge/install.sh | sh
+# Usage:   curl -fsSL https://wemiller.com/apps/haven/bridge/install.sh | sh
 #   or:    sh install.sh [--native] [--port 8333] [--dir ~/kith-bridge]
 set -eu
 

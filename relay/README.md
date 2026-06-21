@@ -17,7 +17,7 @@ your machine — a Pi, a NAS, an old laptop, or a cheap VPS — serving a plain 
 the S3 API, and prints the exact settings to paste into Kith.
 
 ```sh
-curl -fsSL https://wemiller.com/apps/kith/bridge/install.sh | sh
+curl -fsSL https://wemiller.com/apps/haven/bridge/install.sh | sh
 # or, from this folder:
 sh install.sh            # Docker (any OS)
 sh install.sh --native   # native rclone binary (Linux / macOS, no Docker)
