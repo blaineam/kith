@@ -220,10 +220,10 @@ impl SocialDemo {
         created_at: u64,
     ) -> String {
         let music = music.map(|m| m.into_core());
-        self.author_event(true, created_at, EventKind::Post { body, media, music, retention_secs, story: false })
+        self.author_event(true, created_at, EventKind::Post { body, media, music, retention_secs, story: false, mute_video: false })
     }
     pub fn friend_post(&self, body: String, created_at: u64) -> String {
-        self.author_event(false, created_at, EventKind::Post { body, media: vec![], music: None, retention_secs: None, story: false })
+        self.author_event(false, created_at, EventKind::Post { body, media: vec![], music: None, retention_secs: None, story: false, mute_video: false })
     }
     pub fn comment(&self, target: String, body: String, media: Vec<String>, created_at: u64) -> String {
         self.author_event(true, created_at, EventKind::Comment { target, body, media })
@@ -238,7 +238,7 @@ impl SocialDemo {
         self.author_event(false, created_at, EventKind::Reaction { target, emoji })
     }
     pub fn edit(&self, target: String, body: String, created_at: u64) -> String {
-        self.author_event(true, created_at, EventKind::Edit { target, body, media: vec![], music: None })
+        self.author_event(true, created_at, EventKind::Edit { target, body, media: vec![], music: None, mute_video: false })
     }
     pub fn unsend(&self, target: String, created_at: u64) -> String {
         self.author_event(true, created_at, EventKind::Unsend { target })
@@ -261,6 +261,7 @@ impl SocialDemo {
                 edited: it.edited,
                 unsent: it.unsent,
                 story: it.story,
+                mute_video: it.mute_video,
                 comments: it
                     .comments
                     .into_iter()
@@ -378,6 +379,7 @@ pub struct FeedItemFfi {
     pub edited: bool,
     pub unsent: bool,
     pub story: bool,
+    pub mute_video: bool,
     pub comments: Vec<FeedCommentFfi>,
     pub reactions: Vec<ReactionFfi>,
 }
@@ -468,6 +470,7 @@ fn map_feed(events: Vec<Event>, me: &str, now_ms: u64, viewer_retention_secs: Op
             edited: it.edited,
             unsent: it.unsent,
             story: it.story,
+            mute_video: it.mute_video,
             comments: it
                 .comments
                 .into_iter()
@@ -730,10 +733,11 @@ impl KithSocial {
         music: Option<TrackRefFfi>,
         retention_secs: Option<u64>,
         story: bool,
+        mute_video: bool,
         created_at: u64,
     ) -> Result<Vec<u8>, KithError> {
         let music = music.map(|m| m.into_core());
-        self.author(&circle_id, created_at, EventKind::Post { body, media, music, retention_secs, story })
+        self.author(&circle_id, created_at, EventKind::Post { body, media, music, retention_secs, story, mute_video })
     }
     pub fn comment(&self, circle_id: String, target: String, body: String, media: Vec<String>, created_at: u64) -> Result<Vec<u8>, KithError> {
         self.author(&circle_id, created_at, EventKind::Comment { target, body, media })
@@ -741,9 +745,9 @@ impl KithSocial {
     pub fn react(&self, circle_id: String, target: String, emoji: String, created_at: u64) -> Result<Vec<u8>, KithError> {
         self.author(&circle_id, created_at, EventKind::Reaction { target, emoji })
     }
-    pub fn edit(&self, circle_id: String, target: String, body: String, media: Vec<String>, music: Option<TrackRefFfi>, created_at: u64) -> Result<Vec<u8>, KithError> {
+    pub fn edit(&self, circle_id: String, target: String, body: String, media: Vec<String>, music: Option<TrackRefFfi>, mute_video: bool, created_at: u64) -> Result<Vec<u8>, KithError> {
         let music = music.map(|m| m.into_core());
-        self.author(&circle_id, created_at, EventKind::Edit { target, body, media, music })
+        self.author(&circle_id, created_at, EventKind::Edit { target, body, media, music, mute_video })
     }
     pub fn unsend(&self, circle_id: String, target: String, created_at: u64) -> Result<Vec<u8>, KithError> {
         self.author(&circle_id, created_at, EventKind::Unsend { target })

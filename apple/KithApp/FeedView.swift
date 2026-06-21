@@ -237,7 +237,7 @@ final class FeedStore: ObservableObject {
 
     /// Send a DM with optional media (photos/videos/audio) and a song.
     func sendMessage(to circleId: String, _ body: String, media: [String], music: TrackRefFfi?) {
-        guard let social, let env = try? social.post(circleId: circleId, body: body, media: media, music: music, retentionSecs: nil, story: false, createdAt: now()) else { return }
+        guard let social, let env = try? social.post(circleId: circleId, body: body, media: media, music: music, retentionSecs: nil, story: false, muteVideo: false, createdAt: now()) else { return }
         broadcastEvent(circleId, env)
         postTick += 1
         let circle = circleId
@@ -337,8 +337,8 @@ final class FeedStore: ObservableObject {
 
     // MARK: - Authoring (seal locally, then broadcast to contacts)
 
-    func post(_ body: String, media: [String] = [], music: TrackRefFfi? = nil, retentionSecs: UInt64? = nil, story: Bool = false) {
-        guard let social, let env = try? social.post(circleId: activeCircleId, body: body, media: media, music: music, retentionSecs: retentionSecs, story: story, createdAt: now()) else { return }
+    func post(_ body: String, media: [String] = [], music: TrackRefFfi? = nil, retentionSecs: UInt64? = nil, story: Bool = false, muteVideo: Bool = false) {
+        guard let social, let env = try? social.post(circleId: activeCircleId, body: body, media: media, music: music, retentionSecs: retentionSecs, story: story, muteVideo: muteVideo, createdAt: now()) else { return }
         broadcastEvent(activeCircleId, env); postTick += 1; refresh()
         let circle = activeCircleId
         for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) } }
@@ -376,8 +376,8 @@ final class FeedStore: ObservableObject {
         guard let social, let env = try? social.react(circleId: activeCircleId, target: id, emoji: emoji, createdAt: now()) else { return }
         broadcastEvent(activeCircleId, env); reactionTick += 1; refresh()
     }
-    func edit(_ id: String, _ body: String, media: [String] = [], music: TrackRefFfi? = nil) {
-        guard let social, let env = try? social.edit(circleId: activeCircleId, target: id, body: body, media: media, music: music, createdAt: now()) else { return }
+    func edit(_ id: String, _ body: String, media: [String] = [], music: TrackRefFfi? = nil, muteVideo: Bool = false) {
+        guard let social, let env = try? social.edit(circleId: activeCircleId, target: id, body: body, media: media, music: music, muteVideo: muteVideo, createdAt: now()) else { return }
         broadcastEvent(activeCircleId, env); refresh()
         let circle = activeCircleId
         for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) } }
@@ -882,6 +882,7 @@ struct FeedView: View {
     @State private var compose = ""
     @State private var attachedMedia: [String] = []
     @State private var attachedTrack: TrackRefFfi?
+    @State private var muteVideo = false   // author's audio choice for attached video(s)
     @State private var showMediaPicker = false
     @State private var showCamera = false
     @State private var showSongPicker = false
@@ -1185,6 +1186,21 @@ struct FeedView: View {
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(KithTheme.brandHorizontal.opacity(0.18), in: Capsule())
                 }
+                // Per-post video audio: only meaningful with a video and no song (a song
+                // always plays over a muted video). Toggles between the video's own sound
+                // and a silent share.
+                if attachedTrack == nil && attachedMedia.contains(where: { MediaStore.shared.item($0)?.kind == .video }) {
+                    Button { muteVideo.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: muteVideo ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            Text(muteVideo ? "Video muted" : "Video sound").font(.caption2)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                        .foregroundStyle(muteVideo ? AnyShapeStyle(.secondary) : AnyShapeStyle(KithTheme.pink))
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
                 if let secs = composeRetention {
                     HStack(spacing: 6) {
                         Image(systemName: "timer")
@@ -1221,7 +1237,10 @@ struct FeedView: View {
             if MediaStore.shared.canTrim(ref) {
                 Button { trimmingRef = TrimTarget(ref: ref) } label: { Label("Trim", systemImage: "scissors") }
             }
-            Button { muteAttached(ref) } label: { Label("Mute audio", systemImage: "speaker.slash") }
+            Button { muteVideo.toggle() } label: {
+                Label(muteVideo ? "Play video sound" : "Mute video sound",
+                      systemImage: muteVideo ? "speaker.wave.2" : "speaker.slash")
+            }
         } label: {
             Image(systemName: "slider.horizontal.3").font(.caption2).foregroundStyle(.white)
                 .padding(4).background(.black.opacity(0.55), in: Circle())
@@ -1229,11 +1248,6 @@ struct FeedView: View {
         .padding(3)
     }
 
-    private func muteAttached(_ ref: String) {
-        Task { @MainActor in
-            if let newRef = await MediaStore.shared.muteVideo(ref) { replaceAttached(ref, with: newRef) }
-        }
-    }
     private func replaceAttached(_ old: String, with new: String) {
         if let i = attachedMedia.firstIndex(of: old) { attachedMedia[i] = new }
     }
@@ -1241,8 +1255,8 @@ struct FeedView: View {
     private func send() {
         let text = compose.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachedMedia.isEmpty || attachedTrack != nil else { return }
-        store.post(text, media: attachedMedia, music: attachedTrack, retentionSecs: composeRetention)
-        compose = ""; attachedMedia = []; attachedTrack = nil; composeRetention = nil
+        store.post(text, media: attachedMedia, music: attachedTrack, retentionSecs: composeRetention, muteVideo: muteVideo)
+        compose = ""; attachedMedia = []; attachedTrack = nil; composeRetention = nil; muteVideo = false
         composeFocused = false
     }
 }
@@ -1303,7 +1317,7 @@ private struct PostCard: View {
     private func togglePostMute() {
         if item.media.contains(where: isVideo) {
             if audio.activePostId != item.id {
-                audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer)
+                audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer, muteVideo: item.muteVideo)
             }
             audio.toggleVideoAudio()
         } else if item.music != nil {
@@ -1414,7 +1428,7 @@ private struct PostCard: View {
 
     private var muteButton: some View {
         Button {
-            if audio.activePostId != item.id { audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer) }
+            if audio.activePostId != item.id { audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer, muteVideo: item.muteVideo) }
             audio.toggleVideoAudio()
         } label: {
             Image(systemName: audio.activePostId == item.id && audio.videoUnmuted ? "speaker.wave.2.fill" : "speaker.slash.fill")
@@ -1451,7 +1465,7 @@ private struct PostCard: View {
     /// plays its song + the visible carousel video; an inactive post pauses everything.
     private func syncPlayback() {
         if isActive {
-            audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer)
+            audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer, muteVideo: item.muteVideo)
             audio.ensureMusicPlaying()   // resume the song if a video had paused it
             playVisibleVideo()
         } else {

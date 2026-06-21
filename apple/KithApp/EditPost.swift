@@ -8,6 +8,7 @@ struct EditPostSheet: View {
     @State private var text: String
     @State private var media: [String]
     @State private var track: TrackRefFfi?
+    @State private var muteVideo: Bool
     @State private var showMedia = false
     @State private var showSongs = false
 
@@ -16,6 +17,7 @@ struct EditPostSheet: View {
         _text = State(initialValue: item.body)
         _media = State(initialValue: item.media)
         _track = State(initialValue: item.music)
+        _muteVideo = State(initialValue: item.muteVideo)
     }
 
     var body: some View {
@@ -64,6 +66,15 @@ struct EditPostSheet: View {
                             Label("\(t.title) · \(t.artist)", systemImage: "music.note")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                        // Video audio choice (only when a video is present and no song —
+                        // a song always plays over a muted video).
+                        if track == nil && media.contains(where: { MediaStore.shared.item($0)?.kind == .video }) {
+                            Toggle(isOn: Binding(get: { !muteVideo }, set: { muteVideo = !$0 })) {
+                                Label(muteVideo ? "Video muted (silent)" : "Play video sound",
+                                      systemImage: muteVideo ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            }
+                            .tint(KithTheme.pink)
+                        }
                         Spacer(minLength: 0)
                     }
                     .padding(16)
@@ -76,7 +87,7 @@ struct EditPostSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
                         FeedStore.shared.edit(item.id, text.trimmingCharacters(in: .whitespacesAndNewlines),
-                                              media: media, music: track)
+                                              media: media, music: track, muteVideo: muteVideo)
                         dismiss()
                     }
                     .fontWeight(.semibold)

@@ -24,14 +24,18 @@ final class AudioCoordinator: ObservableObject {
     private var videoPlayer: AVPlayer?
     private var fadeTimer: Timer?
 
-    /// Begin a post's audio: start the song, keep the video muted.
-    func start(postId: String, track: TrackRefFfi?, video: AVPlayer?) {
+    /// Begin a post's audio. If a song is attached it plays (video muted). Otherwise the
+    /// author's `muteVideo` choice decides: off → the video plays its own audio; on → silent.
+    func start(postId: String, track: TrackRefFfi?, video: AVPlayer?, muteVideo: Bool = false) {
         if activePostId == postId { return }
         stop()
         activePostId = postId
-        videoUnmuted = false
         videoPlayer = video
-        video?.volume = 0
+        // Play the video's own audio only when there's no song, the author left it unmuted,
+        // and the app isn't globally silenced.
+        let playVideoAudio = (track == nil) && !muteVideo && !SettingsStore.shared.silent
+        videoUnmuted = playVideoAudio
+        video?.volume = playVideoAudio ? 1 : 0
         if let track { MusicPlayback.shared.play(track) }
     }
 

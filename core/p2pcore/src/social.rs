@@ -42,7 +42,7 @@ pub struct TrackRef {
 pub enum EventKind {
     /// A feed post: text, optional media content-refs, an optional song, and an
     /// optional sender-set retention (seconds; the post is dropped after this).
-    Post { body: String, media: Vec<String>, music: Option<TrackRef>, retention_secs: Option<u64>, story: bool },
+    Post { body: String, media: Vec<String>, music: Option<TrackRef>, retention_secs: Option<u64>, story: bool, #[serde(default)] mute_video: bool },
     /// A direct/group message (rendered as a post in a 1:1 or chat group).
     Message { body: String },
     /// A comment on a post/message — text and/or media (a rich-media reply).
@@ -50,7 +50,7 @@ pub enum EventKind {
     /// A reaction (emoji) to a post/message.
     Reaction { target: String, emoji: String },
     /// Edit the body of one of *your own* prior events.
-    Edit { target: String, body: String, media: Vec<String>, music: Option<TrackRef> },
+    Edit { target: String, body: String, media: Vec<String>, music: Option<TrackRef>, #[serde(default)] mute_video: bool },
     /// Retract ("unsend") one of *your own* prior events.
     Unsend { target: String },
 }
@@ -306,6 +306,10 @@ pub struct FeedItem {
     pub edited: bool,
     pub unsent: bool,
     pub story: bool,
+    /// Author's choice: mute the attached video's own audio (e.g. so the song plays, or
+    /// for a deliberately silent share). When false and there's no music, the video plays
+    /// its own sound.
+    pub mute_video: bool,
     pub comments: Vec<FeedComment>,
     pub reactions: Vec<ReactionGroup>,
 }
@@ -329,7 +333,7 @@ pub fn build_feed(
     // Pass 1: create posts/messages and comments.
     for e in &events {
         match &e.kind {
-            EventKind::Post { body, media, music, retention_secs, story } => {
+            EventKind::Post { body, media, music, retention_secs, story, mute_video } => {
                 if is_expired(e.created_at, *retention_secs, viewer_retention_secs, now_ms) {
                     continue;
                 }
@@ -346,6 +350,7 @@ pub fn build_feed(
                         edited: false,
                         unsent: false,
                         story: *story,
+                        mute_video: *mute_video,
                         comments: Vec::new(),
                         reactions: Vec::new(),
                     },
@@ -368,6 +373,7 @@ pub fn build_feed(
                         edited: false,
                         unsent: false,
                         story: false,
+                        mute_video: false,
                         comments: Vec::new(),
                         reactions: Vec::new(),
                     },
@@ -395,12 +401,13 @@ pub fn build_feed(
     // Pass 2: apply edits/unsends (author must match), then reactions.
     for e in &events {
         match &e.kind {
-            EventKind::Edit { target, body, media, music } => {
+            EventKind::Edit { target, body, media, music, mute_video } => {
                 if let Some(it) = items.get_mut(target) {
                     if it.author == e.author && !it.unsent {
                         it.body = body.clone();
                         it.media = media.clone();
                         it.music = music.clone();
+                        it.mute_video = *mute_video;
                         it.edited = true;
                     }
                 } else if let Some(c) = comments.get_mut(target) {

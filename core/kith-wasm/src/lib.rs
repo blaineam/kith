@@ -103,7 +103,7 @@ impl KithEngine {
         let ev = Event::new(
             &self.me.public().node_id_bytes(),
             created_at,
-            EventKind::Post { body, media: vec![], music: None, retention_secs: None, story: false },
+            EventKind::Post { body, media: vec![], music: None, retention_secs: None, story: false, mute_video: false },
         );
         self.seen.insert(ev.id.clone());
         let bytes = seal_event(&self.me, &self.group(), &ev)
@@ -159,7 +159,7 @@ impl KithEngine {
         let ev = Event::new(
             &self.me.public().node_id_bytes(),
             0,
-            EventKind::Post { body: "self-test".into(), media: vec![], music: None, retention_secs: None, story: false },
+            EventKind::Post { body: "self-test".into(), media: vec![], music: None, retention_secs: None, story: false, mute_video: false },
         );
         let g = Group::new("t", vec![self.me.public()]);
         seal_event(&self.me, &g, &ev)
