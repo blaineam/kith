@@ -83,6 +83,33 @@ endpoint, so it's the "I'd rather just pay a bucket" path, not the no-host path.
    **no inbound ports / no domain**.
 5. Later: Design B (`haven/mbx/1`) + the web WebSocket-relay client → true no-host web sync.
 
+## Cost: iroh is free — don't pay n0
+
+The **iroh library is open source (Apache-2.0/MIT)** and compiled into the app — Haven pays
+**nothing** to use it. The pricing at iroh.computer is for *optional hosted services*, not
+the library:
+
+- **Free, what we use:** the crate itself + **n0's public relay/discovery servers**
+  (best-effort, free). Relays only engage when two devices can't connect directly, and they
+  forward **encrypted bytes only** — never plaintext, just a NAT-traversal switchboard.
+- **Paid (we do NOT need):** dedicated relay server **$199/mo**, Pro monitoring **$19/mo**,
+  per-connection/metrics overages. These are for running iroh as a *monitored production
+  service at scale* — irrelevant to an embedded P2P app.
+
+If we ever want relay reliability **without** leaning on n0's free public tier (the one
+third party that sees encrypted traffic + connection metadata in the fallback path), the
+answer is **self-host an iroh relay, not pay n0**:
+
+- The **relay server is also open source** — run `iroh-relay` on a ~$5/mo VPS (or the
+  volunteer's always-on box) and point the app's relay config at it. Free software.
+- This composes with everything above: a circle's volunteer can run *both* the localhost S3
+  store **and** a private iroh relay, so the whole circle's transport — discovery, NAT
+  traversal, and the mailbox tunnel — stays on infrastructure **the circle controls**, with
+  no n0 and no public content host.
+
+Net: today Haven costs **$0** (free crate + free public relays). The only reason to spend is
+a self-hosted relay for *zero-third-party* purity, and that's a cheap VPS, not an iroh plan.
+
 ## Net effect
 
 After step 4, a circle can run its shared store on someone's phone or laptop with the store
