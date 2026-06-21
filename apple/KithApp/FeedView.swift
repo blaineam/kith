@@ -330,6 +330,20 @@ final class FeedStore: ObservableObject {
 
     /// Stories in the active circle (full-screen, ephemeral), newest first.
     var stories: [FeedItemFfi] { items.filter { $0.story && !$0.unsent && !$0.media.isEmpty } }
+
+    /// Stories grouped by author — each user's stories play together, oldest→newest,
+    /// and the groups are ordered by who posted most recently.
+    var groupedStories: [(author: String, items: [FeedItemFfi])] {
+        Dictionary(grouping: stories) { $0.authorShort }
+            .map { (author: $0.key, items: $0.value.sorted { $0.createdAt < $1.createdAt }) }
+            .sorted { ($0.items.last?.createdAt ?? 0) > ($1.items.last?.createdAt ?? 0) }
+    }
+    /// All stories in grouped order (what the viewer pages through).
+    var groupedStoriesFlat: [FeedItemFfi] { groupedStories.flatMap { $0.items } }
+    /// The index in the flat list where a given group starts.
+    func storyStartIndex(forGroup g: Int) -> Int {
+        groupedStories.prefix(g).reduce(0) { $0 + $1.items.count }
+    }
     /// The regular feed (stories live in the tray, not the main list).
     var feedItems: [FeedItemFfi] { items.filter { !$0.story } }
     func comment(_ id: String, _ body: String, _ media: [String] = []) {
@@ -948,7 +962,7 @@ struct FeedView: View {
             }
             .sheet(isPresented: $showRequests) { ConnectionRequestsView() }
             .fullScreenCover(isPresented: $showStories) {
-                StoryViewer(stories: store.stories, index: storyIndex, friendName: friendName)
+                StoryViewer(stories: store.groupedStoriesFlat, index: storyIndex, friendName: friendName)
             }
             .fullScreenCover(item: $trimmingRef) { target in
                 if let url = MediaStore.shared.storagePath(for: target.ref) {
@@ -1007,11 +1021,11 @@ struct FeedView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                ForEach(Array(store.stories.enumerated()), id: \.element.id) { idx, s in
-                    Button { storyIndex = idx; showStories = true } label: {
+                ForEach(Array(store.groupedStories.enumerated()), id: \.element.author) { gi, group in
+                    Button { storyIndex = store.storyStartIndex(forGroup: gi); showStories = true } label: {
                         VStack(spacing: 6) {
-                            storyThumb(s)
-                            Text(s.isMe ? "You" : (ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName))
+                            storyThumb(group.items.last ?? group.items[0])   // latest as the cover
+                            Text((group.items.first?.isMe ?? false) ? "You" : (ContactsStore.shared.name(forNodePrefix: group.author) ?? friendName))
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 64)
                         }
                     }

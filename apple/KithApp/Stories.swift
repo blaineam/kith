@@ -74,6 +74,19 @@ struct StoryViewer: View {
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                 Text(relativeTimeShort(s.createdAt)).font(.caption2).foregroundStyle(.white.opacity(0.7))
                 Spacer()
+                if s.isMe {
+                    Button {
+                        // Convert this story into a permanent (non-expiring) post.
+                        FeedStore.shared.post(StoryCaptions.decode(s.body).text,
+                                              media: s.media, music: s.music, retentionSecs: nil, story: false)
+                        dismiss()
+                    } label: {
+                        Label("Keep", systemImage: "bookmark.fill")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(.white.opacity(0.22), in: Capsule())
+                    }
+                }
                 Button { dismiss() } label: {
                     Image(systemName: "xmark").font(.headline).foregroundStyle(.white)
                 }
