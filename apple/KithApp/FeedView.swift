@@ -526,6 +526,7 @@ final class FeedStore: ObservableObject {
         case 12: CallManager.shared.handleHangup(payload)
         case 13: CallManager.shared.handleAudio(payload)
         case 14: handleBucketConfig(payload)
+        case 15: CallManager.shared.handleVideo(payload)
         default: break
         }
     }

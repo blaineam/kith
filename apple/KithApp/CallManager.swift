@@ -1,6 +1,8 @@
 import Foundation
 import AVFoundation
 import SwiftUI
+import UIKit
+import CoreImage
 #if !targetEnvironment(macCatalyst)
 import CallKit
 #endif
@@ -18,6 +20,7 @@ final class CallManager: ObservableObject {
     func handleAccept(_ payload: Data) {}
     func handleHangup(_ payload: Data) {}
     func handleAudio(_ payload: Data) {}
+    func handleVideo(_ payload: Data) {}
     func endCall() {}
 }
 struct CallOverlay: View { var body: some View { EmptyView() } }
@@ -38,11 +41,15 @@ final class CallManager: NSObject, ObservableObject {
     @Published private(set) var inCall = false
     @Published private(set) var connecting = false
     @Published private(set) var peerName = ""
+    /// Whether our camera is on, and the latest decoded frame from the peer.
+    @Published private(set) var videoOn = false
+    @Published private(set) var remoteFrame: UIImage?
 
     private let provider: CXProvider
     private let controller = CXCallController()
     private var callId: UUID?
     private var peerHex = ""
+    private let videoCapturer = VideoCapturer()
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -111,6 +118,36 @@ final class CallManager: NSObject, ObservableObject {
         play(payload.subdata(in: (payload.startIndex + 64)..<payload.endIndex))
     }
 
+    // MARK: - Video (optional, toggled on during a call)
+
+    /// Turn our camera on/off mid-call. Frames are captured, downscaled to ~240px,
+    /// JPEG-encoded at ~10fps, and streamed to the peer over frame type 15.
+    func toggleVideo() {
+        if videoOn {
+            videoOn = false
+            videoCapturer.stop()
+        } else {
+            guard inCall else { return }
+            videoCapturer.onFrame = { [weak self] jpeg in
+                Task { @MainActor in self?.sendVideo(jpeg) }
+            }
+            videoCapturer.start()
+            videoOn = true
+        }
+    }
+
+    private func sendVideo(_ jpeg: Data) {
+        guard inCall, !peerHex.isEmpty else { return }
+        var f = Data(myHex.utf8); f.append(jpeg)
+        FeedStore.shared.sendCallFrame(15, f, to: peerHex)
+    }
+
+    func handleVideo(_ payload: Data) {
+        guard inCall, payload.count > 64 else { return }
+        let jpeg = payload.subdata(in: (payload.startIndex + 64)..<payload.endIndex)
+        if let img = UIImage(data: jpeg) { remoteFrame = img }
+    }
+
     // MARK: - End
 
     func endCall() {
@@ -120,6 +157,8 @@ final class CallManager: NSObject, ObservableObject {
 
     private func teardown() {
         stopAudio()
+        if videoOn { videoCapturer.stop() }
+        videoOn = false; remoteFrame = nil
         callId = nil; inCall = false; connecting = false; peerHex = ""; peerName = ""
     }
 
@@ -193,26 +232,94 @@ final class CallManager: NSObject, ObservableObject {
     }
 }
 
+/// Captures front-camera frames off the main actor, throttles to ~10fps, downscales to
+/// ~240px and JPEG-encodes them, handing each frame back via `onFrame` (called on its own
+/// serial queue). Kept separate from the @MainActor CallManager so the hot capture path
+/// never touches the main thread.
+final class VideoCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private let session = AVCaptureSession()
+    private let output = AVCaptureVideoDataOutput()
+    private let queue = DispatchQueue(label: "kith.call.video")
+    private let ctx = CIContext(options: [.useSoftwareRenderer: false])
+    private var lastSend: CFTimeInterval = 0
+    var onFrame: ((Data) -> Void)?
+
+    func start() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.session.beginConfiguration()
+            self.session.sessionPreset = .low
+            if self.session.inputs.isEmpty,
+               let cam = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
+               let input = try? AVCaptureDeviceInput(device: cam), self.session.canAddInput(input) {
+                self.session.addInput(input)
+            }
+            if self.session.outputs.isEmpty {
+                self.output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+                self.output.alwaysDiscardsLateVideoFrames = true
+                self.output.setSampleBufferDelegate(self, queue: self.queue)
+                if self.session.canAddOutput(self.output) { self.session.addOutput(self.output) }
+            }
+            self.session.commitConfiguration()
+            self.session.startRunning()
+        }
+    }
+
+    func stop() { queue.async { [weak self] in if self?.session.isRunning == true { self?.session.stopRunning() } } }
+
+    func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer, from c: AVCaptureConnection) {
+        let now = CACurrentMediaTime()
+        guard now - lastSend > 0.1 else { return }          // ~10fps
+        lastSend = now
+        guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+        let ci = CIImage(cvPixelBuffer: pb)
+        let w = ci.extent.width
+        guard w > 0 else { return }
+        let scale = 240.0 / w
+        let small = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cg = ctx.createCGImage(small, from: small.extent) else { return }
+        if let jpeg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.4) { onFrame?(jpeg) }
+    }
+}
+
 /// A minimal in-call overlay (CallKit shows the system UI; this is the in-app banner).
+/// When video is on (locally or from the peer) the remote frame fills the screen.
 struct CallOverlay: View {
     @ObservedObject private var call = CallManager.shared
     var body: some View {
         if call.inCall || call.connecting {
-            VStack(spacing: 16) {
-                Spacer()
-                Image(systemName: "phone.fill.arrow.up.right").font(.system(size: 40)).foregroundStyle(.white)
-                Text(call.peerName.isEmpty ? "Call" : call.peerName).font(.title2.weight(.semibold)).foregroundStyle(.white)
-                Text(call.connecting ? "Calling…" : "Connected").font(.subheadline).foregroundStyle(.white.opacity(0.7))
-                Spacer()
-                Button { CallManager.shared.endCall() } label: {
-                    Image(systemName: "phone.down.fill").font(.title)
-                        .foregroundStyle(.white).frame(width: 70, height: 70)
-                        .background(Color.red, in: Circle())
+            ZStack {
+                if let frame = call.remoteFrame {
+                    Image(uiImage: frame).resizable().scaledToFill().ignoresSafeArea()
+                    LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.55)],
+                                   startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+                } else {
+                    KithTheme.brand.opacity(0.96).ignoresSafeArea()
                 }
-                .padding(.bottom, 60)
+                VStack(spacing: 16) {
+                    Spacer()
+                    if call.remoteFrame == nil {
+                        Image(systemName: "phone.fill.arrow.up.right").font(.system(size: 40)).foregroundStyle(.white)
+                    }
+                    Text(call.peerName.isEmpty ? "Call" : call.peerName).font(.title2.weight(.semibold)).foregroundStyle(.white)
+                    Text(call.connecting ? "Calling…" : "Connected").font(.subheadline).foregroundStyle(.white.opacity(0.8))
+                    Spacer()
+                    HStack(spacing: 36) {
+                        Button { CallManager.shared.toggleVideo() } label: {
+                            Image(systemName: call.videoOn ? "video.fill" : "video.slash.fill").font(.title2)
+                                .foregroundStyle(.white).frame(width: 64, height: 64)
+                                .background(call.videoOn ? AnyShapeStyle(.white.opacity(0.25)) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
+                        }
+                        Button { CallManager.shared.endCall() } label: {
+                            Image(systemName: "phone.down.fill").font(.title)
+                                .foregroundStyle(.white).frame(width: 70, height: 70)
+                                .background(Color.red, in: Circle())
+                        }
+                    }
+                    .padding(.bottom, 60)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(KithTheme.brand.opacity(0.96))
             .ignoresSafeArea()
             .transition(.move(edge: .bottom))
         }
