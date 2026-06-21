@@ -101,6 +101,9 @@ struct StoryViewer: View {
     // MARK: - Playback per story
 
     private func loadCurrent() {
+        // Stop the previous slide's audio so it never bleeds into the next.
+        player?.pause()
+        player = nil
         guard stories.indices.contains(index) else { return }
         let s = stories[index]
         // The author's song plays while you watch; the video is muted under it.

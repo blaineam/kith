@@ -123,20 +123,21 @@ final class MusicPlayback {
     func play(_ track: TrackRefFfi) {
         current = track
         guard !SettingsStore.shared.silent else { return }   // app is muted
-        guard !track.catalogId.isEmpty, track.catalogId != "0" else { return }
+        let ids = trackIds(track.catalogId)
+        guard ids.store != nil || ids.pid != nil else { return }
         // Playing through the system player needs media-library authorization.
         if !authed {
             MPMediaLibrary.requestAuthorization { _ in }
             authed = true
         }
-        if track.catalogId.hasPrefix("lib:"), let pid = UInt64(track.catalogId.dropFirst(4)) {
-            // Library-only song: queue by persistent id via a media query.
-            let q = MPMediaQuery.songs()
-            q.addFilterPredicate(MPMediaPropertyPredicate(value: pid, forProperty: MPMediaItemPropertyPersistentID))
-            player.setQueue(with: q)
+        if let pid = ids.pid, let item = librarySong(pid) {
+            // Exact local song — queue just this one item (no neighbors).
+            player.setQueue(with: MPMediaItemCollection(items: [item]))
+        } else if let store = ids.store {
+            // Catalog song (e.g. on a recipient's device) — queue by store id.
+            player.setQueue(with: [store])
         } else {
-            // Apple Music catalog song: queue by store id.
-            player.setQueue(with: [track.catalogId])
+            return
         }
         player.play()
         // Stories can pick a section of the song (start offset encoded as "start:<ms>").

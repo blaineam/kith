@@ -176,6 +176,16 @@ struct AdvancedView: View {
                     }
                     .buttonStyle(.plain)
                     .kithCard()
+                    NavigationLink { BlockedPeopleView() } label: {
+                        HStack {
+                            Label("Blocked people", systemImage: "hand.raised.fill")
+                                .font(.subheadline.weight(.medium))
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .kithCard()
                     identityCard
                     Button(role: .destructive) {
                         showResetConfirm = true

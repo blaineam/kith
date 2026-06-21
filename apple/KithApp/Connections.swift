@@ -47,6 +47,41 @@ final class ConnectionsStore: ObservableObject {
     func removePending(_ idHex: String) { pending.removeAll { $0.idHex == idHex } }
 }
 
+/// Manage blocked people — unblock anyone you've blocked.
+struct BlockedPeopleView: View {
+    @ObservedObject private var connections = ConnectionsStore.shared
+
+    var body: some View {
+        ZStack {
+            KithBackground()
+            if connections.blocked.isEmpty {
+                ContentUnavailableView("No one's blocked", systemImage: "hand.raised",
+                                       description: Text("People you block show up here so you can unblock them."))
+            } else {
+                List {
+                    ForEach(Array(connections.blocked).sorted(), id: \.self) { idHex in
+                        HStack {
+                            Circle().fill(.secondary.opacity(0.4)).frame(width: 34, height: 34)
+                                .overlay(Image(systemName: "person.fill").font(.caption).foregroundStyle(.white))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(ContactsStore.shared.name(forNodePrefix: idHex) ?? "Blocked person").font(.subheadline.weight(.medium))
+                                Text(String(idHex.prefix(16)) + "…").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Unblock") { connections.unblock(idHex) }
+                                .font(.subheadline.weight(.medium)).tint(KithTheme.pink)
+                        }
+                        .listRowBackground(Color.clear)
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+        }
+        .navigationTitle("Blocked")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 /// Review incoming requests: verify the safety words out-of-band, then Add or Block.
 struct ConnectionRequestsView: View {
     @ObservedObject private var connections = ConnectionsStore.shared

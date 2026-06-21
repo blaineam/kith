@@ -91,7 +91,7 @@ struct DMThreadView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 8) {
-                            ForEach(store.messages(in: circleId), id: \.id) { m in
+                            ForEach(ordered, id: \.id) { m in
                                 bubble(m).id(m.id)
                             }
                         }
@@ -159,8 +159,13 @@ struct DMThreadView: View {
         text = ""; focused = false
     }
 
+    /// Oldest → newest, so the newest message sits at the bottom (standard chat order).
+    private var ordered: [FeedItemFfi] {
+        store.messages(in: circleId).sorted { $0.createdAt < $1.createdAt }
+    }
+
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        if let last = store.messages(in: circleId).last {
+        if let last = ordered.last {
             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
         }
     }
