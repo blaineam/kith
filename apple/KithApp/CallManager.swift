@@ -127,7 +127,7 @@ final class CallManager: NSObject, ObservableObject {
             videoOn = false
             videoCapturer.stop()
         } else {
-            guard inCall else { return }
+            guard inCall || connecting else { return }   // allow turning the camera on while ringing
             videoCapturer.onFrame = { [weak self] jpeg in
                 Task { @MainActor in self?.sendVideo(jpeg) }
             }
@@ -151,8 +151,11 @@ final class CallManager: NSObject, ObservableObject {
     // MARK: - End
 
     func endCall() {
-        guard let id = callId else { return }
-        controller.request(CXTransaction(action: CXEndCallAction(call: id))) { _ in }
+        // Ask CallKit to end it, but ALSO tear down locally + tell the peer — so the call
+        // screen always dismisses even if CallKit never fulfills the action.
+        if let id = callId { controller.request(CXTransaction(action: CXEndCallAction(call: id))) { _ in } }
+        if !peerHex.isEmpty { FeedStore.shared.sendCallFrame(12, Data(myHex.utf8), to: peerHex) }
+        teardown()
     }
 
     private func teardown() {

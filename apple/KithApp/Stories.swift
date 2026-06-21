@@ -19,7 +19,6 @@ struct StoryViewer: View {
     @State private var dragOffset: CGFloat = 0      // swipe-down-to-dismiss
     @State private var replyText = ""
     @State private var replySent = false
-    @State private var kbHeight: CGFloat = 0
     @FocusState private var replyFocused: Bool
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -62,10 +61,6 @@ struct StoryViewer: View {
             progress += 0.05 / slideDuration
             if progress >= 1 { next() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-            if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { kbHeight = f.height }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in kbHeight = 0 }
         .sheet(item: $profilePeer, onDismiss: { paused = false; player?.play() }) { peer in
             NavigationStack { UserProfileView(authorHex: peer.hex, name: peer.name) }
         }
@@ -152,11 +147,11 @@ struct StoryViewer: View {
                 .background(.black.opacity(0.4), in: Capsule())
                 .padding(.bottom, 8)
             }
-            // Reply to start a DM with the author (not on your own story).
+            // Reply to start a DM with the author (not on your own story). SwiftUI lifts
+            // the focused field above the keyboard on its own — no manual offset (that
+            // double-lifted it way too high).
             if !s.isMe {
-                storyReply(s)
-                    .padding(.bottom, kbHeight > 0 ? kbHeight + 6 : 18)
-                    .animation(.easeOut(duration: 0.25), value: kbHeight)
+                storyReply(s).padding(.bottom, 18)
             } else {
                 Color.clear.frame(height: 18)
             }

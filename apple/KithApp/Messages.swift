@@ -63,7 +63,16 @@ struct DMContactPicker: View {
                 KithBackground()
                 List(contacts.contacts) { c in
                     Button { openId = store.startDM(with: c.idHex, name: c.displayName) } label: {
-                        Text(c.displayName).foregroundStyle(.primary)
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                                .frame(width: 40, height: 40)
+                                .overlay(Text(String(c.displayName.prefix(1)).uppercased())
+                                    .font(.headline).foregroundStyle(.white))
+                            Text(c.displayName).font(.body).foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
                     }
                     .listRowBackground(Color.clear)
                 }
@@ -83,6 +92,8 @@ struct DMThreadView: View {
     @ObservedObject private var store = FeedStore.shared
     @State private var text = ""
     @State private var secret = false
+    @State private var editingId: String?      // editing one of my sent messages
+    @State private var disappearSecs: UInt64?  // disappearing-message mode (nil = off)
     @State private var attachedMedia: [String] = []
     @State private var attachedTrack: TrackRefFfi?
     @State private var showMedia = false
@@ -188,6 +199,7 @@ struct DMThreadView: View {
                 }
                 HStack(spacing: 3) {
                     Text(relativeTimeShort(m.createdAt)).font(.caption2).foregroundStyle(.tertiary)
+                    if m.edited && !m.unsent { Text("edited").font(.caption2).foregroundStyle(.tertiary) }
                     if m.isMe && !m.unsent {
                         // sent → checkmark; on the circle's relay → filled (store-and-forward delivered)
                         Image(systemName: store.relayReachable ? "checkmark.circle.fill" : "checkmark")
@@ -196,12 +208,44 @@ struct DMThreadView: View {
                     }
                 }
             }
+            .contextMenu {
+                if m.isMe && !m.unsent {
+                    if !m.body.isEmpty && !SecretMessages.isSecret(m.body) {
+                        Button { beginEdit(m) } label: { Label("Edit", systemImage: "pencil") }
+                    }
+                    Button(role: .destructive) { store.deleteMessage(in: circleId, m.id) } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
             if !m.isMe { Spacer(minLength: 50) }
         }
     }
 
+    private func beginEdit(_ m: FeedItemFfi) {
+        editingId = m.id
+        text = m.body
+        secret = false
+        focused = true
+    }
+
     private var composer: some View {
         VStack(spacing: 8) {
+            if editingId != nil {
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil"); Text("Editing message").font(.caption)
+                    Spacer()
+                    Button("Cancel") { editingId = nil; text = ""; focused = false }.font(.caption)
+                }
+                .foregroundStyle(.secondary).padding(.horizontal, 6)
+            } else if let secs = disappearSecs {
+                HStack(spacing: 6) {
+                    Image(systemName: "timer"); Text("Disappears after \(Self.disappearLabel(secs))").font(.caption)
+                    Spacer()
+                    Button("Off") { disappearSecs = nil }.font(.caption)
+                }
+                .foregroundStyle(KithTheme.pink).padding(.horizontal, 6)
+            }
             if !attachedMedia.isEmpty || attachedTrack != nil {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -241,6 +285,12 @@ struct DMThreadView: View {
                     Button { showAudio = true } label: { Label("Voice message", systemImage: "mic") }
                     Button { showSongs = true } label: { Label("Song", systemImage: "music.note") }
                     Button { secret.toggle() } label: { Label(secret ? "Secret: on" : "Send secretly", systemImage: secret ? "lock.fill" : "lock") }
+                    Menu {
+                        Button { disappearSecs = nil } label: { Label("Off", systemImage: disappearSecs == nil ? "checkmark" : "circle") }
+                        Button { disappearSecs = 3_600 } label: { Text("After 1 hour") }
+                        Button { disappearSecs = 86_400 } label: { Text("After 1 day") }
+                        Button { disappearSecs = 604_800 } label: { Text("After 1 week") }
+                    } label: { Label("Disappearing", systemImage: "timer") }
                 } label: {
                     Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(KithTheme.pink)
                 }
@@ -264,10 +314,26 @@ struct DMThreadView: View {
 
     private func send() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let id = editingId {   // saving an edit
+            guard !t.isEmpty else { return }
+            store.editMessage(in: circleId, id, t)
+            editingId = nil; text = ""; focused = false
+            return
+        }
         guard !t.isEmpty || !attachedMedia.isEmpty || attachedTrack != nil else { return }
         let body = secret ? SecretMessages.encode(t) : t
-        store.sendMessage(to: circleId, body, media: attachedMedia, music: attachedTrack)
+        store.sendMessage(to: circleId, body, media: attachedMedia, music: attachedTrack, retentionSecs: disappearSecs)
         text = ""; secret = false; attachedMedia = []; attachedTrack = nil; focused = false
+        // disappearSecs is sticky (stays on for the conversation until you turn it Off).
+    }
+
+    static func disappearLabel(_ secs: UInt64) -> String {
+        switch secs {
+        case ..<3_600: return "\(secs / 60)m"
+        case ..<86_400: return "\(secs / 3_600)h"
+        case ..<604_800: return "\(secs / 86_400)d"
+        default: return "\(secs / 604_800)w"
+        }
     }
 
     /// Oldest → newest, so the newest message sits at the bottom (standard chat order).

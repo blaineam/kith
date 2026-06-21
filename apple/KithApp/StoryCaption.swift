@@ -8,13 +8,12 @@ enum StoryCaptions {
         .white, .black, KithTheme.pink, KithTheme.violet, KithTheme.amber,
         .red, .orange, .green, .blue, .cyan, .yellow, .mint,
     ]
-    static let fonts: [Font] = [
-        .title2.weight(.bold),
-        .system(.title2, design: .serif).weight(.bold),
-        .system(.title2, design: .rounded).weight(.heavy),
-        .system(.title2, design: .monospaced).weight(.bold),
-        .system(.title, design: .default).weight(.black),
+    /// Typography choices (design + weight); the point size is scaled by `Spec.size`.
+    static let fontStyles: [(design: Font.Design, weight: Font.Weight)] = [
+        (.default, .bold), (.serif, .bold), (.rounded, .heavy), (.monospaced, .bold), (.default, .black),
     ]
+    static let minSize = 0.6
+    static let maxSize = 1.9
 
     struct Spec: Equatable {
         var color = 0
@@ -24,12 +23,17 @@ enum StoryCaptions {
         /// dragged it. Defaults to centred.
         var x = 0.5
         var y = 0.5
-        mutating func cycleFont() { font = (font + 1) % fonts.count }
+        /// Caption size scale the author sets while composing (base 28pt × size).
+        var size = 1.0
+        mutating func cycleFont() { font = (font + 1) % fontStyles.count }
     }
 
     static func textColor(_ s: Spec) -> Color { s.highlight ? contrast(s.color) : colors[idx(s.color)] }
     static func bgColor(_ s: Spec) -> Color? { s.highlight ? colors[idx(s.color)] : nil }
-    static func font(_ s: Spec) -> Font { fonts[min(max(0, s.font), fonts.count - 1)] }
+    static func font(_ s: Spec) -> Font {
+        let style = fontStyles[min(max(0, s.font), fontStyles.count - 1)]
+        return .system(size: 28 * s.size, weight: style.weight, design: style.design)
+    }
 
     private static func idx(_ i: Int) -> Int { min(max(0, i), colors.count - 1) }
     private static func contrast(_ i: Int) -> Color {
@@ -40,8 +44,8 @@ enum StoryCaptions {
     static func encode(_ caption: String, _ s: Spec) -> String {
         let t = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return "" }
-        let pos = String(format: "%.3f,%.3f", s.x, s.y)
-        return "\u{1}\(s.color),\(s.font),\(s.highlight ? 1 : 0),\(pos)\u{1}\(t)"
+        let extra = String(format: "%.3f,%.3f,%.3f", s.x, s.y, s.size)
+        return "\u{1}\(s.color),\(s.font),\(s.highlight ? 1 : 0),\(extra)\u{1}\(t)"
     }
     static func decode(_ body: String) -> (text: String, spec: Spec) {
         if body.hasPrefix("\u{1}") {
@@ -51,6 +55,7 @@ enum StoryCaptions {
                 if n.count >= 3, let c = Int(n[0]), let f = Int(n[1]), let h = Int(n[2]) {
                     var spec = Spec(color: c, font: f, highlight: h == 1)
                     if n.count >= 5, let x = Double(n[3]), let y = Double(n[4]) { spec.x = x; spec.y = y }
+                    if n.count >= 6, let sz = Double(n[5]) { spec.size = sz }
                     return (String(parts[1]), spec)
                 }
             }

@@ -379,7 +379,13 @@ struct StoryComposerView: View {
                         .font(.title3).foregroundStyle(.white)
                         .frame(width: 42, height: 42).background(.black.opacity(0.4), in: Circle())
                 }
-                Spacer()
+                // Size slider — the caption scale travels to viewers in the spec.
+                HStack(spacing: 8) {
+                    Image(systemName: "textformat.size.smaller").font(.caption).foregroundStyle(.white)
+                    Slider(value: $captionSpec.size, in: StoryCaptions.minSize...StoryCaptions.maxSize)
+                        .tint(KithTheme.pink)
+                    Image(systemName: "textformat.size.larger").font(.body).foregroundStyle(.white)
+                }
             }
             .padding(.horizontal, 16)
             CaptionColorRow(spec: $captionSpec)

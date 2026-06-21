@@ -258,13 +258,26 @@ final class FeedStore: ObservableObject {
         sendMessage(to: circleId, body, media: [], music: nil)
     }
 
-    /// Send a DM with optional media (photos/videos/audio) and a song.
-    func sendMessage(to circleId: String, _ body: String, media: [String], music: TrackRefFfi?) {
-        guard let social, let env = try? social.post(circleId: circleId, body: body, media: media, music: music, retentionSecs: nil, story: false, muteVideo: false, createdAt: now()) else { return }
+    /// Send a DM with optional media (photos/videos/audio), a song, and optional
+    /// disappearing retention (seconds; the message auto-deletes after that).
+    func sendMessage(to circleId: String, _ body: String, media: [String], music: TrackRefFfi?, retentionSecs: UInt64? = nil) {
+        guard let social, let env = try? social.post(circleId: circleId, body: body, media: media, music: music, retentionSecs: retentionSecs, story: false, muteVideo: false, createdAt: now()) else { return }
         broadcastEvent(circleId, env)
         postTick += 1
         let circle = circleId
         for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) } }
+    }
+
+    /// Edit one of your own messages in a specific (DM) circle.
+    func editMessage(in circleId: String, _ id: String, _ body: String) {
+        guard let social, let env = try? social.edit(circleId: circleId, target: id, body: body, media: [], music: nil, muteVideo: false, createdAt: now()) else { return }
+        broadcastEvent(circleId, env); postTick += 1; refresh()
+    }
+
+    /// Delete (retract) one of your own messages in a specific (DM) circle.
+    func deleteMessage(in circleId: String, _ id: String) {
+        guard let social, let env = try? social.unsend(circleId: circleId, target: id, createdAt: now()) else { return }
+        broadcastEvent(circleId, env); postTick += 1; refresh()
     }
 
     /// Node ids in a circle for whom we hold keys (handshake complete).
