@@ -3,13 +3,13 @@
 <!-- Edit, then sync: rocket meta Kith   (preview first: rocket meta Kith --dry-run) -->
 
 ## name
-Kith Community
+Haven
 
 ## subtitle
 Encrypted circles, no servers
 
 ## description
-Kith is a private social network for the people who actually matter — your kith and kin. No ads. No tracking. No algorithm deciding what you see. No company server holding your memories.
+Haven is a private social network for the people who actually matter — your kith and kin. No ads. No tracking. No algorithm deciding what you see. No company server holding your memories.
 
 Everything you share is end-to-end encrypted with hybrid post-quantum cryptography and travels directly between your devices — over the internet, or over Bluetooth and Wi‑Fi when you're together offline. Even we can't read it.
 
@@ -21,7 +21,7 @@ Everything you share is end-to-end encrypted with hybrid post-quantum cryptograp
 • Bring your own storage — keep memories alive on your own iCloud or S3 bucket
 • No account, no phone number, no email — your identity lives only on your device
 
-Kith is a stronghold for the people you love. It's built so that no one — not advertisers, not data brokers, not even the people who made it — can get between you and your circle.
+Haven is a stronghold for the people you love. It's built so that no one — not advertisers, not data brokers, not even the people who made it — can get between you and your circle.
 
 ## keywords
 private,encrypted,family,friends,circle,secure,messaging,offline,stories,calls,no ads,quantum
@@ -52,7 +52,7 @@ https://wemiller.com/
 https://wemiller.com/privacy/
 
 ## review_notes
-Kith is a serverless, peer-to-peer, end-to-end encrypted social app for small private circles. There is no central server and no login. To exercise it: on first launch the app generates a local identity. Tap "Invite a friend" to view your QR/invite link. Two devices add each other (scan the QR or open the invite link), then posts, photos, direct messages, stories, and voice calls travel directly device-to-device over the internet or, when nearby and offline, over Bluetooth/Wi-Fi. No account, phone number, or email is required or collected. All content is encrypted on-device before it ever leaves.
+Haven is a serverless, peer-to-peer, end-to-end encrypted social app for small private circles. There is no central server and no login. To exercise it: on first launch the app generates a local identity. Tap "Invite a friend" to view your QR/invite link. Two devices add each other (scan the QR or open the invite link), then posts, photos, direct messages, stories, and voice calls travel directly device-to-device over the internet or, when nearby and offline, over Bluetooth/Wi-Fi. No account, phone number, or email is required or collected. All content is encrypted on-device before it ever leaves.
 
 ## review_first_name
 Blaine
