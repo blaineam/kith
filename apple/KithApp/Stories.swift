@@ -13,26 +13,38 @@ struct StoryViewer: View {
     @State private var progress = 0.0
     @State private var player: AVPlayer?
     @State private var slideDuration = 5.0   // photos 5s; videos last their clip (≤15s)
+    @State private var profilePeer: StoryProfile?   // tapped a sharer → peek their profile
+    @State private var paused = false               // paused while the profile sheet is up
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
+
+    struct StoryProfile: Identifiable { let id = UUID(); let hex: String; let name: String }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if stories.indices.contains(index) {
                 content(stories[index]).ignoresSafeArea()
-                overlay(stories[index])
             }
+            // Prev/next tap zones — kept BELOW the overlay so the header's tappable
+            // name/avatar + buttons receive their taps first.
             HStack(spacing: 0) {
                 Color.clear.contentShape(Rectangle()).onTapGesture { prev() }
                 Color.clear.contentShape(Rectangle()).onTapGesture { next() }
+            }
+            if stories.indices.contains(index) {
+                overlay(stories[index])
             }
         }
         .statusBarHidden()
         .onAppear { loadCurrent() }
         .onDisappear { teardown() }
         .onReceive(tick) { _ in
+            guard !paused else { return }
             progress += 0.05 / slideDuration
             if progress >= 1 { next() }
+        }
+        .sheet(item: $profilePeer, onDismiss: { paused = false; player?.play() }) { peer in
+            NavigationStack { UserProfileView(authorHex: peer.hex, name: peer.name) }
         }
     }
 
@@ -69,9 +81,23 @@ struct StoryViewer: View {
             }
             .padding(.horizontal).padding(.top, 12)
             HStack(spacing: 8) {
-                sharerAvatar(s)
-                Text(s.isMe ? "Your story" : (ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName))
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                if s.isMe {
+                    sharerAvatar(s)
+                    Text("Your story").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                } else {
+                    let name = ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName
+                    Button {
+                        paused = true
+                        player?.pause()
+                        profilePeer = StoryProfile(hex: s.authorShort, name: name)
+                    } label: {
+                        HStack(spacing: 8) {
+                            sharerAvatar(s)
+                            Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
                 Text(relativeTimeShort(s.createdAt)).font(.caption2).foregroundStyle(.white.opacity(0.7))
                 Spacer()
                 if s.isMe {

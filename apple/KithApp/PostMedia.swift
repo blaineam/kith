@@ -7,32 +7,43 @@ struct ZoomTarget: Identifiable {
     let index: Int
 }
 
-/// Full-screen media viewer: swipe between a post's photos/videos, pinch + drag to
-/// zoom, double-tap to zoom, swipe down to dismiss.
+/// Full-screen media viewer: swipe between a post's photos/videos, pinch + double-tap to
+/// zoom, pan a zoomed photo, swipe down to dismiss.
+///
+/// Gesture model: at scale 1 the per-page pan gesture is masked off (`.subviews`), so the
+/// TabView pages horizontally and the dismiss drag handles vertical swipes. When a page is
+/// zoomed it reports `zoomed = true`, which (a) activates that page's pan and (b) disables
+/// the dismiss drag, so panning a zoomed image never paginates or dismisses.
 struct MediaZoomViewer: View {
     let refs: [String]
     @State var index: Int
     @Environment(\.dismiss) private var dismiss
     @State private var dismissOffset: CGFloat = 0
+    @State private var zoomed = false
 
     var body: some View {
         ZStack {
             Color.black.opacity(1 - min(0.6, abs(dismissOffset) / 600)).ignoresSafeArea()
             TabView(selection: $index) {
                 ForEach(Array(refs.enumerated()), id: \.offset) { i, ref in
-                    ZoomablePage(ref: ref).tag(i)
+                    ZoomablePage(ref: ref, zoomed: $zoomed).tag(i)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: refs.count > 1 ? .automatic : .never))
             .offset(y: dismissOffset)
             .simultaneousGesture(
-                DragGesture(minimumDistance: 20)
-                    .onChanged { v in if abs(v.translation.height) > abs(v.translation.width) { dismissOffset = v.translation.height } }
+                DragGesture(minimumDistance: 15)
+                    .onChanged { v in
+                        guard !zoomed, abs(v.translation.height) > abs(v.translation.width) else { return }
+                        dismissOffset = v.translation.height
+                    }
                     .onEnded { v in
-                        if abs(v.translation.height) > 140 { dismiss() }
+                        guard !zoomed else { return }
+                        if abs(v.translation.height) > 140 && abs(v.translation.height) > abs(v.translation.width) { dismiss() }
                         else { withAnimation(.spring()) { dismissOffset = 0 } }
                     }
             )
+            .onChange(of: index) { _, _ in zoomed = false }   // each page starts un-zoomed
 
             VStack {
                 HStack {
@@ -50,9 +61,11 @@ struct MediaZoomViewer: View {
     }
 }
 
-/// One pinch/drag-zoomable photo or (muted-tap-to-play) video.
+/// One pinch/drag-zoomable photo or (muted-tap-to-play) video. Reports its zoom state up so
+/// the pager can decide whether to page/dismiss or let this page pan.
 private struct ZoomablePage: View {
     let ref: String
+    @Binding var zoomed: Bool
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
     @State private var offset: CGSize = .zero
@@ -66,11 +79,14 @@ private struct ZoomablePage: View {
                 } else if let img = m.image {
                     Image(uiImage: img).resizable().scaledToFit()
                         .scaleEffect(scale).offset(offset)
-                        .gesture(zoomGesture.simultaneously(with: panGesture))
+                        .gesture(zoomGesture)
+                        // Pan only when zoomed; masked to .subviews otherwise so the TabView
+                        // can page and the dismiss drag can fire.
+                        .gesture(panGesture, including: scale > 1 ? .all : .subviews)
                         .onTapGesture(count: 2) {
                             withAnimation(.spring()) {
-                                if scale > 1 { scale = 1; lastScale = 1; offset = .zero; lastOffset = .zero }
-                                else { scale = 2.5; lastScale = 2.5 }
+                                if scale > 1 { resetZoom() }
+                                else { scale = 2.5; lastScale = 2.5; zoomed = true }
                             }
                         }
                 }
@@ -79,10 +95,17 @@ private struct ZoomablePage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func resetZoom() {
+        scale = 1; lastScale = 1; offset = .zero; lastOffset = .zero; zoomed = false
+    }
+
     private var zoomGesture: some Gesture {
         MagnificationGesture()
-            .onChanged { v in scale = max(1, min(5, lastScale * v)) }
-            .onEnded { _ in lastScale = scale; if scale <= 1 { withAnimation { offset = .zero; lastOffset = .zero } } }
+            .onChanged { v in scale = max(1, min(5, lastScale * v)); zoomed = scale > 1.01 }
+            .onEnded { _ in
+                lastScale = scale
+                if scale <= 1 { withAnimation { resetZoom() } } else { zoomed = true }
+            }
     }
     private var panGesture: some Gesture {
         DragGesture()

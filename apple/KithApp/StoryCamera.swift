@@ -250,6 +250,7 @@ struct StoryComposerView: View {
     @State private var captionSpec = StoryCaptions.Spec()
     @State private var musicStartMs = 0.0
     @State private var songPreviewing = false
+    @State private var kbHeight: CGFloat = 0   // live keyboard height (the editor ignores the safe area)
     @FocusState private var captionFocused: Bool
 
     var body: some View {
@@ -264,7 +265,8 @@ struct StoryComposerView: View {
                     else { editingCaption = true }
                 }
 
-            // Caption overlay (Instagram-style: tap to type, sits over the media)
+            // Caption overlay (Instagram-style: tap to type, sits over the media).
+            // Centered, but lifted into the visible area above the keyboard while editing.
             if editingCaption {
                 VStack {
                     Spacer()
@@ -284,6 +286,8 @@ struct StoryComposerView: View {
                         }
                     Spacer()
                 }
+                .offset(y: -kbHeight / 2)
+                .animation(.easeOut(duration: 0.25), value: kbHeight)
             } else if !caption.isEmpty {
                 VStack {
                     Spacer()
@@ -304,8 +308,14 @@ struct StoryComposerView: View {
                 }
                 if !editingCaption { shareBar }
             }
+            .padding(.bottom, editingCaption ? kbHeight : 0)   // keep the style controls above the keyboard
+            .animation(.easeOut(duration: 0.25), value: kbHeight)
         }
         .statusBarHidden()
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { kbHeight = f.height }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in kbHeight = 0 }
         .sheet(isPresented: $showSongs) {
             SongPicker { t in track = t }
         }
