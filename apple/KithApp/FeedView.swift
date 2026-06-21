@@ -1673,7 +1673,13 @@ struct UserProfileView: View {
     let authorHex: String
     let name: String
     @ObservedObject private var store = FeedStore.shared
+    @ObservedObject private var contacts = ContactsStore.shared
     @State private var showStories = false
+    @State private var showNickname = false
+    @State private var nicknameDraft = ""
+
+    /// Reflects a nickname edit live (the passed `name` is a snapshot).
+    private var resolvedName: String { contacts.name(forNodePrefix: authorHex) ?? name }
 
     private var posts: [FeedItemFfi] {
         store.items.filter { $0.authorShort == authorHex && !$0.story && !$0.unsent }
@@ -1691,8 +1697,13 @@ struct UserProfileView: View {
                     VStack(spacing: 8) {
                         Circle().fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
                             .frame(width: 76, height: 76)
-                            .overlay(Text(String(name.prefix(1))).font(.title.bold()).foregroundStyle(.white))
-                        Text(name).font(.title3.bold())
+                            .overlay(Text(String(resolvedName.prefix(1))).font(.title.bold()).foregroundStyle(.white))
+                        HStack(spacing: 6) {
+                            Text(resolvedName).font(.title3.bold())
+                            Button { nicknameDraft = contacts.contacts.first { $0.idHex.hasPrefix(authorHex) }?.nickname ?? ""; showNickname = true } label: {
+                                Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                         Text("\(posts.count) post\(posts.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.bottom, 4)
@@ -1731,11 +1742,17 @@ struct UserProfileView: View {
                 .padding(16)
             }
         }
-        .navigationTitle(name)
+        .navigationTitle(resolvedName)
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showStories) {
-            StoryViewer(stories: userStories, index: 0, friendName: name)
+            StoryViewer(stories: userStories, index: 0, friendName: resolvedName)
         }
+        .alert("Nickname", isPresented: $showNickname) {
+            TextField("Nickname", text: $nicknameDraft)
+            Button("Save") { ContactsStore.shared.setNickname(idHex: authorHex, nicknameDraft) }
+            Button("Clear", role: .destructive) { ContactsStore.shared.setNickname(idHex: authorHex, "") }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Set how \(name) shows up for you.") }
     }
 }
 

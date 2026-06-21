@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import UIKit
 
 /// Full-screen story viewer: progress bars, auto-advance, tap left/right to navigate,
 /// captions, and the song the author attached (played while you watch).
@@ -15,34 +16,56 @@ struct StoryViewer: View {
     @State private var slideDuration = 5.0   // photos 5s; videos last their clip (≤15s)
     @State private var profilePeer: StoryProfile?   // tapped a sharer → peek their profile
     @State private var paused = false               // paused while the profile sheet is up
+    @State private var dragOffset: CGFloat = 0      // swipe-down-to-dismiss
+    @State private var replyText = ""
+    @State private var replySent = false
+    @State private var kbHeight: CGFloat = 0
+    @FocusState private var replyFocused: Bool
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     struct StoryProfile: Identifiable { let id = UUID(); let hex: String; let name: String }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            if stories.indices.contains(index) {
-                content(stories[index]).ignoresSafeArea()
+            Color.black.opacity(1 - min(0.6, dragOffset / 500)).ignoresSafeArea()
+            Group {
+                if stories.indices.contains(index) {
+                    content(stories[index]).ignoresSafeArea()
+                }
+                // Prev/next tap zones — kept BELOW the overlay so the header's tappable
+                // name/avatar + buttons receive their taps first.
+                HStack(spacing: 0) {
+                    Color.clear.contentShape(Rectangle()).onTapGesture { prev() }
+                    Color.clear.contentShape(Rectangle()).onTapGesture { next() }
+                }
+                if stories.indices.contains(index) {
+                    positionedCaption(stories[index])
+                    overlay(stories[index])
+                }
             }
-            // Prev/next tap zones — kept BELOW the overlay so the header's tappable
-            // name/avatar + buttons receive their taps first.
-            HStack(spacing: 0) {
-                Color.clear.contentShape(Rectangle()).onTapGesture { prev() }
-                Color.clear.contentShape(Rectangle()).onTapGesture { next() }
-            }
-            if stories.indices.contains(index) {
-                overlay(stories[index])
-            }
+            .offset(y: dragOffset)
         }
         .statusBarHidden()
+        // Swipe down anywhere on the story to dismiss.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24)
+                .onChanged { v in if v.translation.height > 0 && abs(v.translation.height) > abs(v.translation.width) { dragOffset = v.translation.height } }
+                .onEnded { v in
+                    if v.translation.height > 130 { dismiss() }
+                    else { withAnimation(.spring()) { dragOffset = 0 } }
+                }
+        )
         .onAppear { loadCurrent() }
         .onDisappear { teardown() }
         .onReceive(tick) { _ in
-            guard !paused else { return }
+            guard !paused, !replyFocused else { return }
             progress += 0.05 / slideDuration
             if progress >= 1 { next() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            if let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { kbHeight = f.height }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in kbHeight = 0 }
         .sheet(item: $profilePeer, onDismiss: { paused = false; player?.play() }) { peer in
             NavigationStack { UserProfileView(authorHex: peer.hex, name: peer.name) }
         }
@@ -129,11 +152,72 @@ struct StoryViewer: View {
                 .background(.black.opacity(0.4), in: Capsule())
                 .padding(.bottom, 8)
             }
-            if !s.body.isEmpty {
-                let decoded = StoryCaptions.decode(s.body)
-                StyledCaption(text: decoded.text, spec: decoded.spec)
-                    .padding(.horizontal, 24).padding(.bottom, 36)
+            // Reply to start a DM with the author (not on your own story).
+            if !s.isMe {
+                storyReply(s)
+                    .padding(.bottom, kbHeight > 0 ? kbHeight + 6 : 18)
+                    .animation(.easeOut(duration: 0.25), value: kbHeight)
+            } else {
+                Color.clear.frame(height: 18)
             }
+        }
+    }
+
+    /// The caption rendered where the author dragged it (position travels in the spec).
+    @ViewBuilder private func positionedCaption(_ s: FeedItemFfi) -> some View {
+        if !s.body.isEmpty {
+            let decoded = StoryCaptions.decode(s.body)
+            GeometryReader { geo in
+                StyledCaption(text: decoded.text, spec: decoded.spec)
+                    .padding(.horizontal, 12)
+                    .position(x: decoded.spec.x * geo.size.width, y: decoded.spec.y * geo.size.height)
+            }
+            .allowsHitTesting(false)   // never blocks taps/swipes
+        }
+    }
+
+    private func storyReply(_ s: FeedItemFfi) -> some View {
+        let name = ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName
+        return HStack(spacing: 10) {
+            TextField("", text: $replyText, prompt: Text("Reply to \(name)…").foregroundColor(.white.opacity(0.7)))
+                .foregroundStyle(.white).tint(.white)
+                .focused($replyFocused)
+                .submitLabel(.send)
+                .onSubmit { sendReply(to: s) }
+                .padding(.horizontal, 16).padding(.vertical, 11)
+                .background(.white.opacity(0.14), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.25)))
+            if !replyText.trimmingCharacters(in: .whitespaces).isEmpty {
+                Button { sendReply(to: s) } label: {
+                    Image(systemName: "paperplane.fill").foregroundStyle(.white).padding(10)
+                        .background(KithTheme.brand, in: Circle())
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .overlay(alignment: .top) {
+            if replySent {
+                Text("Sent ✓").font(.caption.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .offset(y: -34)
+            }
+        }
+    }
+
+    private func sendReply(to s: FeedItemFfi) {
+        let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let name = ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName
+        guard let idHex = ContactsStore.shared.idHex(forNodePrefix: s.authorShort) else { return }
+        let dm = FeedStore.shared.startDM(with: idHex, name: name)
+        FeedStore.shared.sendMessage(to: dm, text)
+        replyText = ""
+        replyFocused = false
+        withAnimation { replySent = true }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await MainActor.run { withAnimation { replySent = false } }
         }
     }
 

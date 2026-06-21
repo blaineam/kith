@@ -20,6 +20,10 @@ enum StoryCaptions {
         var color = 0
         var font = 0
         var highlight = false
+        /// Normalized caption position (0…1) so the viewer renders it where the author
+        /// dragged it. Defaults to centred.
+        var x = 0.5
+        var y = 0.5
         mutating func cycleFont() { font = (font + 1) % fonts.count }
     }
 
@@ -35,15 +39,19 @@ enum StoryCaptions {
 
     static func encode(_ caption: String, _ s: Spec) -> String {
         let t = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? "" : "\u{1}\(s.color),\(s.font),\(s.highlight ? 1 : 0)\u{1}\(t)"
+        guard !t.isEmpty else { return "" }
+        let pos = String(format: "%.3f,%.3f", s.x, s.y)
+        return "\u{1}\(s.color),\(s.font),\(s.highlight ? 1 : 0),\(pos)\u{1}\(t)"
     }
     static func decode(_ body: String) -> (text: String, spec: Spec) {
         if body.hasPrefix("\u{1}") {
             let parts = body.dropFirst().split(separator: "\u{1}", maxSplits: 1, omittingEmptySubsequences: false)
             if parts.count == 2 {
                 let n = parts[0].split(separator: ",")
-                if n.count == 3, let c = Int(n[0]), let f = Int(n[1]), let h = Int(n[2]) {
-                    return (String(parts[1]), Spec(color: c, font: f, highlight: h == 1))
+                if n.count >= 3, let c = Int(n[0]), let f = Int(n[1]), let h = Int(n[2]) {
+                    var spec = Spec(color: c, font: f, highlight: h == 1)
+                    if n.count >= 5, let x = Double(n[3]), let y = Double(n[4]) { spec.x = x; spec.y = y }
+                    return (String(parts[1]), spec)
                 }
             }
         }

@@ -10,11 +10,18 @@ struct Contact: Identifiable, Codable, Equatable {
     /// bundle they send during the handshake (MITM guard). Optional for older contacts.
     var verificationHex: String?
     /// The name they signed and sent in the handshake — the owner has authority over
-    /// this, so it's preferred for display over your free-text nickname.
+    /// this, so it's preferred over the handshake nickname.
     var authoritativeName: String?
+    /// A nickname *you* deliberately set for this person. Highest priority — it's how
+    /// you've chosen to see them, so it overrides even their signed name.
+    var nickname: String?
 
-    /// What to show: the owner's signed name if we have it, else your nickname.
-    var displayName: String { authoritativeName ?? name }
+    /// What to show: your explicit nickname, else the owner's signed name, else the
+    /// name from the original handshake.
+    var displayName: String {
+        if let n = nickname, !n.isEmpty { return n }
+        return authoritativeName ?? name
+    }
 }
 
 /// Your circle, persisted locally on this device.
@@ -52,6 +59,19 @@ final class ContactsStore: ObservableObject {
               contacts[i].authoritativeName != authName else { return }
         contacts[i].authoritativeName = authName
         save()
+    }
+
+    /// Set (or clear, with "") a nickname you chose for this person.
+    func setNickname(idHex: String, _ nickname: String) {
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let i = contacts.firstIndex(where: { $0.idHex == idHex || $0.idHex.hasPrefix(idHex) }) else { return }
+        contacts[i].nickname = trimmed.isEmpty ? nil : trimmed
+        save()
+    }
+
+    /// The full node id for a (possibly short) prefix — needed to start a DM from a story.
+    func idHex(forNodePrefix prefix: String) -> String? {
+        contacts.first { $0.idHex == prefix || $0.idHex.hasPrefix(prefix) }?.idHex
     }
 
     func remove(_ contact: Contact) {

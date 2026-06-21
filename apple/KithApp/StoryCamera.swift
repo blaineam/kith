@@ -289,12 +289,19 @@ struct StoryComposerView: View {
                 .offset(y: -kbHeight / 2)
                 .animation(.easeOut(duration: 0.25), value: kbHeight)
             } else if !caption.isEmpty {
-                VStack {
-                    Spacer()
+                // Draggable: position the caption anywhere; the spot travels with the story.
+                GeometryReader { geo in
                     StyledCaption(text: caption, spec: captionSpec)
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, 12)
+                        .position(x: captionSpec.x * geo.size.width, y: captionSpec.y * geo.size.height)
+                        .gesture(
+                            DragGesture()
+                                .onChanged { v in
+                                    captionSpec.x = min(max(0.12, v.location.x / geo.size.width), 0.88)
+                                    captionSpec.y = min(max(0.10, v.location.y / geo.size.height), 0.90)
+                                }
+                        )
                         .onTapGesture { editingCaption = true }
-                    Spacer()
                 }
             }
 
