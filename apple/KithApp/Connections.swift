@@ -20,13 +20,22 @@ final class ConnectionsStore: ObservableObject {
 
     @Published private(set) var pending: [ConnectionRequest] = []
     @Published private(set) var blocked: Set<String> = []
+    /// People we deliberately did NOT share past history with — they see new posts only.
+    @Published private(set) var noHistory: Set<String> = []
 
     private let d = UserDefaults.standard
     private let blockedKey = "kith.blocked"
+    private let noHistoryKey = "kith.noHistory"
 
     private init() {
         if let arr = d.array(forKey: blockedKey) as? [String] { blocked = Set(arr) }
+        if let arr = d.array(forKey: noHistoryKey) as? [String] { noHistory = Set(arr) }
     }
+
+    func setNoHistory(_ idHex: String) {
+        noHistory.insert(idHex); d.set(Array(noHistory), forKey: noHistoryKey)
+    }
+    func sharesHistory(_ idHex: String) -> Bool { !noHistory.contains(idHex) }
 
     func isBlocked(_ idHex: String) -> Bool { blocked.contains(idHex) }
 
@@ -87,6 +96,7 @@ struct ConnectionRequestsView: View {
     @ObservedObject private var connections = ConnectionsStore.shared
     @ObservedObject private var store = FeedStore.shared
     @Environment(\.dismiss) private var dismiss
+    @State private var approveTarget: ConnectionRequest?
 
     var body: some View {
         NavigationStack {
@@ -104,7 +114,7 @@ struct ConnectionRequestsView: View {
                                 Text("Check these safety words match what they see before adding.")
                                     .font(.caption2).foregroundStyle(.secondary)
                                 HStack(spacing: 12) {
-                                    Button { store.approveConnection(req) } label: {
+                                    Button { approveTarget = req } label: {
                                         Label("Add", systemImage: "checkmark.circle.fill")
                                     }
                                     .buttonStyle(.borderedProminent).tint(KithTheme.pink)
@@ -124,6 +134,15 @@ struct ConnectionRequestsView: View {
             .navigationTitle("Connection requests")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .confirmationDialog("Share your past posts with \(approveTarget?.name ?? "them")?",
+                                isPresented: Binding(get: { approveTarget != nil }, set: { if !$0 { approveTarget = nil } }),
+                                titleVisibility: .visible) {
+                Button("Add & share history") { if let r = approveTarget { store.approveConnection(r, shareHistory: true) } }
+                Button("Add — new posts only") { if let r = approveTarget { store.approveConnection(r, shareHistory: false) } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Choose whether they can see what you've already shared, or only what you post from now on.")
+            }
         }
     }
 }

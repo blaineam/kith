@@ -188,7 +188,7 @@ final class FeedStore: ObservableObject {
 
     /// Approve a pending request: add them as a contact, complete the handshake (add
     /// their bundle, Hello back, back-fill posts), then clear the request.
-    func approveConnection(_ req: ConnectionRequest) {
+    func approveConnection(_ req: ConnectionRequest, shareHistory: Bool) {
         guard let social else { return }
         let vhex = try? social.bundleVerificationHex(bundle: req.bundle)
         ContactsStore.shared.add(name: req.name, idHex: req.idHex, verificationHex: vhex)
@@ -196,13 +196,17 @@ final class FeedStore: ObservableObject {
         _ = try? social.addContactBundle(circleId: "default", bundle: req.bundle)
         ContactsStore.shared.setAuthoritativeName(idHex: req.idHex, req.name)
         lastHeard[req.idHex] = Date()
+        if !shareHistory { ConnectionsStore.shared.setNoHistory(req.idHex) }
         persist(); refreshCircles()
         if let hello = helloPayload(circleId: "default", circleName: "Your circle") {
             sendIroh(0, hello, to: req.idHex); nearbyBroadcast(0, hello)
         }
-        for env in social.syncEnvelopes(circleId: "default") {
-            sendIroh(1, eventPayload("default", env), to: req.idHex)
-            nearbyBroadcast(1, eventPayload("default", env))
+        if shareHistory {
+            // Back-fill your past posts to them (and ensure the shared store has them).
+            for env in social.syncEnvelopes(circleId: "default") {
+                sendIroh(1, eventPayload("default", env), to: req.idHex)
+                Task { await SharedStore.uploadEvent(circleId: "default", env: env) }
+            }
         }
         ConnectionsStore.shared.removePending(req.idHex)
         refresh()
@@ -393,7 +397,10 @@ final class FeedStore: ObservableObject {
             }
             for nodeHex in targets {
                 sendIroh(0, hello, to: nodeHex)
-                for env in envs { sendIroh(1, eventPayload(circle.id, env), to: nodeHex) }
+                // Back-fill history only to people we agreed to share it with.
+                if ConnectionsStore.shared.sharesHistory(nodeHex) {
+                    for env in envs { sendIroh(1, eventPayload(circle.id, env), to: nodeHex) }
+                }
             }
             nearbyBroadcast(0, hello)
             for env in envs { nearbyBroadcast(1, eventPayload(circle.id, env)) }
