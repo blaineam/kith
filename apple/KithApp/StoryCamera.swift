@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import MediaPlayer
 
 // A clean, modern story camera — tap the shutter for a photo, hold to record video —
 // then a composer to add a song and a caption before sharing. No filters, no edit
@@ -248,6 +249,7 @@ struct StoryComposerView: View {
     @State private var editingCaption = false
     @State private var captionSpec = StoryCaptions.Spec()
     @State private var musicStartMs = 0.0
+    @State private var songPreviewing = false
     @FocusState private var captionFocused: Bool
 
     var body: some View {
@@ -367,15 +369,46 @@ struct StoryComposerView: View {
         }
     }
 
-    /// Pick which section of the song plays with the story (start offset).
+    /// A clean HUD to scrub + preview which 15s of the song plays with the story.
     private func musicSectionSlider(_ t: TrackRefFfi) -> some View {
         let maxStart = Double(max(1, Int(t.durationMs) - 15_000))
-        return HStack(spacing: 8) {
-            Image(systemName: "scissors").font(.caption2).foregroundStyle(.white.opacity(0.85))
-            Slider(value: $musicStartMs, in: 0...maxStart).tint(KithTheme.pink)
-            Text(fmtTime(musicStartMs)).font(.caption2.monospaced()).foregroundStyle(.white.opacity(0.85))
+        return HStack(spacing: 12) {
+            Button { toggleSongPreview(t) } label: {
+                Image(systemName: songPreviewing ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.title).foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("15s clip from \(fmtTime(musicStartMs))")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                Slider(value: $musicStartMs, in: 0...maxStart) { editing in
+                    if !editing && songPreviewing { seekPreview() }
+                }
+                .tint(KithTheme.pink)
+            }
         }
-        .padding(.horizontal, 24).padding(.bottom, 6)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.horizontal, 16).padding(.bottom, 8)
+        .onChange(of: musicStartMs) { if songPreviewing { seekPreview() } }
+        .onDisappear { stopSongPreview() }
+    }
+
+    private func toggleSongPreview(_ t: TrackRefFfi) {
+        let player = MPMusicPlayerController.applicationMusicPlayer
+        if songPreviewing { stopSongPreview(); return }
+        let ids = trackIds(t.catalogId)
+        if let pid = ids.pid, let item = librarySong(pid) { player.setQueue(with: MPMediaItemCollection(items: [item])) }
+        else if let store = ids.store { player.setQueue(with: [store]) }
+        player.play()
+        player.currentPlaybackTime = musicStartMs / 1000
+        songPreviewing = true
+    }
+    private func stopSongPreview() {
+        if songPreviewing { MPMusicPlayerController.applicationMusicPlayer.stop() }
+        songPreviewing = false
+    }
+    private func seekPreview() {
+        MPMusicPlayerController.applicationMusicPlayer.currentPlaybackTime = musicStartMs / 1000
     }
     private func fmtTime(_ ms: Double) -> String {
         let s = Int(ms / 1000); return String(format: "%d:%02d", s / 60, s % 60)
