@@ -3,7 +3,7 @@
 <!-- Edit, then sync: rocket meta Kith   (preview first: rocket meta Kith --dry-run) -->
 
 ## name
-Haven
+Haven Circle
 
 ## subtitle
 Encrypted circles, no servers
