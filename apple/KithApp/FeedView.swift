@@ -1419,8 +1419,20 @@ private struct PostCard: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            avatar
-            Text(authorName).font(.subheadline.weight(.semibold))
+            if item.isMe {
+                avatar
+                Text(authorName).font(.subheadline.weight(.semibold))
+            } else {
+                NavigationLink {
+                    UserProfileView(authorHex: item.authorShort, name: authorName)
+                } label: {
+                    HStack(spacing: 10) {
+                        avatar
+                        Text(authorName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
             Text(relativeTimeShort(item.createdAt)).font(.caption2).foregroundStyle(.secondary)
             if item.edited {
                 Text("edited").font(.caption2)
@@ -1563,6 +1575,78 @@ private struct PostCard: View {
 }
 
 /// Your profile / archive: every post you've shared, kept as a copy on your device.
+/// Another person's profile — their posts + a stories ring row. Opened by tapping a
+/// name or avatar anywhere.
+struct UserProfileView: View {
+    let authorHex: String
+    let name: String
+    @ObservedObject private var store = FeedStore.shared
+    @State private var showStories = false
+
+    private var posts: [FeedItemFfi] {
+        store.items.filter { $0.authorShort == authorHex && !$0.story && !$0.unsent }
+    }
+    private var userStories: [FeedItemFfi] {
+        store.items.filter { $0.authorShort == authorHex && $0.story && !$0.unsent && !$0.media.isEmpty }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    var body: some View {
+        ZStack {
+            KithBackground()
+            ScrollView {
+                VStack(spacing: 16) {
+                    VStack(spacing: 8) {
+                        Circle().fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                            .frame(width: 76, height: 76)
+                            .overlay(Text(String(name.prefix(1))).font(.title.bold()).foregroundStyle(.white))
+                        Text(name).font(.title3.bold())
+                        Text("\(posts.count) post\(posts.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(.bottom, 4)
+                    if !userStories.isEmpty {
+                        Button { showStories = true } label: {
+                            HStack(spacing: 10) {
+                                ZStack {
+                                    Circle().fill(LinearGradient(colors: [KithTheme.violet, KithTheme.pink, KithTheme.amber], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 58, height: 58)
+                                    if let img = userStories.last?.media.first.flatMap({ MediaStore.shared.item($0)?.image }) {
+                                        Image(uiImage: img).resizable().scaledToFill().frame(width: 50, height: 50).clipShape(Circle())
+                                    }
+                                }
+                                Text("\(userStories.count) active stor\(userStories.count == 1 ? "y" : "ies")").font(.subheadline).foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                            .kithCard()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if posts.isEmpty {
+                        ContentUnavailableView("No posts yet", systemImage: "tray",
+                                               description: Text("\(name)'s posts will appear here."))
+                            .padding(.top, 30)
+                    } else {
+                        ForEach(posts, id: \.id) { item in
+                            PostCard(
+                                item: item, friendName: name,
+                                onReact: { e in withAnimation(KithTheme.bouncy) { store.react(item.id, e) } },
+                                onComment: { b, m in withAnimation(KithTheme.smooth) { store.comment(item.id, b, m) } },
+                                onEdit: { _ in },
+                                onUnsend: { }
+                            )
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .navigationTitle(name)
+        .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(isPresented: $showStories) {
+            StoryViewer(stories: userStories, index: 0, friendName: name)
+        }
+    }
+}
+
 struct ProfileView: View {
     @ObservedObject private var store = FeedStore.shared
     @ObservedObject private var profile = ProfileStore.shared
