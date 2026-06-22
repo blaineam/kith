@@ -15,12 +15,24 @@ export class HavenEngine {
      * The full public bundle (hex) to hand a contact so they can seal to us.
      */
     bundle_hex(): string;
+    /**
+     * Comment on a post (or another comment) by its event id.
+     */
+    comment(target: string, body: string, media: string[], created_at: bigint): Uint8Array;
     contact_count(): number;
+    /**
+     * Edit the body/media of one of your own posts or comments.
+     */
+    edit(target: string, body: string, media: string[], created_at: bigint): Uint8Array;
     /**
      * The reduced feed as JSON (posts + comments + reactions), newest-first per the engine.
      */
     feed_json(now_ms: bigint): string;
     invite_link(domain: string): string;
+    /**
+     * Author a direct message into the circle thread.
+     */
+    message(body: string, created_at: bigint): Uint8Array;
     /**
      * Create a fresh identity, or restore one from a 64-char hex seed (e.g. decoded
      * from a phone's transfer code — same identity across devices).
@@ -28,9 +40,17 @@ export class HavenEngine {
     constructor(seed_hex?: string | null);
     node_id_hex(): string;
     /**
-     * Author a post; returns the sealed envelope bytes to broadcast to the circle.
+     * Author a text post; returns the sealed envelope bytes to broadcast to the circle.
      */
     post(body: string, created_at: bigint): Uint8Array;
+    /**
+     * Author a post with media refs and/or a story flag (story = ephemeral 24h slide).
+     */
+    post_full(body: string, media: string[], story: boolean, created_at: bigint): Uint8Array;
+    /**
+     * React to a post or comment with an emoji.
+     */
+    react(target: string, emoji: string, created_at: bigint): Uint8Array;
     /**
      * Ingest a sealed envelope received from a peer. Returns true if it was new.
      */
@@ -49,6 +69,10 @@ export class HavenEngine {
      * back-fill a peer that just connected.
      */
     sync_envelopes_json(): string;
+    /**
+     * Unsend (retract) one of your own posts, comments, or messages.
+     */
+    unsend(target: string, created_at: bigint): Uint8Array;
     verification_hex(): string;
 }
 
@@ -59,23 +83,29 @@ export interface InitOutput {
     readonly __wbg_havenengine_free: (a: number, b: number) => void;
     readonly havenengine_add_contact: (a: number, b: number, c: number) => [number, number, number, number];
     readonly havenengine_bundle_hex: (a: number) => [number, number];
+    readonly havenengine_comment: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint) => [number, number];
     readonly havenengine_contact_count: (a: number) => number;
+    readonly havenengine_edit: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint) => [number, number];
     readonly havenengine_feed_json: (a: number, b: bigint) => [number, number];
     readonly havenengine_invite_link: (a: number, b: number, c: number) => [number, number];
+    readonly havenengine_message: (a: number, b: number, c: number, d: bigint) => [number, number];
     readonly havenengine_new: (a: number, b: number) => [number, number, number];
     readonly havenengine_node_id_hex: (a: number) => [number, number];
     readonly havenengine_post: (a: number, b: number, c: number, d: bigint) => [number, number];
+    readonly havenengine_post_full: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint) => [number, number];
+    readonly havenengine_react: (a: number, b: number, c: number, d: number, e: number, f: bigint) => [number, number];
     readonly havenengine_receive: (a: number, b: number, c: number) => number;
     readonly havenengine_seed_hex: (a: number) => [number, number];
     readonly havenengine_self_test: (a: number) => number;
     readonly havenengine_sync_envelopes_json: (a: number) => [number, number];
+    readonly havenengine_unsend: (a: number, b: number, c: number, d: bigint) => [number, number];
     readonly havenengine_verification_hex: (a: number) => [number, number];
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;
 }

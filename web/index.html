@@ -177,6 +177,7 @@ async function boot(){
     const saved = localStorage.getItem("haven.seed") || undefined;
     engine = new HavenEngine(saved);
     localStorage.setItem("haven.seed", engine.seed_hex());   // persist identity
+    window.havenEngine = engine;   // handle for the mesh/relay layer (and debugging)
   }catch(e){
     console.error("engine init failed", e);
   }

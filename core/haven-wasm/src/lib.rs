@@ -98,19 +98,55 @@ impl HavenEngine {
         Group::new("default", m)
     }
 
-    /// Author a post; returns the sealed envelope bytes to broadcast to the circle.
-    pub fn post(&mut self, body: String, created_at: u64) -> Vec<u8> {
-        let ev = Event::new(
-            &self.me.public().node_id_bytes(),
-            created_at,
-            EventKind::Post { body, media: vec![], music: None, retention_secs: None, story: false, mute_video: false },
-        );
+    /// Author an event of any kind: seal it to the circle, remember it, and return the sealed
+    /// envelope bytes to broadcast. The single funnel every authoring method below goes through.
+    fn author(&mut self, created_at: u64, kind: EventKind) -> Vec<u8> {
+        let ev = Event::new(&self.me.public().node_id_bytes(), created_at, kind);
         self.seen.insert(ev.id.clone());
         let bytes = seal_event(&self.me, &self.group(), &ev)
             .map(|env| env.to_bytes())
             .unwrap_or_default();
         self.events.push(ev);
         bytes
+    }
+
+    /// Author a text post; returns the sealed envelope bytes to broadcast to the circle.
+    pub fn post(&mut self, body: String, created_at: u64) -> Vec<u8> {
+        self.author(created_at, EventKind::Post {
+            body, media: vec![], music: None, retention_secs: None, story: false, mute_video: false,
+        })
+    }
+
+    /// Author a post with media refs and/or a story flag (story = ephemeral 24h slide).
+    pub fn post_full(&mut self, body: String, media: Vec<String>, story: bool, created_at: u64) -> Vec<u8> {
+        self.author(created_at, EventKind::Post {
+            body, media, music: None, retention_secs: None, story, mute_video: false,
+        })
+    }
+
+    /// Comment on a post (or another comment) by its event id.
+    pub fn comment(&mut self, target: String, body: String, media: Vec<String>, created_at: u64) -> Vec<u8> {
+        self.author(created_at, EventKind::Comment { target, body, media })
+    }
+
+    /// React to a post or comment with an emoji.
+    pub fn react(&mut self, target: String, emoji: String, created_at: u64) -> Vec<u8> {
+        self.author(created_at, EventKind::Reaction { target, emoji })
+    }
+
+    /// Edit the body/media of one of your own posts or comments.
+    pub fn edit(&mut self, target: String, body: String, media: Vec<String>, created_at: u64) -> Vec<u8> {
+        self.author(created_at, EventKind::Edit { target, body, media, music: None, mute_video: false })
+    }
+
+    /// Unsend (retract) one of your own posts, comments, or messages.
+    pub fn unsend(&mut self, target: String, created_at: u64) -> Vec<u8> {
+        self.author(created_at, EventKind::Unsend { target })
+    }
+
+    /// Author a direct message into the circle thread.
+    pub fn message(&mut self, body: String, created_at: u64) -> Vec<u8> {
+        self.author(created_at, EventKind::Message { body })
     }
 
     /// Ingest a sealed envelope received from a peer. Returns true if it was new.
