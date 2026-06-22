@@ -992,6 +992,7 @@ struct FeedView: View {
     @State private var showMediaPicker = false
     @State private var showCamera = false
     @State private var showSongPicker = false
+    @State private var showLocationPicker = false
     @State private var composeRetention: UInt64?
     @State private var showNewCircle = false
     @State private var newCircleName = ""
@@ -1100,6 +1101,9 @@ struct FeedView: View {
             .sensoryFeedback(.impact(weight: .light), trigger: store.reactionTick)
             .sheet(isPresented: $showMediaPicker) {
                 MediaPicker { refs in attachedMedia.append(contentsOf: refs) }
+            }
+            .sheet(isPresented: $showLocationPicker) {
+                LocationPicker { ref in attachedMedia.append(ref) }
             }
             .fullScreenCover(isPresented: $showCamera) {
                 CameraView { refs in attachedMedia.append(contentsOf: refs) }.ignoresSafeArea()
@@ -1235,6 +1239,7 @@ struct FeedView: View {
                         Button { showMediaPicker = true } label: { Label("Photo or Video", systemImage: "photo.on.rectangle") }
                         Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
                         Button { showSongPicker = true } label: { Label("Add a song", systemImage: "music.note") }
+                        Button { showLocationPicker = true } label: { Label("Pin a location", systemImage: "mappin.and.ellipse") }
                         Divider()
                         Menu {
                             Button("Off") { composeRetention = nil }
@@ -1279,6 +1284,16 @@ struct FeedView: View {
                                 .overlay(alignment: .bottomLeading) {
                                     if m.kind == .video { videoEditMenu(ref) }
                                 }
+                            removeChip { attachedMedia.removeAll { $0 == ref } }
+                        }
+                    } else if SharedLocation.parse(ref) != nil {
+                        ZStack(alignment: .topTrailing) {
+                            VStack(spacing: 2) {
+                                Image(systemName: "mappin.circle.fill").font(.title3).foregroundStyle(HavenTheme.pink)
+                                Text("Location").font(.caption2).foregroundStyle(.secondary)
+                            }
+                            .frame(width: 56, height: 56)
+                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                             removeChip { attachedMedia.removeAll { $0 == ref } }
                         }
                     }
@@ -1478,7 +1493,9 @@ private struct PostCard: View {
     }
 
     @ViewBuilder private var mediaView: some View {
-        if item.media.count == 1, let ref = item.media.first {
+        if item.media.count == 1, let ref = item.media.first, let loc = SharedLocation.parse(ref) {
+            LocationMapView(lat: loc.lat, lon: loc.lon, label: loc.label)
+        } else if item.media.count == 1, let ref = item.media.first {
             ZStack(alignment: .bottomTrailing) {
                 mediaPage(ref)
                 if isVideo(ref) { muteButton }

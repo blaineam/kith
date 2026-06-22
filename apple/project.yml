@@ -50,6 +50,7 @@ targets:
         NSAppleMusicUsageDescription: "Haven lets you add a song to a post; it plays through your own Apple Music."
         NSLocalNetworkUsageDescription: "Haven finds people in your circle who are nearby so it can share posts directly over Wi-Fi and Bluetooth — even with no internet."
         NSBluetoothAlwaysUsageDescription: "Haven uses Bluetooth to share posts directly with nearby people in your circle when you're offline."
+        NSLocationWhenInUseUsageDescription: "Haven uses your location only when you choose to pin and share a spot on a map with your circle. It's never tracked or uploaded otherwise."
         NSBonjourServices:
           - _haven-circle._tcp
           - _haven-circle._udp

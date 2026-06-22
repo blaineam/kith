@@ -57,7 +57,9 @@ struct RootView: View {
 
     @State private var tab = ProcessInfo.processInfo.environment["HAVEN_TAB"] ?? "circle"
     @State private var showConnect = false
-    @State private var didPrompt = false
+    // Persisted so the "add your first friend" sheet shows once, not on every cold launch
+    // (it was firing whenever you have no contacts yet).
+    @AppStorage("haven.onboardInviteShown") private var didPrompt = false
     /// An incoming invite link. Driving the sheet from this *item* (not a separate bool)
     /// guarantees the ConnectView gets the link on the first open — `.sheet(isPresented:)`
     /// with a separate state captured a stale (nil) link, which is why it took two taps.
