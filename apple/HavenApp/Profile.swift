@@ -43,7 +43,7 @@ final class ProfileStore: ObservableObject {
     private static var avatarURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("kith-avatar.jpg")
+        return dir.appendingPathComponent("haven-avatar.jpg")
     }
     private static func loadAvatar() -> UIImage? {
         (try? Data(contentsOf: avatarURL)).flatMap(UIImage.init)

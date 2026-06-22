@@ -2,7 +2,7 @@
 
 ## Who we protect, against whom
 
-Kith is for small circles of real-world friends and family sharing private media. We
+Haven is for small circles of real-world friends and family sharing private media. We
 protect **content confidentiality, content integrity, and user anonymity** against:
 
 | Adversary | What they can do | Our defense |

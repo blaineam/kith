@@ -95,7 +95,7 @@ no `rustup` yet).
 
 ## D7 — Reach-me links carry only the id + a verification hash
 
-**Decision:** A link is `kith://u/<id>#<verify>` or `https://<domain>/u/<id>#<verify>`.
+**Decision:** A link is `haven://u/<id>#<verify>` or `https://<domain>/u/<id>#<verify>`.
 It carries the 32-byte Ed25519 id (resolved to a live address via decentralized
 discovery) and a 16-byte hash of the full hybrid key bundle, kept in the URL
 **fragment** so no web server ever sees it. Using a link creates a *pending* request
@@ -209,7 +209,7 @@ for free and only write UI.
 
 Storage is **BYO by default** (user's own iCloud/S3/NAS) or an optional **quota'd
 shared bucket** anyone can run — so there is no central service. A **deployment tool**
-(`kith-relay`, OpenTofu + CLI) lets any entity stand up a compliant relay on AWS/GCP/
+(`haven-relay`, OpenTofu + CLI) lets any entity stand up a compliant relay on AWS/GCP/
 Azure/Hetzner/Fly/DO/Cloudflare-R2/Oracle/bare-VPS in one command, with
 privacy-hardened defaults that are hard to disable.
 
@@ -242,7 +242,7 @@ and makes the strongest IP claim that is actually true rather than a comforting 
 
 **This deletes** the 512MB quota, blind-signed tokens, App Attest gating, the storage
 subscription, and the funded default bucket — they only existed to meter a bucket the
-operator would have funded. `kith-relay` (D14) remains as an **optional** community /
+operator would have funded. `haven-relay` (D14) remains as an **optional** community /
 self-host reliability layer, never required.
 
 **Trade-offs (dependency, not dollars):**
@@ -316,13 +316,13 @@ music out / video in). Full design + per-feature security audit in `MEDIA-AND-MU
   stripped by default, no analytics, temp files deleted after seal. No server path →
   nothing for the maker to be compelled to produce.
 - **Apple Music = references only, never audio** (legal, no piracy); the `TrackRef`
-  rides inside the already-sealed event; MusicKit auth is per-device; Kith sees no
+  rides inside the already-sealed event; MusicKit auth is per-device; Haven sees no
   Apple ID / library / listening data and adds **no central component** — the
   maker-holds-no-keys property is preserved.
 - **Crossfade has no security surface** (local playback); it only honors user control
   (muted by default, explicit unmute).
 
-**Why:** These make Kith feel like iMessage+Photos+Music while keeping every byte on
+**Why:** These make Haven feel like iMessage+Photos+Music while keeping every byte on
 the same E2E path and the maker out of the trust chain.
 
 **Trade-off:** camera + MusicKit can't run in the Simulator, so implementation is
@@ -350,9 +350,9 @@ both sides control without either being able to weaken the other.
 
 ## D20 — Real P2P transport wired into the app (iroh, ticket-based)
 
-**Decision:** Ship the live networking layer in the app, not just the core. `kith-net`
+**Decision:** Ship the live networking layer in the app, not just the core. `haven-net`
 exposes a callback-based `Node` (accept loop → handler) with `ticket()` /
-`send_ticket()`; `kith_ffi` wraps it as an async UniFFI `KithNode` (+ `InboundListener`
+`send_ticket()`; `haven_ffi` wraps it as an async UniFFI `HavenNode` (+ `InboundListener`
 foreign callback) driven on a tokio runtime. The Swift "Networking (beta)" screen goes
 online, shows a dial ticket (QR + copy), and sends sealed bytes to a pasted peer ticket.
 iroh cross-compiles cleanly to `aarch64-apple-ios`; the app links
@@ -360,7 +360,7 @@ iroh cross-compiles cleanly to `aarch64-apple-ios`; the app links
 
 **Security posture:** the transport only ever moves `SealedEnvelope` bytes — the
 network never sees plaintext, and the node id is the Ed25519 routable key. No relay,
-no server, no maker-held address book. Verified: `kith-net` round-trips a real sealed
+no server, no maker-held address book. Verified: `haven-net` round-trips a real sealed
 post over QUIC; on-device UI test brings a node online and mints a ticket.
 
 **Trade-off:** iroh+tokio grows the XCFramework to ~252 MB (App Store thinning applies

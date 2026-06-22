@@ -23,11 +23,11 @@ async fn two_nodes_exchange_a_sealed_post() {
     let payload = seal_event(&alice, &group, &event).unwrap().to_bytes();
 
     // Bob listens (inbound payloads go to a channel); Alice dials Bob and sends.
-    // Each node binds to its identity's key, so its transport id == its Kith id.
+    // Each node binds to its identity's key, so its transport id == its Haven id.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let bob_node = Node::spawn(bob.node_secret_bytes(), Arc::new(move |p| { let _ = tx.send(p); })).await.unwrap();
     assert_eq!(bob_node.node_id_hex(), hex32(&bob.public().node_id_bytes()),
-               "transport node id must equal the Kith identity id");
+               "transport node id must equal the Haven identity id");
     let bob_addr = bob_node.local_dial_addr().await.unwrap();
     let alice_node = Node::spawn(alice.node_secret_bytes(), Arc::new(|_| {})).await.unwrap();
     alice_node.send(bob_addr, &payload).await.unwrap();

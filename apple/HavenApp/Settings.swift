@@ -44,7 +44,7 @@ final class SettingsStore: ObservableObject {
 
 /// Saves shared/received media into the user's Photos library so it's ready whenever
 /// they open Photos. Add-only permission (the lightest). Honest privacy note: media
-/// saved here leaves Kith's encrypted store for the user's own library, which may sync
+/// saved here leaves Haven's encrypted store for the user's own library, which may sync
 /// to iCloud Photos — that's the user's choice, controlled by the toggle.
 enum PhotoSaver {
     @MainActor

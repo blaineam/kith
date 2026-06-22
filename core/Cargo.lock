@@ -1497,6 +1497,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "haven-demo"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "image",
+ "iroh",
+ "p2pcore",
+ "rustls",
+ "tokio",
+]
+
+[[package]]
 name = "haven-net"
 version = "0.0.1"
 dependencies = [
@@ -2323,19 +2336,6 @@ checksum = "2b8645470337db67b01a7f966decf7d0bafedbae74147d33e641c67a91df239f"
 dependencies = [
  "rand_core 0.6.4",
  "zeroize",
-]
-
-[[package]]
-name = "kith-demo"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "blake3",
- "image",
- "iroh",
- "p2pcore",
- "rustls",
- "tokio",
 ]
 
 [[package]]

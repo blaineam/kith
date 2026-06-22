@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Kith's design system — the single source of brand color, depth, motion, and
+/// Haven's design system — the single source of brand color, depth, motion, and
 /// tactile feel. Keeping it here makes the look consistent and portable to other
 /// platforms' UIs.
 enum HavenTheme {
@@ -59,7 +59,7 @@ struct HavenCard: ViewModifier {
 }
 
 extension View {
-    func kithCard(padding: CGFloat = 18) -> some View { modifier(HavenCard(padding: padding)) }
+    func havenCard(padding: CGFloat = 18) -> some View { modifier(HavenCard(padding: padding)) }
 }
 
 /// Tactile press feedback: gentle scale + dim on press.
@@ -88,7 +88,7 @@ struct BrandButtonStyle: ButtonStyle {
     }
 }
 
-/// The Kith mark: a little constellation of connected people (matches the app icon).
+/// The Haven mark: a little constellation of connected people (matches the app icon).
 struct ConstellationMark: View {
     var color: Color = .white
     private let nodes: [CGPoint] = [

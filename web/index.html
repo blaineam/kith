@@ -166,17 +166,17 @@
 // happen in your browser — no mock data, no server. (Networking to your circle over
 // iroh-in-browser is the next layer; until then the feed shows your own real, sealed
 // posts + anything synced in.)
-// The wasm class keeps its internal name (KithEngine) — bundle id + internal identifiers
-// stay "kith" so identities aren't wiped — but we read it as HavenEngine in the UI.
-import init, { KithEngine as HavenEngine } from "./engine/kith_wasm.js";
+// The wasm class keeps its internal name (HavenEngine) — bundle id + internal identifiers
+// HavenEngine identity, persisted in localStorage.
+import init, { HavenEngine as HavenEngine } from "./engine/haven_wasm.js";
 let engine = null;
 
 async function boot(){
   try{
     await init();
-    const saved = localStorage.getItem("kith.seed") || undefined;
+    const saved = localStorage.getItem("haven.seed") || undefined;
     engine = new HavenEngine(saved);
-    localStorage.setItem("kith.seed", engine.seed_hex());   // persist identity
+    localStorage.setItem("haven.seed", engine.seed_hex());   // persist identity
   }catch(e){
     console.error("engine init failed", e);
   }
@@ -211,7 +211,7 @@ const C = { violet:"#7C3AED", pink:"#EC4899", amber:"#F59E0B" };
 
 // No sample data — everything below comes from the real engine. The browser holds your
 // identity + sealed posts/stories; media bytes and DM threads live on the phone until the
-// networking layer (see docs/KITH-NET-RELAY.md) syncs them here.
+// networking layer (see docs/HAVEN-NET-RELAY.md) syncs them here.
 let state = { tab:"feed", thread:null, silent:false };
 let currentStories = [];
 
@@ -280,7 +280,7 @@ function postCard(p,i){
 
 function renderMessages(){
   // DMs are private 1:1 threads that live on your phone; they reach the web client with
-  // the networking layer (docs/KITH-NET-RELAY.md). No fake threads here — honest empty state.
+  // the networking layer (docs/HAVEN-NET-RELAY.md). No fake threads here — honest empty state.
   screen().innerHTML = `<div class="title">Messages</div>
     <div class="card" style="text-align:center;color:var(--text2)">
       💬<br><b>Your conversations live on your phone</b><br>

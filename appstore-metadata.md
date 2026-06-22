@@ -1,6 +1,6 @@
 # Haven — App Store metadata
 
-<!-- Edit, then sync: rocket meta Kith   (preview first: rocket meta Kith --dry-run) -->
+<!-- Edit, then sync: rocket meta Haven   (preview first: rocket meta Haven --dry-run) -->
 
 ## name
 Haven 〇

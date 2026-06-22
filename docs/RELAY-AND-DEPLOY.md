@@ -1,6 +1,6 @@
 # Relays, storage, and the deployment tool
 
-Kith has **no central service**. What little infrastructure exists is federated,
+Haven has **no central service**. What little infrastructure exists is federated,
 swappable, hardened-by-default, and runnable by anyone. This doc defines the two
 relay roles, the storage model, the IP-privacy guarantees (honestly), and the
 multi-cloud deployment tool.
@@ -29,7 +29,7 @@ connection relay is only for the live-but-NAT-blocked case.
 1. **Sender's own iCloud (Apple-first default).** Blobs go in the sender's **private
    CloudKit DB** (billed to the *user's* iCloud quota — $0 to the operator) and are
    shared to other Apple users via **`CKShare`**. The sender funds their own sharing.
-2. **BYO bucket.** Any user can point Kith at their own S3 / R2 / B2 / NAS — their
+2. **BYO bucket.** Any user can point Haven at their own S3 / R2 / B2 / NAS — their
    storage, their cost. Needed for cross-platform offline delivery (a web/Android peer
    can't read a sender's iCloud).
 3. **Voluntary community bucket (optional).** Any entity *may* run a shared bucket
@@ -55,20 +55,20 @@ claim it. What we *do* guarantee, enforced by the deploy tool's default config:
   spill, provider-side request logging disabled where the provider allows it.
 - **No identity ↔ IP linkage.** Peers authenticate **to each other** end-to-end,
   never to the relay. The relay/broker sees opaque sealed frames addressed by
-  **ephemeral rendezvous tokens**, not Kith public keys. A node that somehow logged
-  an IP still could not tie it to a Kith identity.
+  **ephemeral rendezvous tokens**, not Haven public keys. A node that somehow logged
+  an IP still could not tie it to a Haven identity.
 - **Quota without identity.** Allotments use **blind-signed tokens** (Privacy
   Pass-style): the operator issues N tokens and cannot link a redeemed token to who
   received it. Quota is enforced without knowing *who* you are.
 - **Opt-in onion/proxy mode for true hiding.** The only way a node genuinely cannot
-  see your IP is to not connect to it directly. Kith ships an **optional** mode that
+  see your IP is to not connect to it directly. Haven ships an **optional** mode that
   routes relay + storage access through Tor or a user-chosen proxy. Off by default
   (latency cost); on for users who want full IP hiding.
 
 Summary of the honest promise: **never logged, never linked to you, optionally fully
 hidden.**
 
-## The deployment tool (`kith-relay`)
+## The deployment tool (`haven-relay`)
 
 Goal: anyone can stand up a compliant relay on any major cloud in one command, with
 privacy-hardened defaults they can't accidentally turn off.
@@ -80,9 +80,9 @@ privacy-hardened defaults they can't accidentally turn off.
   tier), bare VPS/Docker.**
 - **CLI:**
   ```sh
-  kith-relay deploy --provider hetzner --role both       # connection + storage
-  kith-relay deploy --provider cloudflare-r2 --role storage   # bucket + broker only
-  kith-relay deploy --provider oracle --role connection       # free-tier TURN/DERP
+  haven-relay deploy --provider hetzner --role both       # connection + storage
+  haven-relay deploy --provider cloudflare-r2 --role storage   # bucket + broker only
+  haven-relay deploy --provider oracle --role connection       # free-tier TURN/DERP
   ```
   Each run: provisions the box and/or bucket, gets auto-TLS, applies the
   **hardened no-log config by default**, sets blob lifecycle expiry, and

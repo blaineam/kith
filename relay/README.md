@@ -7,14 +7,14 @@ same time. It's a zero-knowledge store-and-forward **mailbox**: every post is up
 **cannot read anything**. It only ever holds opaque, circle-sealed blobs.
 
 Because the mailbox speaks the S3 API, "hosting a bridge" just means **running (or
-renting) an S3-compatible bucket** and pointing Kith at it. No custom server, no
+renting) an S3-compatible bucket** and pointing Haven at it. No custom server, no
 account on anyone's platform, no plaintext anywhere.
 
 ## The easiest way: one command (self-hosted)
 
 Runs `rclone serve s3` (rclone is **MIT-licensed**, a single cross-platform binary) on
 your machine — a Pi, a NAS, an old laptop, or a cheap VPS — serving a plain folder over
-the S3 API, and prints the exact settings to paste into Kith.
+the S3 API, and prints the exact settings to paste into Haven.
 
 ```sh
 curl -fsSL https://wemiller.com/apps/haven/bridge/install.sh | sh
@@ -26,8 +26,8 @@ sh install.sh --native   # native rclone binary (Linux / macOS, no Docker)
 Or with Docker Compose:
 
 ```sh
-KITH_BRIDGE_KEY=you KITH_BRIDGE_SECRET='a-strong-password' docker compose up -d
-mkdir -p data/kith    # the folder named 'kith' is the bucket
+HAVEN_BRIDGE_KEY=you HAVEN_BRIDGE_SECRET='a-strong-password' docker compose up -d
+mkdir -p data/haven    # the folder named 'haven' is the bucket
 ```
 
 **Why rclone?** It's MIT, ubiquitous, and `serve s3` can expose *any* of rclone's 70+
@@ -58,7 +58,7 @@ and the provider only ever sees sealed blobs:
 | **AWS S3** | `s3.amazonaws.com` | the original |
 | **rclone serve s3** (self-host) | `your-host:8333` | the install script above |
 
-Create a bucket, make an access key, paste into Kith, enable "Volunteer as tribute."
+Create a bucket, make an access key, paste into Haven, enable "Volunteer as tribute."
 
 ## Want full decentralization? IPFS
 
@@ -73,7 +73,7 @@ slower than S3, so it's offered as an alternative backend rather than the defaul
 
 - **The bridge never sees your messages.** Everything is sealed to the circle with hybrid
   post-quantum crypto before it leaves a device. The bucket stores ciphertext only.
-- **No Kith server.** This is *your* bucket (or your friend's). We host nothing.
+- **No Haven server.** This is *your* bucket (or your friend's). We host nothing.
 - **Keys stay on-device.** Your S3 credentials live only in your device Keychain.
 - **Revocable.** Block or remove a member and rotate the bucket key any time.
 
@@ -84,5 +84,5 @@ slower than S3, so it's offered as an alternative backend rather than the defaul
         (S3 / R2 / B2 / rclone / IPFS)   ← bridge holds only ciphertext
 ```
 
-Every Kith client (iPhone, Mac, web) can both **write** to and **poll** the mailbox, so
+Every Haven client (iPhone, Mac, web) can both **write** to and **poll** the mailbox, so
 any always-on device — even a browser tab left open — can be the bridge for its people.

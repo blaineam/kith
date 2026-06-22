@@ -28,7 +28,7 @@ struct CallOverlay: View { var body: some View { EmptyView() } }
 #else
 
 /// Peer-to-peer voice calls. Signaling (invite / accept / hangup) and the audio itself
-/// travel over Kith's existing direct P2P transport (iroh QUIC) — no call server, no
+/// travel over Haven's existing direct P2P transport (iroh QUIC) — no call server, no
 /// third party in the path. CallKit provides the native call UI. Audio is captured with
 /// AVAudioEngine, downsampled to 16 kHz mono, and streamed as frames to the peer, who
 /// plays it back. (Video calls + on-device A/V tuning are the follow-on.)

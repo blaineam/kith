@@ -30,7 +30,7 @@ cost, ever.**
 
 1. **Connection relay leans on iroh/n0's free public relays** — production-grade but
    goodwill, not an SLA. If it degrades, hard-NAT connections and live calls suffer
-   until community relays fill in. *Mitigation:* the optional `kith-relay` deploy tool
+   until community relays fill in. *Mitigation:* the optional `haven-relay` deploy tool
    lets anyone (incl. the operator, later) run a relay for reliability — **never
    required, never a mandatory monthly bill**.
 2. **iCloud storage is clean Apple↔Apple only.** A web/Android recipient can't read a
@@ -47,5 +47,5 @@ subscription, and the funded default bucket. Simpler product, cleaner story.
 ## Optional: paid reliability, if ever wanted
 
 If the operator ever wants guaranteed relay reliability, a single ~$5/mo VPS running
-`kith-relay` (or a Cloudflare R2 storage relay) is available — but it is strictly
+`haven-relay` (or a Cloudflare R2 storage relay) is available — but it is strictly
 optional and the app is fully functional without it.

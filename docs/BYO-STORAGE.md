@@ -10,7 +10,7 @@ nothing you hold can be used to bypass a user's storage.
 |---|---|---|
 | **Your iCloud** (default) | private CloudKit / iCloud Drive, billed to the user's quota | nothing |
 | **Custom S3 bucket** | user enters endpoint + region + bucket + access key + secret; stored only in the device **Keychain** | nothing |
-| **Google Drive / Dropbox** | **OAuth 2.0 + PKCE** — user signs in on the provider's page; Kith keeps only a token in the Keychain | nothing |
+| **Google Drive / Dropbox** | **OAuth 2.0 + PKCE** — user signs in on the provider's page; Haven keeps only a token in the Keychain | nothing |
 
 Works with AWS S3, Cloudflare R2, Backblaze B2, rclone serve s3, etc. for the S3 path.
 
@@ -23,8 +23,8 @@ Native apps use the **Authorization Code flow with PKCE** (RFC 7636). The app is
 - Instead of a client secret, the app proves itself with a one-time
   **code_verifier / code_challenge** pair generated on-device per login.
 - The user authenticates on the **provider's own page** (`ASWebAuthenticationSession`),
-  so Kith never sees their password; the redirect comes back to the app's URL scheme.
-- Kith stores only the resulting **access/refresh token**, in the Keychain.
+  so Haven never sees their password; the redirect comes back to the app's URL scheme.
+- Haven stores only the resulting **access/refresh token**, in the Keychain.
 
 So there is **no client secret anywhere** — not in the app, and nothing you host on a
 server. You register a *public* OAuth client per provider (Google Cloud / Dropbox

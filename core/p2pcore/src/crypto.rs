@@ -88,7 +88,7 @@ fn combine(dh: &[u8], pq: &[u8]) -> [u8; 32] {
     let mut ikm = Vec::with_capacity(dh.len() + pq.len());
     ikm.extend_from_slice(dh);
     ikm.extend_from_slice(pq);
-    let hk = Hkdf::<Sha256>::new(Some(b"kith-hybrid-kem-v1"), &ikm);
+    let hk = Hkdf::<Sha256>::new(Some(b"haven-hybrid-kem-v1"), &ikm);
     let mut okm = [0u8; 32];
     hk.expand(b"content-aead-key", &mut okm)
         .expect("32 is a valid HKDF length");

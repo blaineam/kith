@@ -1,6 +1,6 @@
-//! # p2pcore — Kith's portable core
+//! # p2pcore — Haven's portable core
 //!
-//! This crate is the single source of truth for Kith's security-critical logic.
+//! This crate is the single source of truth for Haven's security-critical logic.
 //! It compiles to:
 //!   * a Swift XCFramework (via UniFFI) for the native iOS/macOS apps, and
 //!   * a WASM module (via wasm-bindgen) for the static web/Android client.
@@ -11,12 +11,12 @@
 //! changing the crypto never touches the transport.
 //!
 //! ## Module map
-//! * [`identity`] — a Kith account: a keypair held on-device, no PII. The public
+//! * [`identity`] — a Haven account: a keypair held on-device, no PII. The public
 //!   half ([`identity::HavenId`]) is also the routable node id.
 //! * [`crypto`]  — hybrid post-quantum KEM (X25519 + ML-KEM-768) and AEAD
 //!   (AES-256-GCM). This is what defends relayed ciphertext against
 //!   "harvest-now, decrypt-later".
-//! * [`link`]    — the reach-me link / QR ticket system (`kith://` and `https://`
+//! * [`link`]    — the reach-me link / QR ticket system (`haven://` and `https://`
 //!   forms) with tamper-detection material kept in the URL fragment.
 //! * [`transport`] — the path-selector seam: Bluetooth → local WiFi → relay.
 //!   Trait-only for now; concrete impls (iroh, CoreBluetooth) land next.

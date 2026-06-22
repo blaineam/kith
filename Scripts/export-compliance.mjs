@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Kith US export-compliance automation.
+// Haven US export-compliance automation.
 //
-// Kith uses real end-to-end, post-quantum encryption, so it is "non-exempt"
+// Haven uses real end-to-end, post-quantum encryption, so it is "non-exempt"
 // (ECCN 5D992.c, mass-market, License Exception ENC §740.17(b)(1)). That does NOT
 // restrict App Store distribution — it just requires two pieces of US paperwork,
 // both generated here:
 //
 //   1. ONE-TIME: a "publicly available encryption source code" notification
-//      (EAR §742.15(b)) — because Kith's source is open on GitHub. Email it once
+//      (EAR §742.15(b)) — because Haven's source is open on GitHub. Email it once
 //      (and again only if the URL changes).
 //   2. ANNUAL (due Feb 1): a self-classification report of the mass-market app
 //      (Supplement No. 8 to Part 742), as a CSV emailed to BIS + NSA.
@@ -25,8 +25,8 @@ mkdirSync(OUT, { recursive: true });
 
 const COMPANY = 'Blaine Miller';
 const EMAIL = 'blaine@wemiller.com';
-const PRODUCT = 'Kith';
-const SOURCE_URL = 'https://github.com/blaineam/kith';
+const PRODUCT = 'Haven';
+const SOURCE_URL = 'https://github.com/blaineam/haven';
 const ALGORITHMS = 'AES-256-GCM, X25519, ML-KEM-768 (FIPS 203), Ed25519, ML-DSA-65 (FIPS 204), HKDF-SHA256, BLAKE3';
 const TO = 'crypt@bis.doc.gov, enc@nsa.gov';
 

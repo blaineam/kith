@@ -67,7 +67,7 @@ impl HavenId {
         let ek = self.kem_pq.as_bytes();
         let sig_vk = self.sig_pq.encode();
         let mut h = blake3::Hasher::new();
-        h.update(b"kith-id-v1");
+        h.update(b"haven-id-v1");
         h.update(&self.signing.to_bytes());
         h.update(&sig_vk[..]);
         h.update(self.kem_x.as_bytes());
@@ -159,7 +159,7 @@ impl Identity {
     /// The same seed always yields the same identity — this is the persistence and
     /// recovery primitive (back up the seed, restore the identity).
     pub fn from_seed(master: &[u8; 32]) -> Self {
-        let hk = Hkdf::<Sha256>::new(Some(b"kith-identity-v1"), master);
+        let hk = Hkdf::<Sha256>::new(Some(b"haven-identity-v1"), master);
         let sub = |info: &[u8]| -> [u8; 32] {
             let mut out = [0u8; 32];
             hk.expand(info, &mut out).expect("32 is a valid HKDF length");

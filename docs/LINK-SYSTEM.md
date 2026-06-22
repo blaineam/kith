@@ -12,10 +12,10 @@ with zero backend.
 ## Anatomy
 
 ```
-https://kith.link/u/<base32-id>#<base32-verify>
+https://haven.link/u/<base32-id>#<base32-verify>
         └─ Universal Link ─┘     └─ stays in the fragment ─┘
 
-kith://u/<base32-id>#<base32-verify>     (deep link / QR form)
+haven://u/<base32-id>#<base32-verify>     (deep link / QR form)
 ```
 
 | Part | Bytes | Purpose |
@@ -38,8 +38,8 @@ Three deliberate properties:
 Just drop an `<a href="https://yoursite/u/...#...">`. No backend. The only static
 infra anywhere is a tiny `apple-app-site-association` / `assetlinks.json` file (zero
 data, ~free static hosting) telling phones the domain opens the app. Host it on a
-default `kith.link` domain *or* on your own site for your own links. Custom scheme
-`kith://` is the no-domain fallback (loses the graceful web landing).
+default `haven.link` domain *or* on your own site for your own links. Custom scheme
+`haven://` is the no-domain fallback (loses the graceful web landing).
 
 ## Trust & the approval flow
 
@@ -54,7 +54,7 @@ automatic**:
    `#fragment` — Signal's "safety number," made friendly — to confirm no tampering.
 
 Implemented today in `link.rs`: encoding both forms, parsing, requiring the
-verification fragment, and `KithLink::matches()` (the tamper check against the
+verification fragment, and `HavenLink::matches()` (the tamper check against the
 identity fetched from discovery).
 
 ## Two flavors of link
@@ -70,5 +70,5 @@ The identity link is permanent and safe because requests are inert until approve
 private invites are revocable capabilities you can hand out and kill individually.
 Both are just bytes in a URL — no server holds them.
 
-*(Invite-link tokens are designed but not yet implemented; `KithLink` currently
+*(Invite-link tokens are designed but not yet implemented; `HavenLink` currently
 covers the identity link. Token format is an open item in `THREAT-MODEL.md`.)*

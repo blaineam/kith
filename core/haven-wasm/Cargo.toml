@@ -2,7 +2,7 @@
 name = "haven-wasm"
 version = "0.0.1"
 edition = "2021"
-description = "Kith engine for the browser: real p2pcore identity + sealing + feed via wasm-bindgen."
+description = "Haven engine for the browser: real p2pcore identity + sealing + feed via wasm-bindgen."
 
 [lib]
 crate-type = ["cdylib", "rlib"]

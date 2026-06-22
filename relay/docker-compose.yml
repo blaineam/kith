@@ -1,20 +1,20 @@
-# Kith Bridge — a self-hosted, S3-compatible mailbox for your circle, via rclone (MIT).
+# Haven Bridge — a self-hosted, S3-compatible mailbox for your circle, via rclone (MIT).
 # Stores only SEALED blobs it cannot read. Start with:  docker compose up -d
 #
-# Set a strong key/secret below (or via a .env file), make a folder named 'kith' inside
+# Set a strong key/secret below (or via a .env file), make a folder named 'haven' inside
 # ./data (that folder IS the bucket), then paste the endpoint, bucket, and these
-# credentials into Kith → Advanced → Storage → Custom S3 bucket, and turn on
+# credentials into Haven → Advanced → Storage → Custom S3 bucket, and turn on
 # "Volunteer as tribute".
 services:
-  kith-bridge:
+  haven-bridge:
     image: rclone/rclone
-    container_name: kith-bridge
+    container_name: haven-bridge
     restart: unless-stopped
     command: >
       serve s3 /data
       --addr :8333
-      --auth-key "${KITH_BRIDGE_KEY:-kithadmin},${KITH_BRIDGE_SECRET:-change-me-please}"
+      --auth-key "${HAVEN_BRIDGE_KEY:-havenadmin},${HAVEN_BRIDGE_SECRET:-change-me-please}"
     ports:
-      - "8333:8333"   # S3 API — point Kith here
+      - "8333:8333"   # S3 API — point Haven here
     volumes:
-      - ./data:/data   # ./data/kith/ is the 'kith' bucket
+      - ./data:/data   # ./data/haven/ is the 'haven' bucket

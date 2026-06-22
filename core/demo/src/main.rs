@@ -6,7 +6,7 @@
 //! accepts, decapsulates, opens, and verifies the bytes match the original by
 //! BLAKE3. Nothing on the wire is ever plaintext.
 //!
-//!     cargo run -p kith-demo --release
+//!     cargo run -p haven-demo --release
 
 use std::io::Cursor;
 use std::net::SocketAddr;
@@ -39,12 +39,12 @@ impl<T, E: std::fmt::Debug> IntoAnyhow<T> for Result<T, E> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("── Kith M1b: move a sealed photo over the wire ──\n");
+    println!("── Haven M1b: move a sealed photo over the wire ──\n");
 
     // 1. Identities (no PII; Bob's public id is all Alice needs to seal to him).
     let bob = Identity::generate();
     let bob_pub = bob.public();
-    println!("Bob's Kith id: {}", short_id(&bob_pub));
+    println!("Bob's Haven id: {}", short_id(&bob_pub));
 
     // 2. Make a real photo and remember its hash.
     let photo = make_photo()?;

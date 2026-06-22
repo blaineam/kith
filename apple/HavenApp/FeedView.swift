@@ -308,7 +308,7 @@ final class FeedStore: ObservableObject {
     private var stateURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("kith-feed.json")
+        return dir.appendingPathComponent("haven-feed.json")
     }
     private func loadPersisted() {
         guard let social, let data = try? Data(contentsOf: stateURL) else { return }
@@ -613,7 +613,7 @@ final class FeedStore: ObservableObject {
     }
 
     /// Share my S3 bucket as the circle's shared relay: seal the config to the circle and
-    /// broadcast it. Members adopt it as the shared mailbox. (No Kith server sees it.)
+    /// broadcast it. Members adopt it as the shared mailbox. (No Haven server sees it.)
     func shareBucketWithCircle() {
         guard let social, StorageStore.shared.s3Configured else { return }
         let cfg = S3Config(endpoint: StorageStore.shared.s3Endpoint, region: StorageStore.shared.s3Region,
@@ -1455,7 +1455,7 @@ private struct PostCard: View {
                 commentField
             }
         }
-        .kithCard()
+        .havenCard()
         .onAppear { syncPlayback() }
         .onDisappear { pauseVideos() }
         .onChange(of: audio.centeredPostId) { syncPlayback() }
@@ -1861,7 +1861,7 @@ struct UserProfileView: View {
                                 Text("\(userStories.count) active stor\(userStories.count == 1 ? "y" : "ies")").font(.subheadline).foregroundStyle(.secondary)
                                 Spacer()
                             }
-                            .kithCard()
+                            .havenCard()
                         }
                         .buttonStyle(.plain)
                     }

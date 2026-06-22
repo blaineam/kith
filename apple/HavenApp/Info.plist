@@ -30,7 +30,6 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>haven</string>
-				<string>kith</string>
 			</array>
 		</dict>
 	</array>

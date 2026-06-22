@@ -1,6 +1,6 @@
-//! Kith engine for the browser. This is the SAME hybrid post-quantum engine the phone
+//! Haven engine for the browser. This is the SAME hybrid post-quantum engine the phone
 //! runs (`p2pcore`) — identity, sealing, and feed reduction — exposed to JavaScript via
-//! wasm-bindgen. No mock data, no separate crypto: a real Kith identity in the browser.
+//! wasm-bindgen. No mock data, no separate crypto: a real Haven identity in the browser.
 //!
 //! Transport (iroh-in-browser) is layered on top in JS; this crate owns the engine:
 //! create/restore identity, add contacts, seal posts to the circle, open received
@@ -29,7 +29,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// A real Kith engine instance for one identity (default circle = your contacts).
+/// A real Haven engine instance for one identity (default circle = your contacts).
 #[wasm_bindgen]
 pub struct HavenEngine {
     me: Identity,

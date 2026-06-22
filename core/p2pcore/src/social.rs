@@ -73,7 +73,7 @@ impl Event {
         let author = hex(author_node_id);
         let kind_bytes = serde_json::to_vec(&kind).expect("event kind serializes");
         let mut h = blake3::Hasher::new();
-        h.update(b"kith-event-v1");
+        h.update(b"haven-event-v1");
         h.update(author.as_bytes());
         h.update(&created_at.to_le_bytes());
         h.update(&kind_bytes);
@@ -138,7 +138,7 @@ impl SealedEnvelope {
     /// Transcript that the signature covers (binds ciphertext + all recipient entries).
     fn transcript(&self) -> [u8; 32] {
         let mut h = blake3::Hasher::new();
-        h.update(b"kith-envelope-v1");
+        h.update(b"haven-envelope-v1");
         h.update(&self.sender);
         h.update(&self.ciphertext);
         for r in &self.recipients {

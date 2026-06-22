@@ -26,7 +26,7 @@ pub enum HavenError {
     Invalid { msg: String },
 }
 
-/// A Kith account: a no-PII identity backed by a hybrid post-quantum keypair.
+/// A Haven account: a no-PII identity backed by a hybrid post-quantum keypair.
 /// Wraps `p2pcore::identity::Identity`.
 #[derive(uniffi::Object)]
 pub struct Account {
@@ -67,12 +67,12 @@ impl Account {
     }
 
     /// `haven://u/<id>#<verify>` — the deep-link / QR form of the reach-me link.
-    pub fn kith_uri(&self) -> String {
+    pub fn haven_uri(&self) -> String {
         HavenLink::from_identity(&self.inner.public()).to_uri()
     }
 
     /// `https://<domain>/u/<id>#<verify>` — the website form of the reach-me link.
-    pub fn kith_link(&self, domain: String) -> String {
+    pub fn haven_link(&self, domain: String) -> String {
         HavenLink::from_identity(&self.inner.public()).to_web(&domain)
     }
 
@@ -95,7 +95,7 @@ pub struct LinkInfo {
     pub uri: String,
 }
 
-/// Parse a `kith://` or `https://…/u/…#…` reach-me link.
+/// Parse a `haven://` or `https://…/u/…#…` reach-me link.
 #[uniffi::export]
 pub fn parse_link(s: String) -> Result<LinkInfo, HavenError> {
     let link = HavenLink::parse(&s).map_err(|e| HavenError::Invalid { msg: format!("{e}") })?;
@@ -177,7 +177,7 @@ fn hex(bytes: &[u8]) -> String {
 // identity so you can see two-party interaction. (Networking between real devices
 // is the next milestone; the crypto and feed logic here are the real thing.)
 
-const FRIEND_SEED: [u8; 32] = *b"kith-demo-friend-seed-v1--padxxx";
+const FRIEND_SEED: [u8; 32] = *b"haven-demo-friend-seed-v1-padxxx";
 
 struct DemoState {
     me: Identity,
@@ -411,7 +411,7 @@ pub struct HavenNode {
 #[uniffi::export(async_runtime = "tokio")]
 impl HavenNode {
     /// Start a node bound to this account's identity (so its node id equals the
-    /// account's Kith id); inbound payloads are delivered to `listener`.
+    /// account's Haven id); inbound payloads are delivered to `listener`.
     #[uniffi::constructor]
     pub async fn start(account_seed: Vec<u8>, listener: Arc<dyn InboundListener>) -> Result<Arc<Self>, HavenError> {
         let seed: [u8; 32] = account_seed
@@ -429,7 +429,7 @@ impl HavenNode {
         Ok(Arc::new(Self { node }))
     }
 
-    /// This node's id (== the account's Kith id), as hex.
+    /// This node's id (== the account's Haven id), as hex.
     pub fn node_id_hex(&self) -> String {
         self.node.node_id_hex()
     }
@@ -439,7 +439,7 @@ impl HavenNode {
         self.node.ticket().await.map_err(|e| HavenError::Invalid { msg: e.to_string() })
     }
 
-    /// Send sealed bytes to a contact by their hex node id (== their Kith id),
+    /// Send sealed bytes to a contact by their hex node id (== their Haven id),
     /// resolving the live address via discovery.
     pub async fn send_to_node(&self, node_id_hex: String, payload: Vec<u8>) -> Result<(), HavenError> {
         self.node

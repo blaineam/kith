@@ -4,7 +4,7 @@ import Security
 
 /// Where the user's media is stored. iCloud is the default (their own quota); they can
 /// also bring their own S3-compatible bucket, or connect a cloud drive over OAuth.
-/// Crucially: Kith never hosts any API keys or client secrets — S3 keys live in the
+/// Crucially: Haven never hosts any API keys or client secrets — S3 keys live in the
 /// Keychain on-device, and drive logins use OAuth 2.0 + PKCE (public clients, no secret).
 enum StorageProvider: String, CaseIterable, Identifiable {
     case icloud, s3

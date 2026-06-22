@@ -2,9 +2,9 @@
 /* eslint-disable */
 
 /**
- * A real Kith engine instance for one identity (default circle = your contacts).
+ * A real Haven engine instance for one identity (default circle = your contacts).
  */
-export class KithEngine {
+export class HavenEngine {
     free(): void;
     [Symbol.dispose](): void;
     /**

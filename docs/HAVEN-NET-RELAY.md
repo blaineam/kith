@@ -1,10 +1,10 @@
-# #44 — Routing the relay over Kith Net (no public host)
+# #44 — Routing the relay over Haven Net (no public host)
 
 Today a circle's shared store is an **S3 endpoint** (`rclone serve s3`, or a BYO S3
 bucket). That works, but the volunteer model has a wart: `rclone serve s3` has to be
 **reachable** — a public IP, a domain, a tunnel, or a paid bucket. That's a public-ish
 host, which cuts against "no servers, nothing to find." #44 removes that requirement by
-carrying the **same S3 traffic inside Kith Net** (iroh QUIC), so the volunteer's store is
+carrying the **same S3 traffic inside Haven Net** (iroh QUIC), so the volunteer's store is
 reachable *only* over the authenticated P2P overlay — never on the open internet.
 
 ## The key realization
@@ -26,13 +26,13 @@ Smallest change; reuses the entire existing `S3Client` untouched.
  └──────────────┘   :PORT       └───────────────────────────────┘
 ```
 
-- **Volunteer side (`kith-net`):** accept iroh connections on ALPN `haven/s3/1`. For each
+- **Volunteer side (`haven-net`):** accept iroh connections on ALPN `haven/s3/1`. For each
   inbound bi-stream, open a TCP socket to the local `rclone serve s3` (`127.0.0.1:port`)
   and splice bytes both ways. Pure byte-pump — rclone never knows it's not a normal client.
-- **Consumer side (`kith-net`):** run a tiny **loopback listener** on `127.0.0.1:<ephemeral>`.
+- **Consumer side (`haven-net`):** run a tiny **loopback listener** on `127.0.0.1:<ephemeral>`.
   Each accepted connection opens an iroh bi-stream to the volunteer node (by `NodeId`) and
   splices. The app points `S3Client.endpoint` at `http://127.0.0.1:<ephemeral>`.
-- **App side:** when the circle's storage is "via Kith Net," `mailboxClient()` returns an
+- **App side:** when the circle's storage is "via Haven Net," `mailboxClient()` returns an
   `S3Client` whose endpoint is the local loopback. **Zero changes** to SigV4, put/get/list,
   mailbox poll, or BYO-storage — they all just see a local endpoint.
 - **Creds distribution:** unchanged. The `BucketConfig` frame (type 14) already ships the
@@ -74,11 +74,11 @@ endpoint, so it's the "I'd rather just pay a bucket" path, not the no-host path.
 
 ## Build steps
 
-1. `kith-net`: add the **splice proxy** (Design A) — `serve_s3_over_iroh(local_addr)` on the
+1. `haven-net`: add the **splice proxy** (Design A) — `serve_s3_over_iroh(local_addr)` on the
    volunteer, `tunnel_to(node_id) -> local_loopback_addr` on the consumer. (~byte-pump, no
    protocol.)
-2. Extend `BucketConfig` (frame 14) with `volunteer_node_id` + `via_kith_net: bool`.
-3. App: `SharedStore.mailboxClient()` returns a loopback-pointed `S3Client` when `via_kith_net`.
+2. Extend `BucketConfig` (frame 14) with `volunteer_node_id` + `via_haven_net: bool`.
+3. App: `SharedStore.mailboxClient()` returns a loopback-pointed `S3Client` when `via_haven_net`.
 4. Prove iPhone ↔ iPhone mailbox sync with the volunteer's rclone bound to `127.0.0.1` and
    **no inbound ports / no domain**.
 5. Later: Design B (`haven/mbx/1`) + the web WebSocket-relay client → true no-host web sync.

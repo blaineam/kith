@@ -40,7 +40,7 @@ plays. Each viewer hears it through **their own** Apple Music subscription.
   social `Event`, sealed exactly like the rest of the post — a relay/storage node sees
   only ciphertext. No new plaintext channel, no new metadata leak.
 - **No PII, no operator role.** MusicKit authorization is per-device and Apple-managed;
-  Kith never sees the user's Apple ID, library, or listening data, and adds **no
+  Haven never sees the user's Apple ID, library, or listening data, and adds **no
   central component** — the "maker holds no keys" property is fully preserved.
 - **Least privilege:** request MusicKit authorization only when the user chooses to
   attach/play a song; degrade gracefully (show the pill, disable playback) if denied.

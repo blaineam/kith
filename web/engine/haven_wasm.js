@@ -1,13 +1,13 @@
-/* @ts-self-types="./kith_wasm.d.ts" */
+/* @ts-self-types="./haven_wasm.d.ts" */
 
 /**
- * A real Kith engine instance for one identity (default circle = your contacts).
+ * A real Haven engine instance for one identity (default circle = your contacts).
  */
-export class KithEngine {
+export class HavenEngine {
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
-        KithEngineFinalization.unregister(this);
+        HavenEngineFinalization.unregister(this);
         return ptr;
     }
     free() {
@@ -110,7 +110,7 @@ export class KithEngine {
             throw takeFromExternrefTable0(ret[1]);
         }
         this.__wbg_ptr = ret[0];
-        KithEngineFinalization.register(this, this.__wbg_ptr, this);
+        HavenEngineFinalization.register(this, this.__wbg_ptr, this);
         return this;
     }
     /**
@@ -211,7 +211,7 @@ export class KithEngine {
         }
     }
 }
-if (Symbol.dispose) KithEngine.prototype[Symbol.dispose] = KithEngine.prototype.free;
+if (Symbol.dispose) HavenEngine.prototype[Symbol.dispose] = HavenEngine.prototype.free;
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -344,11 +344,11 @@ function __wbg_get_imports() {
     };
     return {
         __proto__: null,
-        "./kith_wasm_bg.js": import0,
+        "./haven_wasm_bg.js": import0,
     };
 }
 
-const KithEngineFinalization = (typeof FinalizationRegistry === 'undefined')
+const HavenEngineFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_kithengine_free(ptr, 1));
 
@@ -554,7 +554,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('kith_wasm_bg.wasm', import.meta.url);
+        module_or_path = new URL('haven_wasm_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 

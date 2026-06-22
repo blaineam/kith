@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the Kith app icon: a warm sunset gradient with a glowing constellation
+"""Generate the Haven app icon: a warm sunset gradient with a glowing constellation
 of connected 'kin' nodes. Renders at 4x and downsamples for crisp anti-aliasing."""
 import os
 from PIL import Image, ImageDraw, ImageFilter
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "KithApp", "Assets.xcassets",
+OUT = os.path.join(os.path.dirname(__file__), "..", "HavenApp", "Assets.xcassets",
                    "AppIcon.appiconset", "icon_1024.png")
 SIZE = 1024
 SS = 4

@@ -1,6 +1,6 @@
 # US export compliance (automated)
 
-Kith uses **real end-to-end, post-quantum encryption**, so it is **non-exempt**
+Haven uses **real end-to-end, post-quantum encryption**, so it is **non-exempt**
 (ECCN **5D992.c**, mass-market, License Exception ENC §740.17(b)(1)). Keeping that
 encryption is non-negotiable — and it does **not** restrict global App Store
 distribution. It only requires US paperwork, which is automated.
@@ -8,14 +8,14 @@ distribution. It only requires US paperwork, which is automated.
 ## Fully automated via rocket
 
 ```sh
-node _shared/rocket/rocket.mjs compliance Kith
+node _shared/rocket/rocket.mjs compliance Haven
 ```
 
 This **creates the App Encryption Declaration** in App Store Connect (standard
 algorithms, not proprietary, third-party crypto, available on the French store) and
 **attaches it to the latest build** — so non-exempt builds never hit "Missing
 Compliance" and future builds inherit it. Run it once after the first upload (or after
-`rocket build Kith`); no manual ASC questionnaire needed. (Done — declaration created
+`rocket build Haven`); no manual ASC questionnaire needed. (Done — declaration created
 and attached to build 2.)
 
 ## What's declared
@@ -32,7 +32,7 @@ and attached to build 2.)
 
 Run `node Scripts/export-compliance.mjs` → writes ready-to-send files:
 
-1. **One-time** — `open-source-notification.txt`: because Kith's source is public on
+1. **One-time** — `open-source-notification.txt`: because Haven's source is public on
    GitHub, EAR §742.15(b) lets you notify BIS + NSA of the URL. Send once (and again
    only if the URL changes).
 2. **Annual (due Feb 1)** — `self-classification-report.csv` + `self-classification-email.txt`:

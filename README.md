@@ -43,7 +43,7 @@ Pre-alpha, but it runs on iPhone. Done so far:
 - **First transfer working** — a sealed photo moves peer-to-peer over iroh QUIC,
   decrypted byte-identical (`core/demo`).
 - **iOS app** — SwiftUI on the real Rust core via a UniFFI XCFramework: on-device
-  identity, `kith://` QR + reach-me link, Keychain persistence, and a hybrid-PQ
+  identity, `haven://` QR + reach-me link, Keychain persistence, and a hybrid-PQ
   self-test covered by a passing UI test (verified in the iPhone 17 Pro simulator).
 
 Next: networking in the app, MLS group messaging, multi-device, and the web client.

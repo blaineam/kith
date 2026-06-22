@@ -12,13 +12,13 @@
 # script — see README.md.
 #
 # Usage:   curl -fsSL https://wemiller.com/apps/haven/bridge/install.sh | sh
-#   or:    sh install.sh [--native] [--port 8333] [--dir ~/kith-bridge]
+#   or:    sh install.sh [--native] [--port 8333] [--dir ~/haven-bridge]
 set -eu
 
 PORT=8333
-DATADIR="${KITH_BRIDGE_DIR:-$HOME/kith-bridge}"
+DATADIR="${HAVEN_BRIDGE_DIR:-$HOME/haven-bridge}"
 MODE=docker
-BUCKET=kith
+BUCKET=haven
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -35,11 +35,11 @@ ARCH="$(uname -m 2>/dev/null || echo unknown)"
 mkdir -p "$DATADIR/data/$BUCKET"   # the folder named '$BUCKET' IS the S3 bucket
 
 # Stable random credentials, generated once and saved (so re-runs don't change them).
-CREDFILE="$DATADIR/.kith-bridge-creds"
+CREDFILE="$DATADIR/.haven-bridge-creds"
 if [ -f "$CREDFILE" ]; then
   . "$CREDFILE"
 else
-  AKEY="kith$(head -c 9 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  AKEY="haven$(head -c 9 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   SKEY="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   printf 'AKEY=%s\nSKEY=%s\n' "$AKEY" "$SKEY" > "$CREDFILE"
   chmod 600 "$CREDFILE"
@@ -50,12 +50,12 @@ echo "▸ Data dir: $DATADIR"
 
 start_docker() {
   command -v docker >/dev/null 2>&1 || { echo "✗ Docker not found. Install it, or re-run with --native."; exit 1; }
-  docker rm -f kith-bridge >/dev/null 2>&1 || true
-  docker run -d --name kith-bridge --restart unless-stopped \
+  docker rm -f haven-bridge >/dev/null 2>&1 || true
+  docker run -d --name haven-bridge --restart unless-stopped \
     -p "$PORT:8333" \
     -v "$DATADIR/data:/data" \
     rclone/rclone serve s3 /data --addr :8333 --auth-key "$AKEY,$SKEY" >/dev/null
-  echo "✓ rclone serve s3 running in Docker (container: kith-bridge, auto-restarts)."
+  echo "✓ rclone serve s3 running in Docker (container: haven-bridge, auto-restarts)."
 }
 
 start_native() {

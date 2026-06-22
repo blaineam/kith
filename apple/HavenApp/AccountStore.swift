@@ -1,12 +1,12 @@
 import Foundation
 import Security
 
-/// Owns the user's Kith account. Persists only the 32-byte master seed in the
+/// Owns the user's Haven account. Persists only the 32-byte master seed in the
 /// Keychain; the full identity (all hybrid-PQ keys) is derived from it on launch.
 ///
 /// Multi-device: the seed can optionally sync across *your* Apple devices via iCloud
 /// Keychain (Apple's E2E sync), and can be moved to any client (web/Android/another
-/// phone) with a one-time transfer code / QR. The seed never touches a Kith server.
+/// phone) with a one-time transfer code / QR. The seed never touches a Haven server.
 @MainActor
 final class AccountStore: ObservableObject {
     @Published private(set) var account: Account
@@ -83,11 +83,10 @@ final class AccountStore: ObservableObject {
     }
 
     /// Adopt an identity from a scanned/pasted transfer code. Returns false if invalid.
-    /// Accepts the new `haven-seed:` codes and the legacy `kith-seed:` ones.
     @discardableResult
     func restore(fromTransferCode code: String) -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let prefix = ["haven-seed:", "kith-seed:"].first(where: { trimmed.hasPrefix($0) }) else { return false }
+        guard let prefix = ["haven-seed:"].first(where: { trimmed.hasPrefix($0) }) else { return false }
         let body = String(trimmed.dropFirst(prefix.count))
         guard let seed = Self.base64urlDecode(body), seed.count == 32,
               let restored = try? Account.fromSeed(seed: seed) else { return false }

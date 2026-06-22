@@ -36,5 +36,5 @@ xcodebuild -create-xcframework \
   -library "$CORE/target/aarch64-apple-ios-macabi/release/libhaven_ffi.a" -headers "$HERE/build/headers" \
   -output "$HERE/HavenFFI.xcframework" >/dev/null
 
-echo "✓ Done. Next:  cd apple && xcodegen generate && open Kith.xcodeproj"
+echo "✓ Done. Next:  cd apple && xcodegen generate && open Haven.xcodeproj"
 echo "  (device build: set your Team in Signing & Capabilities, then Run on your iPhone)"

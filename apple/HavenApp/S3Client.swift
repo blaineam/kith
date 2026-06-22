@@ -5,7 +5,7 @@ import CryptoKit
 /// store + mailbox. It only ever moves **sealed** bytes: everything uploaded is already
 /// end-to-end encrypted to the circle, so the bucket host (even another member
 /// "volunteering as tribute") stores opaque blobs it cannot read. Keys live only in the
-/// device Keychain (see StorageStore) — never on any Kith server.
+/// device Keychain (see StorageStore) — never on any Haven server.
 ///
 /// Works with AWS S3, Cloudflare R2, Backblaze B2, rclone serve s3, etc.
 /// A portable S3 connection config — your own bucket, or a circle's shared relay bucket.

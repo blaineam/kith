@@ -2,7 +2,7 @@
 name = "p2pcore"
 version = "0.0.1"
 edition = "2021"
-description = "Kith P2P core: hybrid post-quantum identity, encryption, and (later) transport."
+description = "Haven P2P core: hybrid post-quantum identity, encryption, and (later) transport."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 
 [dependencies]

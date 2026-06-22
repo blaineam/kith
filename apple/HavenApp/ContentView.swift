@@ -35,7 +35,7 @@ struct YouView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .kithCard()
+                        .havenCard()
                         .entrance(appeared, delay: 0.15)
                         privacyCard.entrance(appeared, delay: 0.18)
                         NavigationLink {
@@ -49,7 +49,7 @@ struct YouView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .kithCard()
+                        .havenCard()
                         .entrance(appeared, delay: 0.22)
                         NavigationLink {
                             AdvancedView(account: account, accountStore: accountStore, onReset: onReset)
@@ -130,7 +130,7 @@ struct YouView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .kithCard()
+        .havenCard()
     }
 
     private var privacyCard: some View {
@@ -144,7 +144,7 @@ struct YouView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .kithCard()
+        .havenCard()
     }
 }
 
@@ -175,7 +175,7 @@ struct AdvancedView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .kithCard()
+                    .havenCard()
                     NavigationLink { BlockedPeopleView() } label: {
                         HStack {
                             Label("Blocked people", systemImage: "hand.raised.fill")
@@ -185,7 +185,7 @@ struct AdvancedView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .kithCard()
+                    .havenCard()
                     identityCard
                     Button(role: .destructive) {
                         showResetConfirm = true
@@ -242,7 +242,7 @@ struct AdvancedView: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .kithCard()
+        .havenCard()
     }
 
     private var detailsCard: some View {
@@ -254,7 +254,7 @@ struct AdvancedView: View {
                 .font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .kithCard()
+        .havenCard()
     }
 
     private var privacyCheckCard: some View {
@@ -286,7 +286,7 @@ struct AdvancedView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .kithCard()
+        .havenCard()
     }
 
     private func row(_ label: String, _ value: String) -> some View {

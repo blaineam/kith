@@ -8,7 +8,7 @@ start, not a commitment to start now. Targets the user's old device: **Android 1
 ## The big lever: the core is already portable
 
 The entire trust + data layer is Rust in `core/p2pcore`, exposed through `p2pcore-ffi`
-(crate `kith_ffi`) with **UniFFI**, which generates **Kotlin bindings from the same
+(crate `haven_ffi`) with **UniFFI**, which generates **Kotlin bindings from the same
 `.udl`/proc-macros that generate Swift**. So everything below the UI ports with *zero
 reimplementation* — only a Gradle/NDK build of the same crate:
 
@@ -17,7 +17,7 @@ reimplementation* — only a Gradle/NDK build of the same crate:
 - Feed/event model: posts, stories, edits, reactions, comments, DMs, media refs, music refs
 - Mailbox envelope seal/open, circle-sealed media
 
-`kith-net` (iroh QUIC transport) is also pure Rust and **compiles for Android** (iroh
+`haven-net` (iroh QUIC transport) is also pure Rust and **compiles for Android** (iroh
 supports `aarch64-linux-android`). The MLS/networking work we do for iOS is reused as-is.
 
 **Consequence:** Android is overwhelmingly a *UI + platform-glue* project, not a
@@ -27,8 +27,8 @@ re-architecture. The parity table is really "which platform API replaces which A
 
 | iOS feature | Android approach (API 29+) | Parity |
 |---|---|---|
-| Crypto / identity / circles / feed | Same `kith_ffi` crate via UniFFI Kotlin | **Full** — identical engine |
-| iroh P2P transport + mesh relay | Same `kith-net` crate, `aarch64/armv7-linux-android` | **Full** |
+| Crypto / identity / circles / feed | Same `haven_ffi` crate via UniFFI Kotlin | **Full** — identical engine |
+| iroh P2P transport + mesh relay | Same `haven-net` crate, `aarch64/armv7-linux-android` | **Full** |
 | Nearby offline transport (MultipeerConnectivity) | **Nearby Connections API** (`P2P_CLUSTER`), BLE+Wi-Fi | **Full-ish** — different API, same role; needs the iroh-or-nearby ladder reimplemented in Kotlin |
 | S3 mailbox / BYO-storage / shared relay | Plain HTTPS + SigV4 — port `S3Client.swift` to Kotlin (OkHttp + HMAC), or do SigV4 in Rust and expose via FFI (preferred — one impl) | **Full** |
 | Keychain (key storage) | **Android Keystore** + EncryptedSharedPreferences; same "keys never leave device" rule | **Full** |
@@ -47,7 +47,7 @@ re-architecture. The parity table is really "which platform API replaces which A
 
 ## Recommended build order (when we start)
 
-1. **Cargo-NDK build of `kith_ffi` + `kith-net`** → `.so` per ABI + UniFFI Kotlin bindings. Prove `self_test()` + a seal/open round-trip in a bare Compose app. *(toolchain already installed this session: android targets, cargo-ndk, NDK — only the JDK-17 pin remains, current JDK 26 is too new for AGP.)*
+1. **Cargo-NDK build of `haven_ffi` + `haven-net`** → `.so` per ABI + UniFFI Kotlin bindings. Prove `self_test()` + a seal/open round-trip in a bare Compose app. *(toolchain already installed this session: android targets, cargo-ndk, NDK — only the JDK-17 pin remains, current JDK 26 is too new for AGP.)*
 2. **Identity + circles + invite link** (paste a Haven link, add a contact, verify). No UI polish.
 3. **Mailbox transport in Rust** — do SigV4 + put/get/list *in the core* and expose via FFI, so iOS and Android share one implementation (retires the per-platform `S3Client`). This is also what unblocks **web** (same Rust → WASM).
 4. **Feed** (posts + media via CameraX/MediaStore) over the mailbox. First real cross-platform post (iPhone ↔ Android).

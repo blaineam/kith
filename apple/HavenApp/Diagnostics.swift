@@ -35,7 +35,7 @@ struct ConnectionView: View {
             row("Contacts handshaked", "\(store.handshakedCount) / \(store.contactCount)")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .kithCard()
+        .havenCard()
     }
 
     private func row(_ key: String, _ value: String) -> some View {
@@ -53,6 +53,6 @@ struct ConnectionView: View {
             Text(msg).font(.caption2.monospaced()).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .kithCard()
+        .havenCard()
     }
 }

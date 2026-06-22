@@ -3,7 +3,7 @@ name = "haven-net"
 version = "0.0.1"
 edition = "2021"
 publish = false
-description = "Kith networking: iroh-backed P2P transport carrying sealed social envelopes."
+description = "Haven networking: iroh-backed P2P transport carrying sealed social envelopes."
 
 [dependencies]
 p2pcore = { path = "../p2pcore" }

@@ -1,4 +1,4 @@
-//! Kith networking — an iroh-backed P2P node that carries opaque payloads (in
+//! Haven networking — an iroh-backed P2P node that carries opaque payloads (in
 //! practice, `p2pcore::social::SealedEnvelope` bytes) between peers over QUIC.
 //!
 //! Connections are **kept alive and reused bidirectionally**: each message is a uni

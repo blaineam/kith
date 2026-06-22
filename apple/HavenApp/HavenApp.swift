@@ -20,8 +20,6 @@ struct HavenApp: App {
     @UIApplicationDelegateAdaptor(HavenAppDelegate.self) private var appDelegate
 
     init() {
-        // Carry pre-rename settings/contacts (kith.* → haven.*) before any store reads them.
-        LegacyMigration.run()
         // Register the background-refresh task at launch (required before didFinishLaunching).
         NotificationManager.shared.registerBackgroundTask()
     }
@@ -76,7 +74,7 @@ struct RootView: View {
         }
         .animation(HavenTheme.smooth, value: profile.onboarded)
         .onOpenURL { url in
-            // Invite deep links: kith://u/<id>#<verify> (opened from wemiller.com/apps/haven).
+            // Invite deep links: haven://u/<id>#<verify> (opened from wemiller.com/apps/haven).
             let s = url.absoluteString
             guard s.contains("/u/") else { return }
             tab = "you"

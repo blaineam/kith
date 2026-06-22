@@ -26,9 +26,9 @@ encrypted bytes. The transport is interchangeable; the crypto is transport-blind
 
 | Module | Responsibility | Status |
 |---|---|---|
-| `identity` | On-device keypair (Ed25519 + X25519 + ML-KEM-768); public `KithId`; routable node id; tamper-check hash | ✅ implemented + tested |
+| `identity` | On-device keypair (Ed25519 + X25519 + ML-KEM-768); public `HavenId`; routable node id; tamper-check hash | ✅ implemented + tested |
 | `crypto` | Hybrid-PQ KEM (X25519 + ML-KEM-768 → HKDF) and AES-256-GCM seal/open | ✅ implemented + tested |
-| `link` | `kith://` and `https://` reach-me links/QR; parse, verify, MITM check | ✅ implemented + tested |
+| `link` | `haven://` and `https://` reach-me links/QR; parse, verify, MITM check | ✅ implemented + tested |
 | `transport` | `Path` ladder + `select()` + `Transport` trait seam | ✅ seam + selector tested |
 | `groups` (MLS) | `mls-rs` groups with hybrid-PQ ciphersuite; posts/comments/reactions as group messages | ⏳ next |
 | `discovery` | Publish/resolve signed address records on the DHT | ⏳ next |
@@ -37,7 +37,7 @@ encrypted bytes. The transport is interchangeable; the crypto is transport-blind
 
 ## How a photo gets from A to B (target flow)
 
-1. **A** has **B**'s `KithId` (from a prior QR/link approval). A is a member of the
+1. **A** has **B**'s `HavenId` (from a prior QR/link approval). A is a member of the
    shared MLS group with B.
 2. A optionally **auto-optimizes** the media (HEVC/HEIF/AAC) or sends the original
    losslessly if chosen. The file is chunked and content-addressed (BLAKE3).
@@ -57,7 +57,7 @@ Because there's no central store, large content for an offline peer falls throug
 1. **Sender stays online** — direct, zero cost.
 2. **Group-gossip cache** — other online group members opportunistically cache &
    forward the *encrypted* chunks for the offline member.
-3. **BYO storage pin** — the recipient optionally points Kith at their *own* iCloud /
+3. **BYO storage pin** — the recipient optionally points Haven at their *own* iCloud /
    S3 / NAS; encrypted blobs park there until pulled.
 
 ## Clients
@@ -82,4 +82,4 @@ service. Full detail in [`RELAY-AND-DEPLOY.md`](RELAY-AND-DEPLOY.md).
 
 Both run with **hardened, no-log, identity-blind defaults**; IPs are never logged or
 linked to identities, with an opt-in onion mode for full IP hiding. A
-**`kith-relay`** deployment tool stands either role up on most clouds in one command.
+**`haven-relay`** deployment tool stands either role up on most clouds in one command.

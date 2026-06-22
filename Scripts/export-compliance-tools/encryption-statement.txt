@@ -1,21 +1,21 @@
-KITH — ENCRYPTION SELF-CLASSIFICATION STATEMENT
+HAVEN — ENCRYPTION SELF-CLASSIFICATION STATEMENT
 
-Product:        Kith
+Product:        Haven
 Developer:      Blaine Miller (blaine@wemiller.com)
-Source code:    https://github.com/blaineam/kith
+Source code:    https://github.com/blaineam/haven
 Classification: ECCN 5D992.c (mass market)
 Authorization:  License Exception ENC, EAR Section 740.17(b)(1)
 
 APP FUNCTIONALITY AND PURPOSE
 
-Kith is a private, peer-to-peer social application for sharing photos, videos,
+Haven is a private, peer-to-peer social application for sharing photos, videos,
 music, and messages within a small, invitation-only circle of friends and
 family. All user content (posts, media, messages, comments, and reactions) is
 end-to-end encrypted.
 
 ENCRYPTION DETAILS
 
-Kith uses only standard, published cryptographic algorithms:
+Haven uses only standard, published cryptographic algorithms:
   - AES-256-GCM            (symmetric content encryption)
   - X25519 + ML-KEM-768    (hybrid key establishment; FIPS 203)
   - Ed25519 + ML-DSA-65    (digital signatures; FIPS 204)

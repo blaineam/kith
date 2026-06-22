@@ -1,6 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "kith-web", "runtimeExecutable": "python3", "runtimeArgs": ["-m", "http.server", "4599", "--directory", "web"], "port": 4599 }
+    { "name": "haven-web", "runtimeExecutable": "python3", "runtimeArgs": ["-m", "http.server", "4599", "--directory", "web"], "port": 4599 }
   ]
 }

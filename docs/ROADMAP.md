@@ -10,14 +10,14 @@ link system, all verifiable on the host with no devices or network.
 
 - On-device identity: Ed25519 + X25519 + ML-KEM-768 (`identity.rs`)
 - Hybrid-PQ KEM (X25519 + ML-KEM-768 → HKDF) + AES-256-GCM (`crypto.rs`)
-- Reach-me links (`kith://` + `https://`), parse/verify/MITM-check (`link.rs`)
+- Reach-me links (`haven://` + `https://`), parse/verify/MITM-check (`link.rs`)
 - Transport `Path` ladder + selector seam (`transport.rs`)
 - 5 integration tests green (`tests/spine.rs`)
 
 ## ✅ M1b — Networking spine (first transfer working)
 
 A real photo moves peer-to-peer as hybrid-PQ ciphertext over QUIC, verified
-byte-identical. Runnable: `cargo run -p kith-demo` (see `core/demo/`).
+byte-identical. Runnable: `cargo run -p haven-demo` (see `core/demo/`).
 
 - **iroh 1.0** integrated: two endpoints, dial-by-address, real QUIC streams,
   relays disabled (runs fully offline/local)
@@ -28,7 +28,7 @@ byte-identical. Runnable: `cargo run -p kith-demo` (see `core/demo/`).
   PQ transport is available to switch on later
 
 ### Reusable networking node ✅
-- **`kith-net`** crate: a `Node` (iroh) that listens + dials and exchanges opaque
+- **`haven-net`** crate: a `Node` (iroh) that listens + dials and exchanges opaque
   payloads. Test: two nodes exchange a real `p2pcore::social::SealedEnvelope` over
   QUIC and the recipient opens the post with their own keys.
 
@@ -80,12 +80,12 @@ signatures. 6 core tests green.
 Runs on iPhone (verified in the iOS 17 Pro simulator): SwiftUI app on the real Rust
 core via a UniFFI XCFramework.
 
-- ✅ `rustup` + iOS targets (installed non-disruptively), **UniFFI** crate `kith_ffi`,
-  `KithFFI.xcframework` (device + sim), `build-rust-xcframework.sh`
-- ✅ SwiftUI app: on-device identity, `kith://` QR + reach-me link, node id +
+- ✅ `rustup` + iOS targets (installed non-disruptively), **UniFFI** crate `haven_ffi`,
+  `HavenFFI.xcframework` (device + sim), `build-rust-xcframework.sh`
+- ✅ SwiftUI app: on-device identity, `haven://` QR + reach-me link, node id +
   verification, Keychain-persisted 32-byte master seed
 - ✅ On-device hybrid-PQ self-test (KEM seal→open, hybrid signature, link round-trip),
-  covered by a passing `KithUITests` XCUITest
+  covered by a passing `HavenUITests` XCUITest
 - ⏭️ Remaining: receive a photo over the network on-device (needs iroh in the app),
   Secure Enclave-backed key storage, device build/signing for a physical iPhone
 
@@ -103,13 +103,13 @@ core via a UniFFI XCFramework.
 - Opt-in onion/proxy mode for full IP hiding
 - *(No quota/blind-token/subscription work — deleted per D15)*
 
-## ⏭️ M5b — `kith-relay` deployment tool (optional / community)
+## ⏭️ M5b — `haven-relay` deployment tool (optional / community)
 
 - For volunteers (or the operator later) who want guaranteed relay reliability —
   **never required**, no mandatory monthly cost
 - Single static Rust binary + container image for both relay roles
 - OpenTofu modules: AWS / GCP / Azure / Hetzner / Fly / DO / Cloudflare-R2 / Oracle /
-  bare VPS; `kith-relay deploy --provider … --role connection|storage|both`
+  bare VPS; `haven-relay deploy --provider … --role connection|storage|both`
 - Hardened no-log defaults baked in and hard to disable; self-registers to discovery
 
 ## ⏭️ M6 — Web/Android client
@@ -129,8 +129,8 @@ core via a UniFFI XCFramework.
 
 ## ⏭️ M10 — CI & launch tooling
 
-- ✅ Marketing page live: https://wemiller.com/apps/kith/ (registered in projects.json)
-- ⏭️ **Monkr ASC screenshot pipeline** (`.local-screenshots.conf` + `rocket shots Kith`)
+- ✅ Marketing page live: https://wemiller.com/apps/haven/ (registered in projects.json)
+- ⏭️ **Monkr ASC screenshot pipeline** (`.local-screenshots.conf` + `rocket shots Haven`)
   — device-framed App Store screenshots
 - ⏭️ **Xcode Cloud CI** (eventually; local rocket CI is fine for the early phase)
 
@@ -144,13 +144,13 @@ core via a UniFFI XCFramework.
 
 ## 🟡 M9 — Launch surface
 
-- ✅ **TestFlight pipeline** via rocket: `.local-ci.conf` (iOS, scheme Kith, team,
-  XCFramework prebuild) → `rocket build Kith` archives + cloud-signs + uploads.
-  Kith **1.0.0 (2)** uploaded to ASC app "Kith Community" (com.blaineam.kith).
+- ✅ **TestFlight pipeline** via rocket: `.local-ci.conf` (iOS, scheme Haven, team,
+  XCFramework prebuild) → `rocket build Haven` archives + cloud-signs + uploads.
+  Haven **1.0.0 (2)** uploaded to ASC app "Haven Community" (com.blaineam.kith).
 - ⏭️ Answer export compliance in TestFlight; add testers
-- **Marketing page** at `blaineam.github.io` repo under `/apps/kith/` — only once
+- **Marketing page** at `blaineam.github.io` repo under `/apps/haven/` — only once
   close to App Store submission
-- **Screenshot automation**: wire Kith into the shared capture → **Monkr-frame** →
+- **Screenshot automation**: wire Haven into the shared capture → **Monkr-frame** →
   ASC pipeline in `_shared/` (depends on Monkr `/headless`), via the **rocket** flow,
   matching the existing app-portfolio screenshot style
 - CHANGELOG + docs/pages-site + README kept current on every push

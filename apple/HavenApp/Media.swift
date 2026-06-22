@@ -102,7 +102,7 @@ struct MediaItem: Identifiable {
 
 /// Persistent, content-ref'd media store. Refs encode the kind (img_/vid_/aud_) so a
 /// recipient who receives the bytes can reconstruct the item. Files live under
-/// Application Support/kith-media so they survive app restarts and updates.
+/// Application Support/haven-media so they survive app restarts and updates.
 @MainActor
 final class MediaStore: ObservableObject {
     static let shared = MediaStore()
@@ -110,7 +110,7 @@ final class MediaStore: ObservableObject {
 
     private var dir: URL {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("kith-media", isDirectory: true)
+            .appendingPathComponent("haven-media", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }

@@ -120,7 +120,7 @@ final class AudioCoordinator: ObservableObject {
 
 /// Real Apple Music playback via the system music player. A shared song carries only
 /// its catalog id; we queue that id so it plays through the viewer's own Apple Music
-/// subscription — Kith never moves audio. When the viewer unmutes a post's video the
+/// subscription — Haven never moves audio. When the viewer unmutes a post's video the
 /// song pauses (duck) and resumes (unduck) on re-mute.
 @MainActor
 final class MusicPlayback {

@@ -56,10 +56,10 @@ targets:
         # EAR-exempt (standard mass-market crypto, not shipped to France) → NO. The app
         # still has full E2E post-quantum encryption; this is only the US export answer.
         ITSAppUsesNonExemptEncryption: false
-        # Invite deep links: haven://u/<id>#<verify> (kith:// kept for older links).
+        # Invite deep links: haven://u/<id>#<verify>.
         CFBundleURLTypes:
           - CFBundleURLName: com.blaineam.kith
-            CFBundleURLSchemes: [haven, kith]
+            CFBundleURLSchemes: [haven]
         # Local notifications only — no push server. A background-refresh wake briefly
         # brings up P2P networking, syncs, and posts LOCAL notifications for anything new.
         UIBackgroundModes:

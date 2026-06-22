@@ -1,4 +1,4 @@
-# Kith — Live Progress
+# Haven — Live Progress
 
 A running log of what's built, what's shipping, and what I'm working on right now.
 Updated continuously. (Times in your local day.)
@@ -22,7 +22,7 @@ Post-quantum E2E identity · invite QR + scanner + verified handshake · **two-w
 ---
 
 ## ✅ Multi-circle — DONE (committed, tested)
-- [x] Engine: `KithSocial` holds multiple circles (each its own group / event-log / seen-set)
+- [x] Engine: `HavenSocial` holds multiple circles (each its own group / event-log / seen-set)
 - [x] Persistence: per-circle state on disk + legacy-format migration
 - [x] Wire protocol: Hello/Event carry a circle id; received events route to the right circle
 - [x] FeedStore + UI: circle switcher in the feed title, per-circle feed, create circle
@@ -54,7 +54,7 @@ Same engine + SwiftUI app builds + runs on macOS (Apple Silicon). Added the maca
 Instagram-style: live camera (tap=photo, hold=video, flip, library), then a composer to add a **song** + an easy **caption**, then Share to story. Viewer plays the song while watching.
 
 ## ✅ Static web client — DONE
-Single-file, zero-dep web app mirroring the iOS look (gradient, cards, story rings, tab bar, DM threads, You page, story viewer). Interactive on local data; deployed to apps/kith/app/.
+Single-file, zero-dep web app mirroring the iOS look (gradient, cards, story rings, tab bar, DM threads, You page, story viewer). Interactive on local data; deployed to apps/haven/app/.
 
 ## ✅ Shared circle store (#12) — DONE
 seal_bytes/open_bytes group primitive + a real SigV4 S3 client + "Volunteer as tribute": a member keeps a circle-sealed (host can't read) copy of media in their bucket and re-serves it P2P to anyone missing it. No cred sharing.
@@ -74,5 +74,5 @@ Everything builds (iOS + Mac Catalyst), Rust + UI tests green, all committed + p
 
 ## 👀 How to watch progress
 - **This file** on GitHub — updated as each box above is checked.
-- **Commit feed** — github.com/blaineam/kith — every piece is a pushed commit with a clear message.
+- **Commit feed** — github.com/blaineam/haven — every piece is a pushed commit with a clear message.
 - **Task board** in your Claude app — live status of each item.

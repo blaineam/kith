@@ -2,7 +2,7 @@ import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UIKit
 
-/// Generates a crisp QR code image from a string (e.g. a `kith://` reach-me link).
+/// Generates a crisp QR code image from a string (e.g. a `haven://` reach-me link).
 enum QRCode {
     static func image(from string: String) -> UIImage? {
         let context = CIContext()
