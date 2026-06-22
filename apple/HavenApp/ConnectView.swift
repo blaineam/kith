@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Where Kith's web invite links live. The static landing page at
 /// `wemiller.com/apps/haven/` resolves `/u/<id>#<verify>` into an "open in Kith" page.
-enum KithSite {
+enum HavenSite {
     static let inviteDomain = "wemiller.com/apps/haven"
 }
 
@@ -89,7 +89,7 @@ struct ConnectView: View {
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            if let qr = QRCode.image(from: account.kithLink(domain: KithSite.inviteDomain)) {
+            if let qr = QRCode.image(from: account.kithLink(domain: HavenSite.inviteDomain)) {
                 Image(uiImage: qr)
                     .interpolation(.none).resizable().scaledToFit()
                     .frame(width: 210, height: 210)
@@ -98,7 +98,7 @@ struct ConnectView: View {
                     .shadow(color: HavenTheme.violet.opacity(0.25), radius: 16, y: 8)
             }
 
-            if let url = URL(string: account.kithLink(domain: KithSite.inviteDomain)) {
+            if let url = URL(string: account.kithLink(domain: HavenSite.inviteDomain)) {
                 ShareLink(item: url) {
                     Label("Share invite link", systemImage: "square.and.arrow.up")
                 }

@@ -24,7 +24,7 @@ final class ProfileStore: ObservableObject {
         onboarded = defaults.bool(forKey: doneKey)
         avatar = Self.loadAvatar()
 
-        if ProcessInfo.processInfo.environment["KITH_SKIP_ONBOARDING"] == "1" {
+        if ProcessInfo.processInfo.environment["HAVEN_SKIP_ONBOARDING"] == "1" {
             if displayName.isEmpty { displayName = "You" }
             onboarded = true
         }

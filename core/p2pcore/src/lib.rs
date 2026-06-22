@@ -12,7 +12,7 @@
 //!
 //! ## Module map
 //! * [`identity`] — a Kith account: a keypair held on-device, no PII. The public
-//!   half ([`identity::KithId`]) is also the routable node id.
+//!   half ([`identity::HavenId`]) is also the routable node id.
 //! * [`crypto`]  — hybrid post-quantum KEM (X25519 + ML-KEM-768) and AEAD
 //!   (AES-256-GCM). This is what defends relayed ciphertext against
 //!   "harvest-now, decrypt-later".

@@ -2,12 +2,12 @@ import XCTest
 
 /// On-device proof that the hybrid-PQ engine and social feed work, driven through
 /// the real (human-friendly) UI. Onboarding is bypassed via an env flag.
-final class KithUITests: XCTestCase {
+final class HavenUITests: XCTestCase {
     private func app(tab: String) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["KITH_SKIP_ONBOARDING"] = "1"
-        app.launchEnvironment["KITH_TAB"] = tab
-        app.launchEnvironment["KITH_NO_NET"] = "1"   // don't start the live P2P node in UI tests
+        app.launchEnvironment["HAVEN_SKIP_ONBOARDING"] = "1"
+        app.launchEnvironment["HAVEN_TAB"] = tab
+        app.launchEnvironment["HAVEN_NO_NET"] = "1"   // don't start the live P2P node in UI tests
         return app
     }
 

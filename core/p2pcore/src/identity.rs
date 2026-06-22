@@ -4,14 +4,14 @@
 //!   * **Ed25519 + ML-DSA-65** signing keys — long-term identity & message
 //!     authentication. Both must verify, so a forger must break classical *and*
 //!     post-quantum signatures. The Ed25519 public half doubles as the compact
-//!     routable node id ([`KithId::node_id_bytes`]).
+//!     routable node id ([`HavenId::node_id_bytes`]).
 //!   * an **X25519** static secret — the classical half of the hybrid KEM.
 //!   * an **ML-KEM-768** decapsulation key — the post-quantum half of the KEM.
 //!
 //! The Ed25519 key is the stable, compact public address that goes in links/QRs.
 //! The bulky post-quantum public keys travel via discovery (a signed DHT record
 //! keyed by the Ed25519 id), and a short hash of the full bundle
-//! ([`KithId::verification`]) lets a dialer detect tampering once fetched.
+//! ([`HavenId::verification`]) lets a dialer detect tampering once fetched.
 
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
@@ -42,7 +42,7 @@ const ED_SIG_LEN: usize = 64;
 
 /// The public, shareable identity of a peer.
 #[derive(Clone)]
-pub struct KithId {
+pub struct HavenId {
     /// Ed25519 verifying key — also the 32-byte routable node id.
     pub signing: VerifyingKey,
     /// ML-DSA-65 verifying key — the post-quantum half of the hybrid signature.
@@ -53,7 +53,7 @@ pub struct KithId {
     pub kem_pq: EncapKey,
 }
 
-impl KithId {
+impl HavenId {
     /// The 32-byte routable id (Ed25519 public key). Stable for the life of the
     /// identity; this is what a `haven://u/<id>` link encodes.
     pub fn node_id_bytes(&self) -> [u8; 32] {
@@ -115,7 +115,7 @@ impl KithId {
         v
     }
 
-    /// Inverse of [`KithId::to_bytes`].
+    /// Inverse of [`HavenId::to_bytes`].
     pub fn from_bytes(b: &[u8]) -> Result<Self> {
         if b.len() <= PREFIX_LEN {
             return Err(CoreError::Encoding("identity bundle too short"));
@@ -192,8 +192,8 @@ impl Identity {
     }
 
     /// The shareable public identity.
-    pub fn public(&self) -> KithId {
-        KithId {
+    pub fn public(&self) -> HavenId {
+        HavenId {
             signing: self.signing.verifying_key(),
             sig_pq: self.sig_pq.verifying_key(),
             kem_x: XPublicKey::from(&self.kem_x),

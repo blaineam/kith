@@ -21,21 +21,21 @@
 
 use data_encoding::BASE32_NOPAD;
 
-use crate::identity::KithId;
+use crate::identity::HavenId;
 use crate::{CoreError, Result};
 
 /// The decoded contents of a reach-me link.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct KithLink {
+pub struct HavenLink {
     /// 32-byte Ed25519 routable id.
     pub id: [u8; 32],
     /// 16-byte tamper-check over the full hybrid identity bundle.
     pub verification: [u8; 16],
 }
 
-impl KithLink {
+impl HavenLink {
     /// Build a link from a peer's public identity.
-    pub fn from_identity(id: &KithId) -> Self {
+    pub fn from_identity(id: &HavenId) -> Self {
         Self {
             id: id.node_id_bytes(),
             verification: id.verification(),
@@ -100,7 +100,7 @@ impl KithLink {
 
     /// Confirm a full identity fetched from discovery matches what this link promised.
     /// This is the MITM / tamper check.
-    pub fn matches(&self, fetched: &KithId) -> bool {
+    pub fn matches(&self, fetched: &HavenId) -> bool {
         fetched.node_id_bytes() == self.id && fetched.verification() == self.verification
     }
 }

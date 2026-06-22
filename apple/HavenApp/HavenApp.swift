@@ -15,7 +15,7 @@ final class HavenAppDelegate: NSObject, UIApplicationDelegate {
 }
 
 @main
-struct KithApp: App {
+struct HavenApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(HavenAppDelegate.self) private var appDelegate
 
@@ -57,7 +57,7 @@ struct RootView: View {
     @ObservedObject private var feedStore = FeedStore.shared
     @ObservedObject private var connections = ConnectionsStore.shared
 
-    @State private var tab = ProcessInfo.processInfo.environment["KITH_TAB"] ?? "circle"
+    @State private var tab = ProcessInfo.processInfo.environment["HAVEN_TAB"] ?? "circle"
     @State private var showConnect = false
     @State private var didPrompt = false
     /// An incoming invite link. Driving the sheet from this *item* (not a separate bool)
@@ -133,14 +133,14 @@ struct RootView: View {
         .onAppear {
             accountStore.reloadIfTemporary()
             FeedStore.shared.configure(seed: accountStore.account.secretSeed())
-            if ProcessInfo.processInfo.environment["KITH_OPEN_CONNECT"] == "1" {
+            if ProcessInfo.processInfo.environment["HAVEN_OPEN_CONNECT"] == "1" {
                 showConnect = true
                 return
             }
             // Gently walk first-time users into adding their first person.
             guard !didPrompt,
                   contacts.contacts.isEmpty,
-                  ProcessInfo.processInfo.environment["KITH_SKIP_ONBOARDING"] != "1"
+                  ProcessInfo.processInfo.environment["HAVEN_SKIP_ONBOARDING"] != "1"
             else { return }
             didPrompt = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { showConnect = true }

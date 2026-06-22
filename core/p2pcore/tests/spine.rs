@@ -2,8 +2,8 @@
 //! link/ticket system — all verifiable on the host with no devices or network.
 
 use p2pcore::crypto::{decapsulate, encapsulate_to, open, seal};
-use p2pcore::identity::{Identity, KithId};
-use p2pcore::link::KithLink;
+use p2pcore::identity::{Identity, HavenId};
+use p2pcore::link::HavenLink;
 use p2pcore::transport::{select, Path};
 
 #[test]
@@ -64,7 +64,7 @@ fn public_identity_bundle_roundtrips() {
     let bytes = pubid.to_bytes();
     // ed25519(32) + x25519(32) + ml-kem-ek(1184) + ml-dsa-65-vk(1952)
     assert_eq!(bytes.len(), 32 + 32 + 1184 + 1952);
-    let restored = KithId::from_bytes(&bytes).expect("decode bundle");
+    let restored = HavenId::from_bytes(&bytes).expect("decode bundle");
     assert_eq!(restored.node_id_bytes(), pubid.node_id_bytes());
     assert_eq!(restored.verification(), pubid.verification());
 }
@@ -102,18 +102,18 @@ fn hybrid_pq_kem_agrees_then_aead_roundtrips() {
 fn link_roundtrips_and_detects_tampering() {
     let id = Identity::generate();
     let pubid = id.public();
-    let link = KithLink::from_identity(&pubid);
+    let link = HavenLink::from_identity(&pubid);
 
     // Deep-link form.
     let uri = link.to_uri();
     assert!(uri.starts_with("haven://u/"));
     assert!(uri.contains('#'));
-    assert_eq!(KithLink::parse(&uri).unwrap(), link);
+    assert_eq!(HavenLink::parse(&uri).unwrap(), link);
 
     // Website form (with a subpath, as the app uses) parses to the same payload.
     let web = link.to_web("wemiller.com/apps/haven");
     assert!(web.starts_with("https://wemiller.com/apps/haven/u/"));
-    assert_eq!(KithLink::parse(&web).unwrap(), link);
+    assert_eq!(HavenLink::parse(&web).unwrap(), link);
 
     // A link matches the genuine identity fetched from discovery...
     assert!(link.matches(&pubid));
@@ -122,7 +122,7 @@ fn link_roundtrips_and_detects_tampering() {
     assert!(!link.matches(&other));
 
     // A link with no verification fragment is rejected, not trusted blindly.
-    assert!(KithLink::parse("haven://u/AAAA").is_err());
+    assert!(HavenLink::parse("haven://u/AAAA").is_err());
 }
 
 #[test]

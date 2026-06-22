@@ -54,8 +54,8 @@ final class FeedStore: ObservableObject {
     @Published var activeCircleId = "default"
     static let shared = FeedStore()
 
-    private var social: KithSocial?
-    private var node: KithNode?
+    private var social: HavenSocial?
+    private var node: HavenNode?
     private var nearby: NearbyTransport?
     private var mailboxTimer: Timer?
     private var listener: InboundBridge?
@@ -84,11 +84,11 @@ final class FeedStore: ObservableObject {
 
     func configure(seed: Data) {
         guard social == nil else { return }
-        social = try? KithSocial(accountSeed: seed)
+        social = try? HavenSocial(accountSeed: seed)
         loadPersisted()
         refreshCircles()     // also purges any contaminated DM membership (see refreshCircles)
         refresh()
-        guard ProcessInfo.processInfo.environment["KITH_NO_NET"] != "1" else { return }
+        guard ProcessInfo.processInfo.environment["HAVEN_NO_NET"] != "1" else { return }
         bringOnline(seed: seed)
         startMailboxPolling()
     }
@@ -338,7 +338,7 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                let n = try await KithNode.start(accountSeed: seed, listener: bridge)
+                let n = try await HavenNode.start(accountSeed: seed, listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true

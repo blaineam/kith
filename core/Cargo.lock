@@ -1497,10 +1497,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "haven-net"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "data-encoding",
+ "iroh",
+ "p2pcore",
+ "rustls",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "haven-wasm"
+version = "0.0.1"
+dependencies = [
+ "console_error_panic_hook",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "p2pcore",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "haven_ffi"
 version = "0.0.1"
 dependencies = [
- "kith-net",
+ "haven-net",
  "p2pcore",
  "serde",
  "serde_json",
@@ -2310,32 +2336,6 @@ dependencies = [
  "p2pcore",
  "rustls",
  "tokio",
-]
-
-[[package]]
-name = "kith-net"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "data-encoding",
- "iroh",
- "p2pcore",
- "rustls",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "kith-wasm"
-version = "0.0.1"
-dependencies = [
- "console_error_panic_hook",
- "getrandom 0.2.17",
- "getrandom 0.4.3",
- "p2pcore",
- "serde",
- "serde_json",
- "wasm-bindgen",
 ]
 
 [[package]]

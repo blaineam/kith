@@ -10,8 +10,8 @@ use std::collections::HashSet;
 
 use wasm_bindgen::prelude::*;
 
-use p2pcore::identity::{Identity, KithId};
-use p2pcore::link::KithLink;
+use p2pcore::identity::{Identity, HavenId};
+use p2pcore::link::HavenLink;
 use p2pcore::social::{
     build_feed, open_event, seal_event, Event, EventKind, Group, SealedEnvelope,
 };
@@ -31,19 +31,19 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 
 /// A real Kith engine instance for one identity (default circle = your contacts).
 #[wasm_bindgen]
-pub struct KithEngine {
+pub struct HavenEngine {
     me: Identity,
-    members: Vec<KithId>,
+    members: Vec<HavenId>,
     events: Vec<Event>,
     seen: HashSet<String>,
 }
 
 #[wasm_bindgen]
-impl KithEngine {
+impl HavenEngine {
     /// Create a fresh identity, or restore one from a 64-char hex seed (e.g. decoded
     /// from a phone's transfer code — same identity across devices).
     #[wasm_bindgen(constructor)]
-    pub fn new(seed_hex: Option<String>) -> Result<KithEngine, JsValue> {
+    pub fn new(seed_hex: Option<String>) -> Result<HavenEngine, JsValue> {
         console_error_panic_hook::set_once();
         let me = match seed_hex.filter(|s| !s.is_empty()) {
             Some(h) => {
@@ -55,7 +55,7 @@ impl KithEngine {
             }
             None => Identity::generate(),
         };
-        Ok(KithEngine { me, members: vec![], events: vec![], seen: HashSet::new() })
+        Ok(HavenEngine { me, members: vec![], events: vec![], seen: HashSet::new() })
     }
 
     /// The 32-byte master seed as hex — persist this (IndexedDB/localStorage) to stay
@@ -71,7 +71,7 @@ impl KithEngine {
         hexs(&self.me.public().to_bytes())
     }
     pub fn invite_link(&self, domain: String) -> String {
-        KithLink::from_identity(&self.me.public()).to_web(&domain)
+        HavenLink::from_identity(&self.me.public()).to_web(&domain)
     }
     pub fn verification_hex(&self) -> String {
         hexs(&self.me.public().verification())
@@ -80,7 +80,7 @@ impl KithEngine {
     /// Add a contact from their public bundle (hex); returns their node id (hex).
     pub fn add_contact(&mut self, bundle_hex: String) -> Result<String, JsValue> {
         let bytes = unhex(&bundle_hex).ok_or_else(|| JsValue::from_str("bad bundle hex"))?;
-        let kid = KithId::from_bytes(&bytes).map_err(|_| JsValue::from_str("bad bundle"))?;
+        let kid = HavenId::from_bytes(&bytes).map_err(|_| JsValue::from_str("bad bundle"))?;
         let nh = hexs(&kid.node_id_bytes());
         if !self.members.iter().any(|m| m.node_id_bytes() == kid.node_id_bytes()) {
             self.members.push(kid);

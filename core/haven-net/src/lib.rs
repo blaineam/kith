@@ -19,7 +19,7 @@ use iroh::{
     EndpointAddr, EndpointId, SecretKey,
 };
 
-const ALPN: &[u8] = b"kith/social/0";
+const ALPN: &[u8] = b"haven/social/0";
 const MAX_PAYLOAD: usize = 256 * 1024 * 1024;
 
 /// Called for each inbound payload (sealed envelope / protocol frame bytes).

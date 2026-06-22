@@ -22,7 +22,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::{decapsulate, encapsulate_to, open, seal, Encapsulation};
-use crate::identity::{Identity, KithId};
+use crate::identity::{Identity, HavenId};
 use crate::{CoreError, Result};
 
 /// A reference to an Apple Music track attached to a post. This is *reference data
@@ -86,11 +86,11 @@ impl Event {
 #[derive(Clone)]
 pub struct Group {
     pub id: String,
-    pub members: Vec<KithId>,
+    pub members: Vec<HavenId>,
 }
 
 impl Group {
-    pub fn new(id: impl Into<String>, members: Vec<KithId>) -> Self {
+    pub fn new(id: impl Into<String>, members: Vec<HavenId>) -> Self {
         Self { id: id.into(), members }
     }
 }
@@ -209,7 +209,7 @@ pub fn seal_bytes(sender: &Identity, group: &Group, bytes: &[u8]) -> Result<Seal
 }
 
 /// Open group-sealed bytes addressed to me, verifying the sender. Recipient side.
-pub fn open_bytes(me: &Identity, sender_pub: &KithId, env: &SealedEnvelope) -> Result<Vec<u8>> {
+pub fn open_bytes(me: &Identity, sender_pub: &HavenId, env: &SealedEnvelope) -> Result<Vec<u8>> {
     sender_pub.verify(&env.transcript(), &env.signature)?;
     let my_id = me.public().node_id_bytes().to_vec();
     let mine = env
@@ -234,7 +234,7 @@ pub fn open_bytes(me: &Identity, sender_pub: &KithId, env: &SealedEnvelope) -> R
 }
 
 /// Open a sealed envelope addressed to me, verifying the sender's signature. Recipient side.
-pub fn open_event(me: &Identity, sender_pub: &KithId, env: &SealedEnvelope) -> Result<Event> {
+pub fn open_event(me: &Identity, sender_pub: &HavenId, env: &SealedEnvelope) -> Result<Event> {
     // 1. Authenticate the sender over the whole transcript before decrypting.
     sender_pub.verify(&env.transcript(), &env.signature)?;
 

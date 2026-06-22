@@ -1,4 +1,4 @@
-name: Kith
+name: Haven
 options:
   bundleIdPrefix: com.blaineam
   deploymentTarget:
@@ -13,12 +13,12 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
 
 targets:
-  Kith:
+  Haven:
     type: application
     platform: iOS
     supportedDestinations: [iOS, macCatalyst]
     sources:
-      - path: KithApp
+      - path: HavenApp
       - path: Generated/haven_ffi.swift
     dependencies:
       - framework: HavenFFI.xcframework
@@ -27,7 +27,7 @@ targets:
       # reference SCDynamicStore* — link SystemConfiguration.
       - sdk: SystemConfiguration.framework
     info:
-      path: KithApp/Info.plist
+      path: HavenApp/Info.plist
       properties:
         CFBundleDisplayName: Haven
         # Track the build settings (a managed Info.plist won't do this automatically).
@@ -72,7 +72,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blaineam.kith
         GENERATE_INFOPLIST_FILE: NO
-        CODE_SIGN_ENTITLEMENTS: KithApp/Kith.entitlements
+        CODE_SIGN_ENTITLEMENTS: HavenApp/Haven.entitlements
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "43"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
@@ -85,26 +85,26 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         "EXCLUDED_ARCHS[sdk=macosx*]": x86_64
 
-  KithUITests:
+  HavenUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - path: KithUITests
+      - path: HavenUITests
     dependencies:
-      - target: Kith
+      - target: Haven
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blaineam.kith.uitests
         GENERATE_INFOPLIST_FILE: YES
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
-        TEST_TARGET_NAME: Kith
+        TEST_TARGET_NAME: Haven
 
 schemes:
-  Kith:
+  Haven:
     build:
       targets:
-        Kith: all
-        KithUITests: [test]
+        Haven: all
+        HavenUITests: [test]
     test:
       targets:
-        - KithUITests
+        - HavenUITests

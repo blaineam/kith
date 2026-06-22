@@ -22,4 +22,4 @@ web/dist/
 core/p2pcore-ffi/generated/
 *.xcframework
 Scripts/export-compliance/
-KithApp/Info.plist
+HavenApp/Info.plist

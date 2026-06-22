@@ -44,7 +44,7 @@ struct HavenBackground: View {
 }
 
 /// A floating, slightly-bordered card with soft depth.
-struct KithCard: ViewModifier {
+struct HavenCard: ViewModifier {
     var padding: CGFloat = 18
     func body(content: Content) -> some View {
         content
@@ -59,7 +59,7 @@ struct KithCard: ViewModifier {
 }
 
 extension View {
-    func kithCard(padding: CGFloat = 18) -> some View { modifier(KithCard(padding: padding)) }
+    func kithCard(padding: CGFloat = 18) -> some View { modifier(HavenCard(padding: padding)) }
 }
 
 /// Tactile press feedback: gentle scale + dim on press.

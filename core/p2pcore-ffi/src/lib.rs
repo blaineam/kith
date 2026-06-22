@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use std::collections::HashSet;
 
-use kith_net::Node;
+use haven_net::Node;
 use p2pcore::crypto::{decapsulate, encapsulate_to, open, seal, Encapsulation};
-use p2pcore::identity::{Identity, KithId};
-use p2pcore::link::KithLink;
+use p2pcore::identity::{Identity, HavenId};
+use p2pcore::link::HavenLink;
 use p2pcore::social::{
     build_feed, open_bytes, open_event, seal_bytes, seal_event, Event, EventKind, Group,
     SealedEnvelope, TrackRef,
@@ -21,7 +21,7 @@ uniffi::setup_scaffolding!();
 
 /// Errors crossing the FFI boundary.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum KithError {
+pub enum HavenError {
     #[error("{msg}")]
     Invalid { msg: String },
 }
@@ -43,10 +43,10 @@ impl Account {
 
     /// Restore an account from its 32-byte master seed (e.g. read from the Keychain).
     #[uniffi::constructor]
-    pub fn from_seed(seed: Vec<u8>) -> Result<Arc<Self>, KithError> {
+    pub fn from_seed(seed: Vec<u8>) -> Result<Arc<Self>, HavenError> {
         let seed: [u8; 32] = seed
             .try_into()
-            .map_err(|_| KithError::Invalid { msg: "seed must be exactly 32 bytes".into() })?;
+            .map_err(|_| HavenError::Invalid { msg: "seed must be exactly 32 bytes".into() })?;
         Ok(Arc::new(Self { inner: Identity::from_seed(&seed) }))
     }
 
@@ -68,12 +68,12 @@ impl Account {
 
     /// `haven://u/<id>#<verify>` — the deep-link / QR form of the reach-me link.
     pub fn kith_uri(&self) -> String {
-        KithLink::from_identity(&self.inner.public()).to_uri()
+        HavenLink::from_identity(&self.inner.public()).to_uri()
     }
 
     /// `https://<domain>/u/<id>#<verify>` — the website form of the reach-me link.
     pub fn kith_link(&self, domain: String) -> String {
-        KithLink::from_identity(&self.inner.public()).to_web(&domain)
+        HavenLink::from_identity(&self.inner.public()).to_web(&domain)
     }
 
     /// The full public identity bundle (for publishing to discovery).
@@ -97,8 +97,8 @@ pub struct LinkInfo {
 
 /// Parse a `kith://` or `https://…/u/…#…` reach-me link.
 #[uniffi::export]
-pub fn parse_link(s: String) -> Result<LinkInfo, KithError> {
-    let link = KithLink::parse(&s).map_err(|e| KithError::Invalid { msg: format!("{e}") })?;
+pub fn parse_link(s: String) -> Result<LinkInfo, HavenError> {
+    let link = HavenLink::parse(&s).map_err(|e| HavenError::Invalid { msg: format!("{e}") })?;
     Ok(LinkInfo {
         id_hex: hex(&link.id),
         verification_hex: hex(&link.verification),
@@ -144,8 +144,8 @@ pub fn self_test() -> SelfTestReport {
     let signature_ok = pubid.verify(payload, &sig).is_ok()
         && pubid.verify(b"different message", &sig).is_err();
 
-    let link = KithLink::from_identity(&pubid);
-    let link_ok = KithLink::parse(&link.to_uri()).map(|l| l == link).unwrap_or(false);
+    let link = HavenLink::from_identity(&pubid);
+    let link_ok = HavenLink::parse(&link.to_uri()).map(|l| l == link).unwrap_or(false);
 
     let all_ok = identity_ok && hybrid_kem_ok && signature_ok && link_ok;
     let summary = if all_ok {
@@ -197,10 +197,10 @@ impl SocialDemo {
     /// Start a demo session from your account seed (your real identity) paired with a
     /// stable demo "friend".
     #[uniffi::constructor]
-    pub fn new(account_seed: Vec<u8>) -> Result<Arc<Self>, KithError> {
+    pub fn new(account_seed: Vec<u8>) -> Result<Arc<Self>, HavenError> {
         let seed: [u8; 32] = account_seed
             .try_into()
-            .map_err(|_| KithError::Invalid { msg: "seed must be 32 bytes".into() })?;
+            .map_err(|_| HavenError::Invalid { msg: "seed must be 32 bytes".into() })?;
         let me = Identity::from_seed(&seed);
         let friend = Identity::from_seed(&FRIEND_SEED);
         let group = Group::new("demo", vec![me.public(), friend.public()]);
@@ -404,28 +404,28 @@ pub trait InboundListener: Send + Sync {
 /// A live peer-to-peer node: listens for inbound sealed posts and dials peers by
 /// ticket. The bytes it moves are already E2E-encrypted by `p2pcore`.
 #[derive(uniffi::Object)]
-pub struct KithNode {
+pub struct HavenNode {
     node: Node,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
-impl KithNode {
+impl HavenNode {
     /// Start a node bound to this account's identity (so its node id equals the
     /// account's Kith id); inbound payloads are delivered to `listener`.
     #[uniffi::constructor]
-    pub async fn start(account_seed: Vec<u8>, listener: Arc<dyn InboundListener>) -> Result<Arc<Self>, KithError> {
+    pub async fn start(account_seed: Vec<u8>, listener: Arc<dyn InboundListener>) -> Result<Arc<Self>, HavenError> {
         let seed: [u8; 32] = account_seed
             .try_into()
-            .map_err(|_| KithError::Invalid { msg: "seed must be 32 bytes".into() })?;
+            .map_err(|_| HavenError::Invalid { msg: "seed must be 32 bytes".into() })?;
         let identity = Identity::from_seed(&seed);
         let l = listener.clone();
-        let handler: kith_net::InboundHandler = Arc::new(move |payload| {
+        let handler: haven_net::InboundHandler = Arc::new(move |payload| {
             // Never let a panic cross back into the foreign (Swift) callback and abort.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| l.on_inbound(payload)));
         });
         let node = Node::spawn(identity.node_secret_bytes(), handler)
             .await
-            .map_err(|e| KithError::Invalid { msg: e.to_string() })?;
+            .map_err(|e| HavenError::Invalid { msg: e.to_string() })?;
         Ok(Arc::new(Self { node }))
     }
 
@@ -435,25 +435,25 @@ impl KithNode {
     }
 
     /// A shareable ticket a peer dials to reach this node (full address form).
-    pub async fn ticket(&self) -> Result<String, KithError> {
-        self.node.ticket().await.map_err(|e| KithError::Invalid { msg: e.to_string() })
+    pub async fn ticket(&self) -> Result<String, HavenError> {
+        self.node.ticket().await.map_err(|e| HavenError::Invalid { msg: e.to_string() })
     }
 
     /// Send sealed bytes to a contact by their hex node id (== their Kith id),
     /// resolving the live address via discovery.
-    pub async fn send_to_node(&self, node_id_hex: String, payload: Vec<u8>) -> Result<(), KithError> {
+    pub async fn send_to_node(&self, node_id_hex: String, payload: Vec<u8>) -> Result<(), HavenError> {
         self.node
             .send_to_node(&node_id_hex, &payload)
             .await
-            .map_err(|e| KithError::Invalid { msg: e.to_string() })
+            .map_err(|e| HavenError::Invalid { msg: e.to_string() })
     }
 
     /// Send sealed bytes to a peer identified by their full-address ticket.
-    pub async fn send(&self, ticket: String, payload: Vec<u8>) -> Result<(), KithError> {
+    pub async fn send(&self, ticket: String, payload: Vec<u8>) -> Result<(), HavenError> {
         self.node
             .send_ticket(&ticket, &payload)
             .await
-            .map_err(|e| KithError::Invalid { msg: e.to_string() })
+            .map_err(|e| HavenError::Invalid { msg: e.to_string() })
     }
 }
 
@@ -510,7 +510,7 @@ fn map_feed(events: Vec<Event>, me: &str, now_ms: u64, viewer_retention_secs: Op
 struct Circle {
     id: String,
     name: String,
-    members: Vec<KithId>,
+    members: Vec<HavenId>,
     events: Vec<Event>,
     seen: HashSet<String>,
 }
@@ -535,7 +535,7 @@ pub struct CircleInfoFfi {
 struct PersistCircle {
     id: String,
     name: String,
-    /// Members as their public-bundle bytes (KithId isn't directly Serialize).
+    /// Members as their public-bundle bytes (HavenId isn't directly Serialize).
     members: Vec<Vec<u8>>,
     events: Vec<Event>,
 }
@@ -555,17 +555,17 @@ struct LegacyPersistState {
 /// received from contacts over the network. Transport-agnostic: the same sealed
 /// envelope bytes ride iroh (internet) or MultipeerConnectivity (nearby Bluetooth/Wi-Fi).
 #[derive(uniffi::Object)]
-pub struct KithSocial {
+pub struct HavenSocial {
     state: Mutex<NetState>,
 }
 
 #[uniffi::export]
-impl KithSocial {
+impl HavenSocial {
     #[uniffi::constructor]
-    pub fn new(account_seed: Vec<u8>) -> Result<Arc<Self>, KithError> {
+    pub fn new(account_seed: Vec<u8>) -> Result<Arc<Self>, HavenError> {
         let seed: [u8; 32] = account_seed
             .try_into()
-            .map_err(|_| KithError::Invalid { msg: "seed must be 32 bytes".into() })?;
+            .map_err(|_| HavenError::Invalid { msg: "seed must be 32 bytes".into() })?;
         Ok(Arc::new(Self {
             state: Mutex::new(NetState {
                 me: Identity::from_seed(&seed),
@@ -646,9 +646,9 @@ impl KithSocial {
 
     /// BLAKE3 verification hex of a received bundle — check it against the link's hash
     /// before trusting it (MITM guard).
-    pub fn bundle_verification_hex(&self, bundle: Vec<u8>) -> Result<String, KithError> {
-        let id = KithId::from_bytes(&bundle)
-            .map_err(|e| KithError::Invalid { msg: format!("bad bundle: {e}") })?;
+    pub fn bundle_verification_hex(&self, bundle: Vec<u8>) -> Result<String, HavenError> {
+        let id = HavenId::from_bytes(&bundle)
+            .map_err(|e| HavenError::Invalid { msg: format!("bad bundle: {e}") })?;
         Ok(hex(&id.verification()))
     }
 
@@ -676,22 +676,22 @@ impl KithSocial {
         }
         let sig = &blob[4..4 + sig_len];
         let name_bytes = &blob[4 + sig_len..];
-        let id = KithId::from_bytes(&bundle).ok()?;
+        let id = HavenId::from_bytes(&bundle).ok()?;
         id.verify(name_bytes, sig).ok()?;
         String::from_utf8(name_bytes.to_vec()).ok()
     }
 
     /// Add a contact's verified public bundle to a circle. Returns their node id hex.
-    pub fn add_contact_bundle(&self, circle_id: String, bundle: Vec<u8>) -> Result<String, KithError> {
-        let id = KithId::from_bytes(&bundle)
-            .map_err(|e| KithError::Invalid { msg: format!("bad bundle: {e}") })?;
+    pub fn add_contact_bundle(&self, circle_id: String, bundle: Vec<u8>) -> Result<String, HavenError> {
+        let id = HavenId::from_bytes(&bundle)
+            .map_err(|e| HavenError::Invalid { msg: format!("bad bundle: {e}") })?;
         let node_hex = hex(&id.node_id_bytes());
         let mut st = self.state.lock().unwrap();
         let circle = st
             .circles
             .iter_mut()
             .find(|c| c.id == circle_id)
-            .ok_or_else(|| KithError::Invalid { msg: "unknown circle".into() })?;
+            .ok_or_else(|| HavenError::Invalid { msg: "unknown circle".into() })?;
         if !circle.members.iter().any(|c| c.node_id_bytes() == id.node_id_bytes()) {
             circle.members.push(id);
         }
@@ -700,7 +700,7 @@ impl KithSocial {
 
     /// Add an already-known contact (bundle held in some circle) to another circle —
     /// for composing a new circle out of your existing contacts.
-    pub fn add_existing_to_circle(&self, circle_id: String, node_hex: String) -> Result<(), KithError> {
+    pub fn add_existing_to_circle(&self, circle_id: String, node_hex: String) -> Result<(), HavenError> {
         let mut st = self.state.lock().unwrap();
         let bundle = st
             .circles
@@ -708,12 +708,12 @@ impl KithSocial {
             .flat_map(|c| c.members.iter())
             .find(|m| hex(&m.node_id_bytes()) == node_hex)
             .cloned()
-            .ok_or_else(|| KithError::Invalid { msg: "unknown contact".into() })?;
+            .ok_or_else(|| HavenError::Invalid { msg: "unknown contact".into() })?;
         let circle = st
             .circles
             .iter_mut()
             .find(|c| c.id == circle_id)
-            .ok_or_else(|| KithError::Invalid { msg: "unknown circle".into() })?;
+            .ok_or_else(|| HavenError::Invalid { msg: "unknown circle".into() })?;
         if !circle.members.iter().any(|m| m.node_id_bytes() == bundle.node_id_bytes()) {
             circle.members.push(bundle);
         }
@@ -742,29 +742,29 @@ impl KithSocial {
         story: bool,
         mute_video: bool,
         created_at: u64,
-    ) -> Result<Vec<u8>, KithError> {
+    ) -> Result<Vec<u8>, HavenError> {
         let music = music.map(|m| m.into_core());
         self.author(&circle_id, created_at, EventKind::Post { body, media, music, retention_secs, story, mute_video })
     }
-    pub fn comment(&self, circle_id: String, target: String, body: String, media: Vec<String>, created_at: u64) -> Result<Vec<u8>, KithError> {
+    pub fn comment(&self, circle_id: String, target: String, body: String, media: Vec<String>, created_at: u64) -> Result<Vec<u8>, HavenError> {
         self.author(&circle_id, created_at, EventKind::Comment { target, body, media })
     }
-    pub fn react(&self, circle_id: String, target: String, emoji: String, created_at: u64) -> Result<Vec<u8>, KithError> {
+    pub fn react(&self, circle_id: String, target: String, emoji: String, created_at: u64) -> Result<Vec<u8>, HavenError> {
         self.author(&circle_id, created_at, EventKind::Reaction { target, emoji })
     }
-    pub fn edit(&self, circle_id: String, target: String, body: String, media: Vec<String>, music: Option<TrackRefFfi>, mute_video: bool, created_at: u64) -> Result<Vec<u8>, KithError> {
+    pub fn edit(&self, circle_id: String, target: String, body: String, media: Vec<String>, music: Option<TrackRefFfi>, mute_video: bool, created_at: u64) -> Result<Vec<u8>, HavenError> {
         let music = music.map(|m| m.into_core());
         self.author(&circle_id, created_at, EventKind::Edit { target, body, media, music, mute_video })
     }
-    pub fn unsend(&self, circle_id: String, target: String, created_at: u64) -> Result<Vec<u8>, KithError> {
+    pub fn unsend(&self, circle_id: String, target: String, created_at: u64) -> Result<Vec<u8>, HavenError> {
         self.author(&circle_id, created_at, EventKind::Unsend { target })
     }
 
     /// Ingest a sealed envelope received from the network. Opens it against the known
     /// sender contact, dedups by event id, records it. Returns true if it was new.
-    pub fn receive(&self, circle_id: String, envelope: Vec<u8>) -> Result<bool, KithError> {
+    pub fn receive(&self, circle_id: String, envelope: Vec<u8>) -> Result<bool, HavenError> {
         let env = SealedEnvelope::from_bytes(&envelope)
-            .map_err(|e| KithError::Invalid { msg: format!("bad envelope: {e}") })?;
+            .map_err(|e| HavenError::Invalid { msg: format!("bad envelope: {e}") })?;
         let sender_hex = env.sender_hex();
         let mut st = self.state.lock().unwrap();
         let Some(idx) = st.circles.iter().position(|c| c.id == circle_id) else { return Ok(false) };
@@ -775,7 +775,7 @@ impl KithSocial {
             .cloned();
         let Some(sender) = sender else { return Ok(false) };
         let event = open_event(&st.me, &sender, &env)
-            .map_err(|e| KithError::Invalid { msg: format!("open failed: {e}") })?;
+            .map_err(|e| HavenError::Invalid { msg: format!("open failed: {e}") })?;
         if st.circles[idx].seen.contains(&event.id) {
             return Ok(false);
         }
@@ -815,16 +815,16 @@ impl KithSocial {
 
     /// Seal a media blob to one contact (hybrid KEM → AES-256-GCM). The recipient
     /// opens it with `open_media`. Layout: [32 eph_x_pub][u32 pq_len][pq_ct][ciphertext].
-    pub fn seal_media(&self, recipient_node_hex: String, data: Vec<u8>) -> Result<Vec<u8>, KithError> {
+    pub fn seal_media(&self, recipient_node_hex: String, data: Vec<u8>) -> Result<Vec<u8>, HavenError> {
         let st = self.state.lock().unwrap();
         let recipient = st
             .circles
             .iter()
             .flat_map(|c| c.members.iter())
             .find(|m| hex(&m.node_id_bytes()) == recipient_node_hex)
-            .ok_or_else(|| KithError::Invalid { msg: "unknown recipient".into() })?;
+            .ok_or_else(|| HavenError::Invalid { msg: "unknown recipient".into() })?;
         let (enc, key) =
-            encapsulate_to(recipient).map_err(|e| KithError::Invalid { msg: format!("{e}") })?;
+            encapsulate_to(recipient).map_err(|e| HavenError::Invalid { msg: format!("{e}") })?;
         let ct = seal(&key, &data);
         let mut out = Vec::with_capacity(36 + enc.pq_ct.len() + ct.len());
         out.extend_from_slice(&enc.eph_x_pub);
@@ -855,17 +855,17 @@ impl KithSocial {
     /// Seal a media blob to the WHOLE circle (any member can open it). The shared
     /// store host stores the result opaquely — it can't read it. Returns the sealed
     /// envelope bytes to upload.
-    pub fn seal_circle_media(&self, circle_id: String, data: Vec<u8>) -> Result<Vec<u8>, KithError> {
+    pub fn seal_circle_media(&self, circle_id: String, data: Vec<u8>) -> Result<Vec<u8>, HavenError> {
         let st = self.state.lock().unwrap();
         let Some(circle) = st.circles.iter().find(|c| c.id == circle_id) else {
-            return Err(KithError::Invalid { msg: "unknown circle".into() });
+            return Err(HavenError::Invalid { msg: "unknown circle".into() });
         };
         let mut members = vec![st.me.public()];
         members.extend(circle.members.iter().cloned());
         let group = Group::new(circle_id, members);
         seal_bytes(&st.me, &group, &data)
             .map(|env| env.to_bytes())
-            .map_err(|e| KithError::Invalid { msg: format!("{e}") })
+            .map_err(|e| HavenError::Invalid { msg: format!("{e}") })
     }
 
     /// Open a circle-sealed media blob fetched from the shared store. Verifies the
@@ -918,7 +918,7 @@ impl KithSocial {
     }
 }
 
-impl KithSocial {
+impl HavenSocial {
     fn merge_circle(st: &mut NetState, pc: PersistCircle) {
         let idx = match st.circles.iter().position(|c| c.id == pc.id) {
             Some(i) => i,
@@ -934,7 +934,7 @@ impl KithSocial {
             }
         };
         for mb in pc.members {
-            if let Ok(id) = KithId::from_bytes(&mb) {
+            if let Ok(id) = HavenId::from_bytes(&mb) {
                 if !st.circles[idx].members.iter().any(|m| m.node_id_bytes() == id.node_id_bytes()) {
                     st.circles[idx].members.push(id);
                 }
@@ -948,18 +948,18 @@ impl KithSocial {
         }
     }
 
-    fn author(&self, circle_id: &str, created_at: u64, kind: EventKind) -> Result<Vec<u8>, KithError> {
+    fn author(&self, circle_id: &str, created_at: u64, kind: EventKind) -> Result<Vec<u8>, HavenError> {
         let mut st = self.state.lock().unwrap();
         let me_pub = st.me.public();
         let event = Event::new(&me_pub.node_id_bytes(), created_at, kind);
         let Some(idx) = st.circles.iter().position(|c| c.id == circle_id) else {
-            return Err(KithError::Invalid { msg: "unknown circle".into() });
+            return Err(HavenError::Invalid { msg: "unknown circle".into() });
         };
         let mut members = vec![me_pub];
         members.extend(st.circles[idx].members.iter().cloned());
         let group = Group::new(circle_id.to_string(), members);
         let env = seal_event(&st.me, &group, &event)
-            .map_err(|e| KithError::Invalid { msg: format!("seal failed: {e}") })?;
+            .map_err(|e| HavenError::Invalid { msg: format!("seal failed: {e}") })?;
         st.circles[idx].seen.insert(event.id.clone());
         st.circles[idx].events.push(event);
         Ok(env.to_bytes())
@@ -972,8 +972,8 @@ mod net_tests {
 
     #[test]
     fn two_socials_exchange_a_post() {
-        let alice = KithSocial::new([1u8; 32].to_vec()).unwrap();
-        let bob = KithSocial::new([2u8; 32].to_vec()).unwrap();
+        let alice = HavenSocial::new([1u8; 32].to_vec()).unwrap();
+        let bob = HavenSocial::new([2u8; 32].to_vec()).unwrap();
 
         let cid = DEFAULT_CIRCLE.to_string();
 
@@ -994,7 +994,7 @@ mod net_tests {
         assert!(!feed[0].is_me, "the post is from Alice, not Bob");
 
         // A stranger Bob hasn't added cannot be opened (ignored, not an error).
-        let eve = KithSocial::new([9u8; 32].to_vec()).unwrap();
+        let eve = HavenSocial::new([9u8; 32].to_vec()).unwrap();
         eve.add_contact_bundle(cid.clone(), bob.my_bundle()).unwrap();
         let eve_env = eve.post(cid.clone(), "spam".into(), vec![], None, None, false, 1_500).unwrap();
         assert!(!bob.receive(cid.clone(), eve_env).unwrap(), "unknown sender is ignored");
@@ -1016,7 +1016,7 @@ mod net_tests {
 
         // Persistence: export Bob's store, reload into a fresh instance → posts survive.
         let saved = bob.export_state();
-        let bob2 = KithSocial::new([2u8; 32].to_vec()).unwrap();
+        let bob2 = HavenSocial::new([2u8; 32].to_vec()).unwrap();
         bob2.import_state(saved);
         assert_eq!(bob2.feed(cid.clone(), 2_000, None).len(), 1, "posts survive a restart");
         assert_eq!(bob2.contact_node_ids(cid.clone()), bob.contact_node_ids(cid.clone()), "contacts survive too");

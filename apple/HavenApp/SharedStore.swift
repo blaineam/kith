@@ -55,7 +55,7 @@ enum SharedStore {
     private static func key(_ ref: String) -> String { "haven/media/\(ref)" }
 
     /// Seal a locally-held media blob to the circle and upload it (idempotent).
-    static func backup(ref: String, circleId: String, social: KithSocial) async {
+    static func backup(ref: String, circleId: String, social: HavenSocial) async {
         guard let s3 = mailboxClient(), let raw = MediaStore.shared.rawBytes(ref) else { return }
         if await s3.headObject(key: key(ref)) { return }   // already stored
         guard let sealed = try? social.sealCircleMedia(circleId: circleId, data: raw) else { return }
@@ -63,7 +63,7 @@ enum SharedStore {
     }
 
     /// Fetch a blob from the bucket and open it for whichever circle it belongs to.
-    static func restore(ref: String, circleIds: [String], social: KithSocial) async -> Data? {
+    static func restore(ref: String, circleIds: [String], social: HavenSocial) async -> Data? {
         guard let s3 = mailboxClient() else { return nil }
         guard let sealed = try? await s3.getObject(key: key(ref)) else { return nil }
         for cid in circleIds {

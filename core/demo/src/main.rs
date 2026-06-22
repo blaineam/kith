@@ -19,10 +19,10 @@ use iroh::{
     EndpointAddr, RelayMode,
 };
 use p2pcore::crypto::{decapsulate, encapsulate_to, open, seal, Encapsulation};
-use p2pcore::identity::{Identity, KithId};
+use p2pcore::identity::{Identity, HavenId};
 
 /// Application protocol id for this transfer.
-const ALPN: &[u8] = b"kith/photo/0";
+const ALPN: &[u8] = b"haven/photo/0";
 /// Generous ceiling for `read_to_end` (a 100 GB file would stream in chunks; this
 /// one-shot demo reads the whole sealed payload at once).
 const MAX_READ: usize = 256 * 1024 * 1024;
@@ -155,7 +155,7 @@ async fn receive(ep: Endpoint, identity: Identity) -> anyhow::Result<Vec<u8>> {
 async fn send_photo(
     ep: &Endpoint,
     bob_addr: EndpointAddr,
-    bob_pub: &KithId,
+    bob_pub: &HavenId,
     photo: &[u8],
 ) -> anyhow::Result<usize> {
     let (enc, key) = encapsulate_to(bob_pub)?; // derive a content key *to* Bob
@@ -215,7 +215,7 @@ fn make_photo() -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn short_id(id: &KithId) -> String {
+fn short_id(id: &HavenId) -> String {
     short_hash(&id.node_id_bytes())
 }
 

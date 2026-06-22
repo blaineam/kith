@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use kith_net::Node;
+use haven_net::Node;
 use p2pcore::identity::Identity;
 use p2pcore::social::{open_event, seal_event, Event, EventKind, Group, SealedEnvelope};
 use tokio::time::{timeout, Duration};

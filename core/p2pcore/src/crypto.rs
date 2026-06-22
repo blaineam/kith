@@ -28,7 +28,7 @@ use rand::RngCore;
 use sha2::Sha256;
 use x25519_dalek::{EphemeralSecret, PublicKey as XPublicKey};
 
-use crate::identity::{Identity, KithId};
+use crate::identity::{Identity, HavenId};
 use crate::{CoreError, Result};
 
 /// ML-KEM-768 ciphertext as a fixed-size byte array type.
@@ -45,7 +45,7 @@ pub struct Encapsulation {
 
 /// Derive a fresh 32-byte content key *to* a recipient, returning the key plus the
 /// [`Encapsulation`] the recipient needs to derive the same key. Sender side.
-pub fn encapsulate_to(recipient: &KithId) -> Result<(Encapsulation, [u8; 32])> {
+pub fn encapsulate_to(recipient: &HavenId) -> Result<(Encapsulation, [u8; 32])> {
     let mut rng = OsRng;
 
     // Classical: ephemeral ECDH against the recipient's static X25519 key.
