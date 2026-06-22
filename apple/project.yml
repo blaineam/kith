@@ -19,9 +19,9 @@ targets:
     supportedDestinations: [iOS, macCatalyst]
     sources:
       - path: KithApp
-      - path: Generated/kith_ffi.swift
+      - path: Generated/haven_ffi.swift
     dependencies:
-      - framework: KithFFI.xcframework
+      - framework: HavenFFI.xcframework
         embed: false
       # iroh's network-discovery deps (netdev, hickory DNS, system_configuration)
       # reference SCDynamicStore* — link SystemConfiguration.

@@ -17,7 +17,7 @@ final class AccountStore: ObservableObject {
 
     private static let service = "com.blaineam.kith"
     private static let seedKey = "account-master-seed"
-    private static let syncDefaultsKey = "kith.icloud.identitySync"
+    private static let syncDefaultsKey = "haven.icloud.identitySync"
 
     init() {
         switch Self.loadSeedStatus() {

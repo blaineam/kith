@@ -5,7 +5,7 @@ import SwiftUI
 final class EmojiStore: ObservableObject {
     static let shared = EmojiStore()
     @Published private(set) var counts: [String: Int]
-    private let key = "kith.emojiCounts"
+    private let key = "haven.emojiCounts"
 
     private init() {
         counts = (UserDefaults.standard.dictionary(forKey: key) as? [String: Int]) ?? [:]

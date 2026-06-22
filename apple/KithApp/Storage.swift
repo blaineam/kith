@@ -27,26 +27,26 @@ enum StorageProvider: String, CaseIterable, Identifiable {
 final class StorageStore: ObservableObject {
     static let shared = StorageStore()
 
-    @Published var provider: StorageProvider { didSet { d.set(provider.rawValue, forKey: "kith.storage.provider") } }
-    @Published var s3Endpoint: String { didSet { d.set(s3Endpoint, forKey: "kith.s3.endpoint") } }
-    @Published var s3Region: String { didSet { d.set(s3Region, forKey: "kith.s3.region") } }
-    @Published var s3Bucket: String { didSet { d.set(s3Bucket, forKey: "kith.s3.bucket") } }
+    @Published var provider: StorageProvider { didSet { d.set(provider.rawValue, forKey: "haven.storage.provider") } }
+    @Published var s3Endpoint: String { didSet { d.set(s3Endpoint, forKey: "haven.s3.endpoint") } }
+    @Published var s3Region: String { didSet { d.set(s3Region, forKey: "haven.s3.region") } }
+    @Published var s3Bucket: String { didSet { d.set(s3Bucket, forKey: "haven.s3.bucket") } }
     @Published var s3AccessKey: String { didSet { Keychain.set(s3AccessKey, for: "s3AccessKey") } }
     @Published var s3Secret: String { didSet { Keychain.set(s3Secret, for: "s3Secret") } }
     /// "Volunteer as tribute": back up the circle's media (sealed to the circle, so it
     /// stays opaque to your storage provider) and re-serve it to members who are missing
     /// it — making your bucket a durable source for the whole circle.
-    @Published var shareCircleMedia: Bool { didSet { d.set(shareCircleMedia, forKey: "kith.s3.share") } }
+    @Published var shareCircleMedia: Bool { didSet { d.set(shareCircleMedia, forKey: "haven.s3.share") } }
 
     private let d = UserDefaults.standard
     private init() {
-        provider = StorageProvider(rawValue: d.string(forKey: "kith.storage.provider") ?? "") ?? .icloud
-        s3Endpoint = d.string(forKey: "kith.s3.endpoint") ?? ""
-        s3Region = d.string(forKey: "kith.s3.region") ?? "us-east-1"
-        s3Bucket = d.string(forKey: "kith.s3.bucket") ?? ""
+        provider = StorageProvider(rawValue: d.string(forKey: "haven.storage.provider") ?? "") ?? .icloud
+        s3Endpoint = d.string(forKey: "haven.s3.endpoint") ?? ""
+        s3Region = d.string(forKey: "haven.s3.region") ?? "us-east-1"
+        s3Bucket = d.string(forKey: "haven.s3.bucket") ?? ""
         s3AccessKey = Keychain.get("s3AccessKey") ?? ""
         s3Secret = Keychain.get("s3Secret") ?? ""
-        shareCircleMedia = d.bool(forKey: "kith.s3.share")
+        shareCircleMedia = d.bool(forKey: "haven.s3.share")
     }
 
     var s3Configured: Bool { !s3Endpoint.isEmpty && !s3Bucket.isEmpty && !s3AccessKey.isEmpty && !s3Secret.isEmpty }

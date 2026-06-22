@@ -24,8 +24,8 @@ final class ConnectionsStore: ObservableObject {
     @Published private(set) var noHistory: Set<String> = []
 
     private let d = UserDefaults.standard
-    private let blockedKey = "kith.blocked"
-    private let noHistoryKey = "kith.noHistory"
+    private let blockedKey = "haven.blocked"
+    private let noHistoryKey = "haven.noHistory"
 
     private init() {
         if let arr = d.array(forKey: blockedKey) as? [String] { blocked = Set(arr) }

@@ -30,7 +30,7 @@ final class ContactsStore: ObservableObject {
     static let shared = ContactsStore()
 
     @Published private(set) var contacts: [Contact] = []
-    private let key = "kith.contacts"
+    private let key = "haven.contacts"
 
     init() {
         if let data = UserDefaults.standard.data(forKey: key),

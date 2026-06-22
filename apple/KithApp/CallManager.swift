@@ -282,7 +282,7 @@ final class CallManager: NSObject, ObservableObject {
 final class VideoCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
-    private let queue = DispatchQueue(label: "kith.call.video")
+    private let queue = DispatchQueue(label: "haven.call.video")
     private let ctx = CIContext(options: [.useSoftwareRenderer: false])
     private var lastSend: CFTimeInterval = 0
     private var position: AVCaptureDevice.Position = .front

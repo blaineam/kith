@@ -24,11 +24,11 @@ final class SettingsStore: ObservableObject {
     }
 
     private let d = UserDefaults.standard
-    private let kSave = "kith.saveToPhotos"
-    private let kOpt = "kith.autoOptimize"
-    private let kRet = "kith.retentionDays"
-    private let kSilent = "kith.silent"
-    private let kSpot = "kith.spotlight"
+    private let kSave = "haven.saveToPhotos"
+    private let kOpt = "haven.autoOptimize"
+    private let kRet = "haven.retentionDays"
+    private let kSilent = "haven.silent"
+    private let kSpot = "haven.spotlight"
 
     private init() {
         saveToPhotos = d.object(forKey: kSave) as? Bool ?? true   // default ON

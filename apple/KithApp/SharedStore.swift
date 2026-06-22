@@ -18,7 +18,7 @@ final class SharedMailboxStore: ObservableObject {
     @Published private(set) var config: S3Config?
 
     private let d = UserDefaults.standard
-    private let key = "kith.sharedMailbox"
+    private let key = "haven.sharedMailbox"
 
     private init() {
         if let data = d.data(forKey: key), var c = try? JSONDecoder().decode(S3Config.self, from: data) {
@@ -52,7 +52,7 @@ enum SharedStore {
     /// True when this device participates in a shared mailbox (own volunteer or received relay).
     static var isVolunteering: Bool { mailboxClient() != nil }
 
-    private static func key(_ ref: String) -> String { "kith/media/\(ref)" }
+    private static func key(_ ref: String) -> String { "haven/media/\(ref)" }
 
     /// Seal a locally-held media blob to the circle and upload it (idempotent).
     static func backup(ref: String, circleId: String, social: KithSocial) async {
@@ -83,7 +83,7 @@ enum SharedStore {
 
     private static func mailboxKey(_ circleId: String, _ env: Data) -> String {
         let h = SHA256.hash(data: env).map { String(format: "%02x", $0) }.joined()
-        return "kith/mailbox/\(circleId)/\(h)"
+        return "haven/mailbox/\(circleId)/\(h)"
     }
 
     /// Drop a sealed event envelope into the circle's mailbox (idempotent).
@@ -102,7 +102,7 @@ enum SharedStore {
         guard let s3 = mailboxClient() else { return [] }
         var out: [(String, Data)] = []
         for cid in circleIds {
-            guard let keys = try? await s3.listKeys(prefix: "kith/mailbox/\(cid)/") else { continue }
+            guard let keys = try? await s3.listKeys(prefix: "haven/mailbox/\(cid)/") else { continue }
             for key in keys where !seenMailbox.contains(key) {
                 seenMailbox.insert(key)
                 if let data = try? await s3.getObject(key: key) { out.append((cid, data)) }

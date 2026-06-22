@@ -10,7 +10,7 @@
 //! from discovery, then checked against this verification hash to detect tampering.
 //!
 //! Two surface forms, same payload:
-//!   * `kith://u/<base32-id>#<base32-verify>`            (deep link / QR)
+//!   * `haven://u/<base32-id>#<base32-verify>`            (deep link / QR)
 //!   * `https://<domain>/u/<base32-id>#<base32-verify>`  (a link on your website,
 //!     opens the app via Universal Link, else the static web client)
 //!
@@ -42,10 +42,10 @@ impl KithLink {
         }
     }
 
-    /// `kith://u/<id>#<verify>` — the deep-link / QR form.
+    /// `haven://u/<id>#<verify>` — the deep-link / QR form.
     pub fn to_uri(&self) -> String {
         format!(
-            "kith://u/{}#{}",
+            "haven://u/{}#{}",
             BASE32_NOPAD.encode(&self.id),
             BASE32_NOPAD.encode(&self.verification),
         )

@@ -20,6 +20,8 @@ struct KithApp: App {
     @UIApplicationDelegateAdaptor(HavenAppDelegate.self) private var appDelegate
 
     init() {
+        // Carry pre-rename settings/contacts (kith.* → haven.*) before any store reads them.
+        LegacyMigration.run()
         // Register the background-refresh task at launch (required before didFinishLaunching).
         NotificationManager.shared.registerBackgroundTask()
     }

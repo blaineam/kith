@@ -1,4 +1,4 @@
-//! `kith_ffi` — the UniFFI surface that bridges `p2pcore` to Swift (and Kotlin).
+//! `haven_ffi` — the UniFFI surface that bridges `p2pcore` to Swift (and Kotlin).
 //!
 //! Keeps the exposed API tiny and Swift-friendly: an [`Account`] object, a couple of
 //! free functions, and plain records. All the security-critical logic stays in
@@ -66,7 +66,7 @@ impl Account {
         hex(&self.inner.public().verification())
     }
 
-    /// `kith://u/<id>#<verify>` — the deep-link / QR form of the reach-me link.
+    /// `haven://u/<id>#<verify>` — the deep-link / QR form of the reach-me link.
     pub fn kith_uri(&self) -> String {
         KithLink::from_identity(&self.inner.public()).to_uri()
     }

@@ -1,11 +1,11 @@
 [package]
-name = "kith_ffi"
+name = "haven_ffi"
 version = "0.0.1"
 edition = "2021"
 publish = false
 
 [lib]
-name = "kith_ffi"
+name = "haven_ffi"
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [dependencies]

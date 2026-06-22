@@ -14,9 +14,9 @@ final class ProfileStore: ObservableObject {
     @Published private(set) var avatar: UIImage?
 
     private let defaults = UserDefaults.standard
-    private let nameKey = "kith.displayName"
-    private let emojiKey = "kith.emoji"
-    private let doneKey = "kith.onboarded"
+    private let nameKey = "haven.displayName"
+    private let emojiKey = "haven.emoji"
+    private let doneKey = "haven.onboarded"
 
     private init() {
         displayName = defaults.string(forKey: nameKey) ?? ""

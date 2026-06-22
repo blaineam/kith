@@ -55,7 +55,7 @@ pub struct KithId {
 
 impl KithId {
     /// The 32-byte routable id (Ed25519 public key). Stable for the life of the
-    /// identity; this is what a `kith://u/<id>` link encodes.
+    /// identity; this is what a `haven://u/<id>` link encodes.
     pub fn node_id_bytes(&self) -> [u8; 32] {
         self.signing.to_bytes()
     }

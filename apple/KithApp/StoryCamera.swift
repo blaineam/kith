@@ -14,7 +14,7 @@ final class CameraModel: NSObject, ObservableObject {
     let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
-    private let queue = DispatchQueue(label: "kith.camera")
+    private let queue = DispatchQueue(label: "haven.camera")
 
     @Published var isRecording = false
     @Published var position: AVCaptureDevice.Position = .back
