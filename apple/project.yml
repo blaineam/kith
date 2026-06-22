@@ -72,7 +72,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blaineam.kith
         GENERATE_INFOPLIST_FILE: NO
-        CODE_SIGN_ENTITLEMENTS: KithApp/Kith.entitlements
+        # Re-add once Push is enabled on the App ID (see push/README): the entitlement file +
+        # push code are ready; this line is the only switch.  CODE_SIGN_ENTITLEMENTS: KithApp/Kith.entitlements
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "43"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
