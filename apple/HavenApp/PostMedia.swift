@@ -75,10 +75,18 @@ private struct ZoomablePage: View {
         Group {
             if let m = MediaStore.shared.item(ref) {
                 if m.kind == .video, let url = m.videoURL {
-                    VideoPlayer(player: AVPlayer(url: url))
+                    CarouselVideo(url: url)   // autoplays + loops, full system controls
                 } else if let img = m.image {
+                    // Photo — or a video whose file hasn't downloaded yet: show its still
+                    // (with a play badge) instead of a blank page.
                     Image(uiImage: img).resizable().scaledToFit()
                         .scaleEffect(scale).offset(offset)
+                        .overlay {
+                            if m.kind == .video {
+                                Image(systemName: "play.circle.fill").font(.system(size: 56))
+                                    .foregroundStyle(.white.opacity(0.9)).shadow(radius: 6)
+                            }
+                        }
                         .gesture(zoomGesture)
                         // Pan only when zoomed; masked to .subviews otherwise so the TabView
                         // can page and the dismiss drag can fire.
@@ -111,5 +119,31 @@ private struct ZoomablePage: View {
         DragGesture()
             .onChanged { v in if scale > 1 { offset = CGSize(width: lastOffset.width + v.translation.width, height: lastOffset.height + v.translation.height) } }
             .onEnded { _ in lastOffset = offset }
+    }
+}
+
+/// Full-screen carousel video: native controls (scrub/play), autoplays + loops on appear,
+/// pauses + tears down when you swipe to another page.
+private struct CarouselVideo: View {
+    let url: URL
+    @State private var player: AVPlayer?
+    @State private var looper: Any?
+
+    var body: some View {
+        VideoPlayer(player: player)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear {
+                let p = AVPlayer(url: url)
+                looper = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { _ in
+                    p.seek(to: .zero); p.play()
+                }
+                player = p
+                p.play()
+            }
+            .onDisappear {
+                player?.pause()
+                if let o = looper { NotificationCenter.default.removeObserver(o); looper = nil }
+            }
     }
 }

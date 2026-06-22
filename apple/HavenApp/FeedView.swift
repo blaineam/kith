@@ -1494,25 +1494,33 @@ private struct PostCard: View {
         }
     }
 
-    /// Pinterest-style 2-column masonry that keeps each tile's natural aspect ratio.
+    /// Horizontally-scrolling staggered gallery: items flow across two fixed-height rows and
+    /// you swipe sideways through them. Each tile keeps its natural aspect (width = row · aspect).
     private var masonry: some View {
-        let cols = 2
-        let columns = (0..<cols).map { ci in
-            item.media.enumerated().filter { $0.offset % cols == ci }.map { $0.element }
+        let rows = 2
+        let rowHeight: CGFloat = 150
+        let rowItems = (0..<rows).map { ri in
+            item.media.enumerated().filter { $0.offset % rows == ri }.map { $0.element }
         }
-        return HStack(alignment: .top, spacing: 6) {
-            ForEach(0..<cols, id: \.self) { ci in
-                VStack(spacing: 6) {
-                    ForEach(columns[ci], id: \.self) { ref in masonryTile(ref) }
+        return ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(0..<rows, id: \.self) { ri in
+                    HStack(spacing: 6) {
+                        ForEach(rowItems[ri], id: \.self) { ref in masonryTile(ref, height: rowHeight) }
+                    }
                 }
             }
+            .padding(.horizontal, 2)
         }
+        .frame(height: rowHeight * CGFloat(rows) + 6)
     }
 
-    @ViewBuilder private func masonryTile(_ ref: String) -> some View {
+    @ViewBuilder private func masonryTile(_ ref: String, height: CGFloat) -> some View {
         if let m = MediaStore.shared.item(ref), let img = m.image {
-            Image(uiImage: img).resizable().aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity)
+            // Aspect width for the fixed row height, clamped so a panorama/portrait stays sane.
+            let aspect = min(2.4, max(0.6, img.size.width / max(img.size.height, 1)))
+            Image(uiImage: img).resizable().scaledToFill()
+                .frame(width: height * aspect, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(alignment: .center) {
                     if m.kind == .video {
