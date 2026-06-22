@@ -48,6 +48,7 @@ struct PendingInvite: Identifiable {
 }
 
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var accountStore = AccountStore()
     @ObservedObject private var profile = ProfileStore.shared
     @ObservedObject private var contacts = ContactsStore.shared
@@ -122,7 +123,13 @@ struct RootView: View {
         .sheet(item: $pendingInvite) { invite in
             ConnectView(account: accountStore.account, contacts: contacts, incomingLink: invite.link)
         }
+        .onChange(of: scenePhase) { _, phase in
+            // If we booted before the keychain was readable, swap the real identity back in
+            // once we're active + unlocked (never silently keeps a throwaway identity).
+            if phase == .active { accountStore.reloadIfTemporary() }
+        }
         .onAppear {
+            accountStore.reloadIfTemporary()
             FeedStore.shared.configure(seed: accountStore.account.secretSeed())
             if ProcessInfo.processInfo.environment["KITH_OPEN_CONNECT"] == "1" {
                 showConnect = true

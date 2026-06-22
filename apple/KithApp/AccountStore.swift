@@ -10,19 +10,44 @@ import Security
 @MainActor
 final class AccountStore: ObservableObject {
     @Published private(set) var account: Account
+    /// True when the keychain was unreadable at init (e.g., launched before first unlock):
+    /// we use a throwaway identity and DID NOT touch the real seed. `reloadIfTemporary()`
+    /// swaps in the real one once the keychain is accessible.
+    private(set) var usingTemporaryIdentity = false
 
     private static let service = "com.blaineam.kith"
     private static let seedKey = "account-master-seed"
     private static let syncDefaultsKey = "kith.icloud.identitySync"
 
     init() {
-        if let seed = Self.loadSeed(), let restored = try? Account.fromSeed(seed: seed) {
-            account = restored
-        } else {
+        switch Self.loadSeedStatus() {
+        case .found(let seed):
+            if let restored = try? Account.fromSeed(seed: seed) {
+                account = restored
+            } else {
+                // Seed present but un-deriveable — NEVER overwrite it; use a temp identity.
+                account = Account.generate(); usingTemporaryIdentity = true
+            }
+        case .notFound:
+            // Genuinely a new install → make + save the first identity. (Only here do we write.)
             let fresh = Account.generate()
             Self.saveSeed(fresh.secretSeed(), synced: Self.iCloudSyncEnabled)
             account = fresh
+        case .lockedOrError:
+            // Keychain not accessible yet (locked). Generating + saving here would DESTROY the
+            // real identity — the bug that flipped your old content to "not me". Use a throwaway
+            // and reload the real seed once unlocked. Do NOT save.
+            account = Account.generate(); usingTemporaryIdentity = true
         }
+    }
+
+    /// Re-attempt loading the real seed (call when the app becomes active / keychain unlocks).
+    func reloadIfTemporary() {
+        guard usingTemporaryIdentity, case .found(let seed) = Self.loadSeedStatus(),
+              let restored = try? Account.fromSeed(seed: seed) else { return }
+        account = restored
+        usingTemporaryIdentity = false
+        FeedStore.shared.reconfigure(seed: account.secretSeed())
     }
 
     /// Wipe the identity and create a new one ("start over").
@@ -108,13 +133,26 @@ final class AccountStore: ObservableObject {
     }
 
     private static func loadSeed() -> Data? {
+        if case .found(let d) = loadSeedStatus() { return d }
+        return nil
+    }
+
+    /// Distinguishes "no seed exists" from "seed exists but the keychain can't be read right
+    /// now" (locked). The init must NEVER treat a locked read as "new user" — that overwrites
+    /// a real identity.
+    private enum SeedStatus { case found(Data), notFound, lockedOrError }
+    private static func loadSeedStatus() -> SeedStatus {
         var query = baseQuery()
-        query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny   // match synced or not
+        query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
-        return item as? Data
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess: return (item as? Data).map { .found($0) } ?? .lockedOrError
+        case errSecItemNotFound: return .notFound
+        default: return .lockedOrError   // errSecInteractionNotAllowed, etc. — don't clobber
+        }
     }
 
     private static func deleteSeed() {
