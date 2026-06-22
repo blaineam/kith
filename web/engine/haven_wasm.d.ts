@@ -56,20 +56,20 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_kithengine_free: (a: number, b: number) => void;
-    readonly kithengine_add_contact: (a: number, b: number, c: number) => [number, number, number, number];
-    readonly kithengine_bundle_hex: (a: number) => [number, number];
-    readonly kithengine_contact_count: (a: number) => number;
-    readonly kithengine_feed_json: (a: number, b: bigint) => [number, number];
-    readonly kithengine_invite_link: (a: number, b: number, c: number) => [number, number];
-    readonly kithengine_new: (a: number, b: number) => [number, number, number];
-    readonly kithengine_node_id_hex: (a: number) => [number, number];
-    readonly kithengine_post: (a: number, b: number, c: number, d: bigint) => [number, number];
-    readonly kithengine_receive: (a: number, b: number, c: number) => number;
-    readonly kithengine_seed_hex: (a: number) => [number, number];
-    readonly kithengine_self_test: (a: number) => number;
-    readonly kithengine_sync_envelopes_json: (a: number) => [number, number];
-    readonly kithengine_verification_hex: (a: number) => [number, number];
+    readonly __wbg_havenengine_free: (a: number, b: number) => void;
+    readonly havenengine_add_contact: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly havenengine_bundle_hex: (a: number) => [number, number];
+    readonly havenengine_contact_count: (a: number) => number;
+    readonly havenengine_feed_json: (a: number, b: bigint) => [number, number];
+    readonly havenengine_invite_link: (a: number, b: number, c: number) => [number, number];
+    readonly havenengine_new: (a: number, b: number) => [number, number, number];
+    readonly havenengine_node_id_hex: (a: number) => [number, number];
+    readonly havenengine_post: (a: number, b: number, c: number, d: bigint) => [number, number];
+    readonly havenengine_receive: (a: number, b: number, c: number) => number;
+    readonly havenengine_seed_hex: (a: number) => [number, number];
+    readonly havenengine_self_test: (a: number) => number;
+    readonly havenengine_sync_envelopes_json: (a: number) => [number, number];
+    readonly havenengine_verification_hex: (a: number) => [number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

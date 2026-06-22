@@ -1,0 +1,16 @@
+{
+  "name": "haven-wasm",
+  "type": "module",
+  "description": "Haven engine for the browser: real p2pcore identity + sealing + feed via wasm-bindgen.",
+  "version": "0.0.1",
+  "files": [
+    "haven_wasm_bg.wasm",
+    "haven_wasm.js",
+    "haven_wasm.d.ts"
+  ],
+  "main": "haven_wasm.js",
+  "types": "haven_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

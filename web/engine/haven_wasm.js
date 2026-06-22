@@ -12,7 +12,7 @@ export class HavenEngine {
     }
     free() {
         const ptr = this.__destroy_into_raw();
-        wasm.__wbg_kithengine_free(ptr, 0);
+        wasm.__wbg_havenengine_free(ptr, 0);
     }
     /**
      * Add a contact from their public bundle (hex); returns their node id (hex).
@@ -25,7 +25,7 @@ export class HavenEngine {
         try {
             const ptr0 = passStringToWasm0(bundle_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.kithengine_add_contact(this.__wbg_ptr, ptr0, len0);
+            const ret = wasm.havenengine_add_contact(this.__wbg_ptr, ptr0, len0);
             var ptr2 = ret[0];
             var len2 = ret[1];
             if (ret[3]) {
@@ -47,7 +47,7 @@ export class HavenEngine {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.kithengine_bundle_hex(this.__wbg_ptr);
+            const ret = wasm.havenengine_bundle_hex(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -59,7 +59,7 @@ export class HavenEngine {
      * @returns {number}
      */
     contact_count() {
-        const ret = wasm.kithengine_contact_count(this.__wbg_ptr);
+        const ret = wasm.havenengine_contact_count(this.__wbg_ptr);
         return ret >>> 0;
     }
     /**
@@ -71,7 +71,7 @@ export class HavenEngine {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.kithengine_feed_json(this.__wbg_ptr, now_ms);
+            const ret = wasm.havenengine_feed_json(this.__wbg_ptr, now_ms);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -89,7 +89,7 @@ export class HavenEngine {
         try {
             const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.kithengine_invite_link(this.__wbg_ptr, ptr0, len0);
+            const ret = wasm.havenengine_invite_link(this.__wbg_ptr, ptr0, len0);
             deferred2_0 = ret[0];
             deferred2_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -105,7 +105,7 @@ export class HavenEngine {
     constructor(seed_hex) {
         var ptr0 = isLikeNone(seed_hex) ? 0 : passStringToWasm0(seed_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len0 = WASM_VECTOR_LEN;
-        const ret = wasm.kithengine_new(ptr0, len0);
+        const ret = wasm.havenengine_new(ptr0, len0);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -120,7 +120,7 @@ export class HavenEngine {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.kithengine_node_id_hex(this.__wbg_ptr);
+            const ret = wasm.havenengine_node_id_hex(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -137,7 +137,7 @@ export class HavenEngine {
     post(body, created_at) {
         const ptr0 = passStringToWasm0(body, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.kithengine_post(this.__wbg_ptr, ptr0, len0, created_at);
+        const ret = wasm.havenengine_post(this.__wbg_ptr, ptr0, len0, created_at);
         var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v2;
@@ -150,7 +150,7 @@ export class HavenEngine {
     receive(envelope) {
         const ptr0 = passArray8ToWasm0(envelope, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.kithengine_receive(this.__wbg_ptr, ptr0, len0);
+        const ret = wasm.havenengine_receive(this.__wbg_ptr, ptr0, len0);
         return ret !== 0;
     }
     /**
@@ -162,7 +162,7 @@ export class HavenEngine {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.kithengine_seed_hex(this.__wbg_ptr);
+            const ret = wasm.havenengine_seed_hex(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -175,7 +175,7 @@ export class HavenEngine {
      * @returns {boolean}
      */
     self_test() {
-        const ret = wasm.kithengine_self_test(this.__wbg_ptr);
+        const ret = wasm.havenengine_self_test(this.__wbg_ptr);
         return ret !== 0;
     }
     /**
@@ -187,7 +187,7 @@ export class HavenEngine {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.kithengine_sync_envelopes_json(this.__wbg_ptr);
+            const ret = wasm.havenengine_sync_envelopes_json(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -202,7 +202,7 @@ export class HavenEngine {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.kithengine_verification_hex(this.__wbg_ptr);
+            const ret = wasm.havenengine_verification_hex(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -350,7 +350,7 @@ function __wbg_get_imports() {
 
 const HavenEngineFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_kithengine_free(ptr, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_havenengine_free(ptr, 1));
 
 function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();
