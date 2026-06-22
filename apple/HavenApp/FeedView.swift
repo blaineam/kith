@@ -1425,6 +1425,10 @@ private struct PostCard: View {
         guard item.media.count == 1, let ref = item.media.first, isVideo(ref) else { return nil }
         return players[ref]
     }
+    /// A post that is exactly one video — the GestureVideoPlayer owns all of its gestures.
+    private var isSingleVideoPost: Bool {
+        item.media.count == 1 && (item.media.first.map(isVideo) ?? false)
+    }
     private func isVideo(_ ref: String) -> Bool { MediaStore.shared.item(ref)?.kind == .video }
 
     private func react(_ e: String) { EmojiStore.shared.record(e); onReact(e) }
@@ -1467,10 +1471,18 @@ private struct PostCard: View {
             } else {
                 if !item.body.isEmpty { Text(item.body).font(.body) }
                 if !item.media.isEmpty {
-                    mediaView
-                        .overlay { if showHeart { heartBurst } }
-                        .onTapGesture(count: 2) { heartIt() }       // double-tap to heart
-                        .onTapGesture(count: 1) { togglePostMute() } // tap to mute/unmute
+                    // For a single-video post the GestureVideoPlayer owns tap/double-tap/hold/
+                    // scrub itself (so its hold-to-pause and drag-to-scrub aren't stolen). For
+                    // everything else the post-level tap gestures drive mute + heart.
+                    if isSingleVideoPost {
+                        mediaView
+                            .overlay { if showHeart { heartBurst } }
+                    } else {
+                        mediaView
+                            .overlay { if showHeart { heartBurst } }
+                            .onTapGesture(count: 2) { heartIt() }       // double-tap to heart
+                            .onTapGesture(count: 1) { togglePostMute() } // tap to mute/unmute
+                    }
                 }
                 if let track = item.music { NowPlayingPill(track: track, animating: true) }
                 reactionsRow
@@ -1496,16 +1508,19 @@ private struct PostCard: View {
         if item.media.count == 1, let ref = item.media.first, let loc = SharedLocation.parse(ref) {
             LocationMapView(lat: loc.lat, lon: loc.lon, label: loc.label)
         } else if item.media.count == 1, let ref = item.media.first {
+            let video = isVideo(ref)
             ZStack(alignment: .bottomTrailing) {
                 mediaPage(ref)
-                if isVideo(ref) { muteButton }
+                if video { muteButton }
             }
             // Size to the media's own aspect (capped) so wide AND tall media show in full
             // instead of being cropped to a fixed box.
             .aspectRatio(singleAspect(ref), contentMode: .fit)
             .frame(maxWidth: .infinity, maxHeight: 480)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .onTapGesture { zoomTarget = ZoomTarget(refs: item.media, index: 0) }
+            // Tap-to-zoom only for images. For a video, the player owns the single tap
+            // (mute) / hold (pause) / drag (scrub); a zoom tap here would swallow them.
+            .modifier(ConditionalTap(enabled: !video) { zoomTarget = ZoomTarget(refs: item.media, index: 0) })
         } else if !item.media.isEmpty {
             masonry   // up to 30 photos/videos in a staggered grid; tap any to zoom
         }
@@ -1552,13 +1567,19 @@ private struct PostCard: View {
     }
 
     @ViewBuilder private func mediaPage(_ ref: String) -> some View {
-        mediaPageContent(ref)
-            .contextMenu {
-                Button { MediaSaver.save(ref) } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
-                if let url = shareURL(ref) {
-                    ShareLink(item: url) { Label("Share…", systemImage: "square.and.arrow.up") }
+        if isVideo(ref) {
+            // No contextMenu for videos — the long-press is reserved for the player's
+            // hold-to-pause. Save/Share live in the mute control's menu instead.
+            mediaPageContent(ref)
+        } else {
+            mediaPageContent(ref)
+                .contextMenu {
+                    Button { MediaSaver.save(ref) } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
+                    if let url = shareURL(ref) {
+                        ShareLink(item: url) { Label("Share…", systemImage: "square.and.arrow.up") }
+                    }
                 }
-            }
+        }
     }
 
     /// The on-disk file to hand to the system share sheet (video file, else the image).
@@ -1570,7 +1591,11 @@ private struct PostCard: View {
     @ViewBuilder private func mediaPageContent(_ ref: String) -> some View {
         if let m = MediaStore.shared.item(ref) {
             if m.kind == .video, let url = m.videoURL {
-                GestureVideoPlayer(player: playerFor(ref, url))   // hold-to-pause + drag-to-scrub, letterboxed
+                // The player owns its gestures: tap → mute, double-tap → heart,
+                // hold → pause, horizontal drag → scrub. Letterboxed, loops continuously.
+                GestureVideoPlayer(player: playerFor(ref, url),
+                                   onTap: { togglePostMute() },
+                                   onDoubleTap: { heartIt() })
             } else if let img = m.image {
                 Image(uiImage: img).resizable().scaledToFit()      // show the whole image (no crop)
             }
@@ -1585,7 +1610,8 @@ private struct PostCard: View {
         return 4.0 / 3.0
     }
 
-    private var muteButton: some View {
+    @ViewBuilder private var muteButton: some View {
+        let ref = item.media.first
         Button {
             if audio.activePostId != item.id { audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer, muteVideo: item.muteVideo) }
             audio.toggleVideoAudio()
@@ -1595,6 +1621,16 @@ private struct PostCard: View {
                 .background(.black.opacity(0.45), in: Circle())
         }
         .padding(10)
+        // Save/Share lives here for videos (the player's long-press is hold-to-pause, so the
+        // video itself no longer carries a contextMenu).
+        .contextMenu {
+            if let ref {
+                Button { MediaSaver.save(ref) } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
+                if let url = shareURL(ref) {
+                    ShareLink(item: url) { Label("Share…", systemImage: "square.and.arrow.up") }
+                }
+            }
+        }
     }
 
     private func playerFor(_ ref: String, _ url: URL) -> AVPlayer {
