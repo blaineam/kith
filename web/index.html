@@ -180,7 +180,54 @@ async function boot(){
   }catch(e){
     console.error("engine init failed", e);
   }
+  const inv = detectInvite();
+  if(inv){ renderInvite(inv); return; }   // landed on an invite link → show the invite flow
   render();
+}
+
+// An invite link is /…/u/<base32-id>#<base32-verify>. Pull it off the current URL.
+function detectInvite(){
+  const m = location.pathname.match(/\/u\/([^/?#]+)/);
+  const verify = location.hash.replace(/^#/, "");
+  if(!m || !verify) return null;
+  return { id: m[1], verify, app: `haven://u/${m[1]}#${verify}`, full: location.href };
+}
+
+// Hand off to the native app via a hidden iframe — if no app is registered for haven://, this
+// fails SILENTLY instead of throwing Safari's "address is invalid" page (which a top-level
+// location change would).
+function openInApp(appUrl){
+  const f = document.createElement("iframe");
+  f.style.display = "none";
+  f.src = appUrl;
+  document.body.appendChild(f);
+  setTimeout(() => f.remove(), 1500);
+}
+
+function renderInvite(inv){
+  const root = document.getElementById("app") || document.body;
+  root.innerHTML = `
+    <div style="max-width:420px;margin:8vh auto;padding:28px 22px;text-align:center;
+                background:var(--card,#16131f);border-radius:22px">
+      <div style="font-size:40px">👋</div>
+      <h2 style="margin:10px 0 4px">You've been invited to Haven</h2>
+      <p style="opacity:.7;margin:0 0 22px">A private, peer-to-peer circle. Open it in the app, or continue right here in your browser.</p>
+      <button id="inv-open" class="invite">Open in the Haven app</button>
+      <button id="inv-web" class="invite" style="background:transparent;border:1px solid var(--brand,#7C3AED);color:var(--brand,#7C3AED);margin-top:10px">Continue in this browser</button>
+      <div id="inv-status" style="opacity:.7;margin-top:14px;font-size:14px"></div>
+    </div>`;
+  document.getElementById("inv-open").onclick = () => openInApp(inv.app);
+  document.getElementById("inv-web").onclick = () => {
+    const s = document.getElementById("inv-status");
+    try {
+      if(!engine){ s.textContent = "Engine still loading — try again in a moment."; return; }
+      engine.add_contact(inv.full);                 // the link is scheme-agnostic
+      s.textContent = "Added! Opening your circle…";
+      setTimeout(() => { history.replaceState(null, "", "./"); location.reload(); }, 700);
+    } catch(e){
+      s.textContent = "Couldn't add from this link: " + (e && e.message ? e.message : e);
+    }
+  };
 }
 
 function feedPosts(){
