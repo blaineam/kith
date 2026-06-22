@@ -383,7 +383,7 @@ struct StoryComposerView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "textformat.size.smaller").font(.caption).foregroundStyle(.white)
                     Slider(value: $captionSpec.size, in: StoryCaptions.minSize...StoryCaptions.maxSize)
-                        .tint(KithTheme.pink)
+                        .tint(HavenTheme.pink)
                     Image(systemName: "textformat.size.larger").font(.body).foregroundStyle(.white)
                 }
             }
@@ -406,7 +406,7 @@ struct StoryComposerView: View {
                 Slider(value: $musicStartMs, in: 0...maxStart) { editing in
                     if !editing && songPreviewing { seekPreview() }
                 }
-                .tint(KithTheme.pink)
+                .tint(HavenTheme.pink)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -470,7 +470,7 @@ struct StoryComposerView: View {
                 }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 20).padding(.vertical, 14)
-                .background(KithTheme.brandHorizontal, in: Capsule())
+                .background(HavenTheme.brandHorizontal, in: Capsule())
             }
         }
         .padding(.horizontal, 20).padding(.bottom, 24)

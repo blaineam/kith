@@ -1013,7 +1013,7 @@ struct FeedView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                     .contentShape(Rectangle())
                     .onTapGesture { composeFocused = false }
                 ScrollView {
@@ -1027,10 +1027,10 @@ struct FeedView: View {
                         ForEach(store.feedItems, id: \.id) { item in
                             PostCard(
                                 item: item, friendName: friendName,
-                                onReact: { e in withAnimation(KithTheme.bouncy) { store.react(item.id, e) } },
-                                onComment: { b, m in withAnimation(KithTheme.smooth) { store.comment(item.id, b, m) } },
-                                onEdit: { b in withAnimation(KithTheme.smooth) { store.edit(item.id, b) } },
-                                onUnsend: { withAnimation(KithTheme.smooth) { store.unsend(item.id) } }
+                                onReact: { e in withAnimation(HavenTheme.bouncy) { store.react(item.id, e) } },
+                                onComment: { b, m in withAnimation(HavenTheme.smooth) { store.comment(item.id, b, m) } },
+                                onEdit: { b in withAnimation(HavenTheme.smooth) { store.edit(item.id, b) } },
+                                onUnsend: { withAnimation(HavenTheme.smooth) { store.unsend(item.id) } }
                             )
                             .background(GeometryReader { geo in
                                 Color.clear.preference(key: PostCenterKey.self,
@@ -1041,7 +1041,7 @@ struct FeedView: View {
                                 removal: .opacity))
                         }
                     }
-                    .animation(KithTheme.bouncy, value: store.items.count)
+                    .animation(HavenTheme.bouncy, value: store.items.count)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 130)
                 }
@@ -1080,7 +1080,7 @@ struct FeedView: View {
                     Button { settings.silent.toggle() } label: {
                         Image(systemName: settings.silent ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     }
-                    .tint(settings.silent ? .secondary : KithTheme.pink)
+                    .tint(settings.silent ? .secondary : HavenTheme.pink)
                     .accessibilityLabel(settings.silent ? "Unmute app" : "Mute app")
                 }
             }
@@ -1126,7 +1126,7 @@ struct FeedView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "sparkles")
-                .font(.system(size: 40)).foregroundStyle(KithTheme.pink)
+                .font(.system(size: 40)).foregroundStyle(HavenTheme.pink)
             Text("Nothing here yet")
                 .font(.headline)
             Text("Share your first moment below. As your circle connects, their posts show up here too.")
@@ -1151,7 +1151,7 @@ struct FeedView: View {
                 Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.85))
             }
             .padding(14)
-            .background(KithTheme.brandHorizontal, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(HavenTheme.brandHorizontal, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -1162,8 +1162,8 @@ struct FeedView: View {
                 Button { showStoryCamera = true } label: {
                     VStack(spacing: 6) {
                         ZStack {
-                            Circle().strokeBorder(KithTheme.brandHorizontal, lineWidth: 2).frame(width: 62, height: 62)
-                            Image(systemName: "camera.fill").font(.title3).foregroundStyle(KithTheme.pink)
+                            Circle().strokeBorder(HavenTheme.brandHorizontal, lineWidth: 2).frame(width: 62, height: 62)
+                            Image(systemName: "camera.fill").font(.title3).foregroundStyle(HavenTheme.pink)
                         }
                         Text("Add").font(.caption2).foregroundStyle(.secondary)
                     }
@@ -1187,7 +1187,7 @@ struct FeedView: View {
     private func storyThumb(_ s: FeedItemFfi) -> some View {
         let img = s.media.first.flatMap { MediaStore.shared.item($0)?.image }
         return ZStack {
-            Circle().fill(LinearGradient(colors: [KithTheme.violet, KithTheme.pink, KithTheme.amber],
+            Circle().fill(LinearGradient(colors: [HavenTheme.violet, HavenTheme.pink, HavenTheme.amber],
                                          startPoint: .topLeading, endPoint: .bottomTrailing))
                 .frame(width: 64, height: 64)
             if let img {
@@ -1235,7 +1235,7 @@ struct FeedView: View {
                             Button("1 week") { composeRetention = 604_800 }
                         } label: { Label("Disappears after…", systemImage: "timer") }
                     } label: {
-                        Image(systemName: "plus.circle.fill").font(.title).foregroundStyle(KithTheme.pink)
+                        Image(systemName: "plus.circle.fill").font(.title).foregroundStyle(HavenTheme.pink)
                     }
                     .accessibilityIdentifier("attachMenu")
 
@@ -1248,8 +1248,8 @@ struct FeedView: View {
 
                     Button { send() } label: {
                         Image(systemName: "paperplane.fill").foregroundStyle(.white)
-                            .padding(13).background(KithTheme.brand, in: Circle())
-                            .shadow(color: KithTheme.pink.opacity(0.4), radius: 8, y: 4)
+                            .padding(13).background(HavenTheme.brand, in: Circle())
+                            .shadow(color: HavenTheme.pink.opacity(0.4), radius: 8, y: 4)
                     }
                     .buttonStyle(PressableStyle())
                     .accessibilityIdentifier("composeSend")
@@ -1283,7 +1283,7 @@ struct FeedView: View {
                             .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 8)
-                    .background(KithTheme.brandHorizontal.opacity(0.18), in: Capsule())
+                    .background(HavenTheme.brandHorizontal.opacity(0.18), in: Capsule())
                 }
                 // Per-post video audio: only meaningful with a video and no song (a song
                 // always plays over a muted video). Toggles between the video's own sound
@@ -1295,7 +1295,7 @@ struct FeedView: View {
                             Text(muteVideo ? "Video muted" : "Video sound").font(.caption2)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 8)
-                        .foregroundStyle(muteVideo ? AnyShapeStyle(.secondary) : AnyShapeStyle(KithTheme.pink))
+                        .foregroundStyle(muteVideo ? AnyShapeStyle(.secondary) : AnyShapeStyle(HavenTheme.pink))
                         .background(Color(.tertiarySystemFill), in: Capsule())
                     }
                     .buttonStyle(.plain)
@@ -1409,9 +1409,9 @@ private struct PostCard: View {
     /// Double-tap a post to ❤️ it (with an Instagram-style heart pop).
     private func heartIt() {
         react("❤️")
-        withAnimation(KithTheme.bouncy) { showHeart = true }
+        withAnimation(HavenTheme.bouncy) { showHeart = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-            withAnimation(KithTheme.smooth) { showHeart = false }
+            withAnimation(HavenTheme.smooth) { showHeart = false }
         }
     }
 
@@ -1608,10 +1608,10 @@ private struct PostCard: View {
 
     @ViewBuilder private var avatar: some View {
         if item.isMe {
-            KithAvatar(image: profile.avatar, emoji: profile.emoji, size: 34)
+            HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 34)
         } else {
             Circle()
-                .fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                .fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
                 .frame(width: 34, height: 34)
                 .overlay(Text(String(authorName.prefix(1))).font(.caption2.bold()).foregroundStyle(.white))
         }
@@ -1644,7 +1644,7 @@ private struct PostCard: View {
             if item.isMe && !item.unsent && SharedStore.isVolunteering {
                 Image(systemName: feed.relayReachable ? "cloud.fill" : "cloud")
                     .font(.caption2)
-                    .foregroundStyle(feed.relayReachable ? AnyShapeStyle(KithTheme.pink) : AnyShapeStyle(Color.secondary))
+                    .foregroundStyle(feed.relayReachable ? AnyShapeStyle(HavenTheme.pink) : AnyShapeStyle(Color.secondary))
                     .help(feed.relayReachable ? "Backed up to your circle's store" : "Waiting to sync")
             }
             Spacer()
@@ -1664,8 +1664,8 @@ private struct PostCard: View {
                     Text("\(r.emoji) \(r.count)")
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(r.mine ? AnyShapeStyle(KithTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Capsule())
-                        .overlay(Capsule().strokeBorder(r.mine ? KithTheme.pink.opacity(0.5) : .clear))
+                        .background(r.mine ? AnyShapeStyle(HavenTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Capsule())
+                        .overlay(Capsule().strokeBorder(r.mine ? HavenTheme.pink.opacity(0.5) : .clear))
                 }
                 .buttonStyle(.plain)
                 .transition(.scale.combined(with: .opacity))
@@ -1679,7 +1679,7 @@ private struct PostCard: View {
             }
             .buttonStyle(PressableStyle())
         }
-        .animation(KithTheme.bouncy, value: item.reactions.count)
+        .animation(HavenTheme.bouncy, value: item.reactions.count)
         .sheet(isPresented: $showReactionPicker) {
             ReactionPicker { e in onReact(e) }
         }
@@ -1694,7 +1694,7 @@ private struct PostCard: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .top, spacing: 6) {
                         Text(commentAuthorName(c)).font(.caption.weight(.semibold))
-                            .foregroundStyle(c.isMe ? KithTheme.pink : .secondary)
+                            .foregroundStyle(c.isMe ? HavenTheme.pink : .secondary)
                         Text(relativeTimeShort(c.createdAt)).font(.caption2).foregroundStyle(.tertiary)
                         if c.unsent {
                             Text("unsent").font(.caption).italic().foregroundStyle(.secondary)
@@ -1777,7 +1777,7 @@ private struct PostCard: View {
                     .font(.caption).padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.tertiarySystemFill), in: Capsule())
                 Button { sendComment() } label: {
-                    Image(systemName: "arrow.up.circle.fill").imageScale(.large).foregroundStyle(KithTheme.pink)
+                    Image(systemName: "arrow.up.circle.fill").imageScale(.large).foregroundStyle(HavenTheme.pink)
                 }
                 .buttonStyle(PressableStyle())
             }
@@ -1791,7 +1791,7 @@ private struct PostCard: View {
         return ZStack(alignment: .topTrailing) {
             Group {
                 if let img = m?.image { Image(uiImage: img).resizable().scaledToFill() }
-                else { Image(systemName: "waveform").frame(maxWidth: .infinity, maxHeight: .infinity).background(KithTheme.brandHorizontal.opacity(0.25)) }
+                else { Image(systemName: "waveform").frame(maxWidth: .infinity, maxHeight: .infinity).background(HavenTheme.brandHorizontal.opacity(0.25)) }
             }
             .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 8))
             Button { commentMedia.removeAll { $0 == ref } } label: {
@@ -1833,11 +1833,11 @@ struct UserProfileView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             ScrollView {
                 VStack(spacing: 16) {
                     VStack(spacing: 8) {
-                        Circle().fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                        Circle().fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
                             .frame(width: 76, height: 76)
                             .overlay(Text(String(resolvedName.prefix(1))).font(.title.bold()).foregroundStyle(.white))
                         HStack(spacing: 6) {
@@ -1853,7 +1853,7 @@ struct UserProfileView: View {
                         Button { showStories = true } label: {
                             HStack(spacing: 10) {
                                 ZStack {
-                                    Circle().fill(LinearGradient(colors: [KithTheme.violet, KithTheme.pink, KithTheme.amber], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 58, height: 58)
+                                    Circle().fill(LinearGradient(colors: [HavenTheme.violet, HavenTheme.pink, HavenTheme.amber], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 58, height: 58)
                                     if let img = userStories.last?.media.first.flatMap({ MediaStore.shared.item($0)?.image }) {
                                         Image(uiImage: img).resizable().scaledToFill().frame(width: 50, height: 50).clipShape(Circle())
                                     }
@@ -1873,8 +1873,8 @@ struct UserProfileView: View {
                         ForEach(posts, id: \.id) { item in
                             PostCard(
                                 item: item, friendName: name,
-                                onReact: { e in withAnimation(KithTheme.bouncy) { store.react(item.id, e) } },
-                                onComment: { b, m in withAnimation(KithTheme.smooth) { store.comment(item.id, b, m) } },
+                                onReact: { e in withAnimation(HavenTheme.bouncy) { store.react(item.id, e) } },
+                                onComment: { b, m in withAnimation(HavenTheme.smooth) { store.comment(item.id, b, m) } },
                                 onEdit: { _ in },
                                 onUnsend: { }
                             )
@@ -1909,7 +1909,7 @@ struct NewCircleView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 Form {
                     Section("Name") { TextField("Circle name (e.g. Family)", text: $name) }
                     Section("Who's in it") {
@@ -1921,13 +1921,13 @@ struct NewCircleView: View {
                                 if selected.contains(c.idHex) { selected.remove(c.idHex) } else { selected.insert(c.idHex) }
                             } label: {
                                 HStack(spacing: 12) {
-                                    Circle().fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                                    Circle().fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
                                         .frame(width: 34, height: 34)
                                         .overlay(Text(String(c.displayName.prefix(1)).uppercased()).font(.subheadline.bold()).foregroundStyle(.white))
                                     Text(c.displayName).foregroundStyle(.primary)
                                     Spacer()
                                     Image(systemName: selected.contains(c.idHex) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(selected.contains(c.idHex) ? KithTheme.pink : .secondary)
+                                        .foregroundStyle(selected.contains(c.idHex) ? HavenTheme.pink : .secondary)
                                 }
                             }
                             .buttonStyle(.plain)
@@ -1962,7 +1962,7 @@ struct ProfileView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             ScrollView {
                 VStack(spacing: 16) {
                     header
@@ -1978,10 +1978,10 @@ struct ProfileView: View {
                         ForEach(store.myPosts, id: \.id) { item in
                             PostCard(
                                 item: item, friendName: friendName,
-                                onReact: { e in withAnimation(KithTheme.bouncy) { store.react(item.id, e) } },
-                                onComment: { b, m in withAnimation(KithTheme.smooth) { store.comment(item.id, b, m) } },
-                                onEdit: { b in withAnimation(KithTheme.smooth) { store.edit(item.id, b) } },
-                                onUnsend: { withAnimation(KithTheme.smooth) { store.unsend(item.id) } }
+                                onReact: { e in withAnimation(HavenTheme.bouncy) { store.react(item.id, e) } },
+                                onComment: { b, m in withAnimation(HavenTheme.smooth) { store.comment(item.id, b, m) } },
+                                onEdit: { b in withAnimation(HavenTheme.smooth) { store.edit(item.id, b) } },
+                                onUnsend: { withAnimation(HavenTheme.smooth) { store.unsend(item.id) } }
                             )
                         }
                     }
@@ -2005,7 +2005,7 @@ struct ProfileView: View {
                     ForEach(Array(store.myStories.enumerated()), id: \.element.id) { idx, s in
                         Button { storyIndex = idx; showStories = true } label: {
                             ZStack {
-                                Circle().fill(LinearGradient(colors: [KithTheme.violet, KithTheme.pink, KithTheme.amber],
+                                Circle().fill(LinearGradient(colors: [HavenTheme.violet, HavenTheme.pink, HavenTheme.amber],
                                                              startPoint: .topLeading, endPoint: .bottomTrailing))
                                     .frame(width: 64, height: 64)
                                 if let img = s.media.first.flatMap({ MediaStore.shared.item($0)?.image }) {
@@ -2023,7 +2023,7 @@ struct ProfileView: View {
 
     private var header: some View {
         VStack(spacing: 8) {
-            KithAvatar(image: profile.avatar, emoji: profile.emoji, size: 76)
+            HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 76)
             Text(profile.displayName.isEmpty ? "You" : profile.displayName).font(.title3.bold())
             Text("\(store.myPosts.count) post\(store.myPosts.count == 1 ? "" : "s") · a copy lives on your device")
                 .font(.caption).foregroundStyle(.secondary)

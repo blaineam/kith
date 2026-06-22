@@ -53,11 +53,11 @@ final class ProfileStore: ObservableObject {
 }
 
 /// A profile avatar: the custom photo if set, otherwise the emoji on a brand circle.
-struct KithAvatar: View {
+struct HavenAvatar: View {
     var image: UIImage?
     var emoji: String
     var size: CGFloat
-    var gradient: LinearGradient = KithTheme.brand
+    var gradient: LinearGradient = HavenTheme.brand
 
     var body: some View {
         Group {
@@ -112,16 +112,16 @@ struct EditProfileSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 ScrollView {
                     VStack(spacing: 22) {
-                        KithAvatar(image: profile.avatar, emoji: profile.emoji, size: 110)
-                            .shadow(color: KithTheme.pink.opacity(0.3), radius: 14, y: 8)
+                        HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 110)
+                            .shadow(color: HavenTheme.pink.opacity(0.3), radius: 14, y: 8)
 
                         HStack(spacing: 12) {
                             Button { showPhotoPicker = true } label: {
                                 Label(profile.avatar == nil ? "Add photo" : "Change photo", systemImage: "photo")
-                            }.buttonStyle(.bordered).tint(KithTheme.pink)
+                            }.buttonStyle(.bordered).tint(HavenTheme.pink)
                             if profile.avatar != nil {
                                 Button(role: .destructive) { profile.setAvatar(nil) } label: {
                                     Label("Remove", systemImage: "trash")
@@ -139,9 +139,9 @@ struct EditProfileSheet: View {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
                             ForEach(ProfileStore.avatarChoices, id: \.self) { e in
                                 Text(e).font(.system(size: 30)).frame(width: 44, height: 44)
-                                    .background(profile.emoji == e ? AnyShapeStyle(KithTheme.brandHorizontal.opacity(0.25)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Circle())
-                                    .overlay(Circle().strokeBorder(profile.emoji == e ? KithTheme.pink : .clear, lineWidth: 2))
-                                    .onTapGesture { withAnimation(KithTheme.snappy) { profile.emoji = e } }
+                                    .background(profile.emoji == e ? AnyShapeStyle(HavenTheme.brandHorizontal.opacity(0.25)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Circle())
+                                    .overlay(Circle().strokeBorder(profile.emoji == e ? HavenTheme.pink : .clear, lineWidth: 2))
+                                    .onTapGesture { withAnimation(HavenTheme.snappy) { profile.emoji = e } }
                             }
                         }.padding(.horizontal, 20)
                     }

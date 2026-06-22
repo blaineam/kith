@@ -26,7 +26,7 @@ struct ConnectView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 ScrollView {
                     VStack(spacing: 20) {
                         Picker("", selection: $mode) {
@@ -95,7 +95,7 @@ struct ConnectView: View {
                     .frame(width: 210, height: 210)
                     .padding(12)
                     .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .shadow(color: KithTheme.violet.opacity(0.25), radius: 16, y: 8)
+                    .shadow(color: HavenTheme.violet.opacity(0.25), radius: 16, y: 8)
             }
 
             if let url = URL(string: account.kithLink(domain: KithSite.inviteDomain)) {
@@ -147,7 +147,7 @@ struct ConnectView: View {
                 }
 
                 Button("Find my friend") { lookup() }
-                    .buttonStyle(.bordered).tint(KithTheme.pink)
+                    .buttonStyle(.bordered).tint(HavenTheme.pink)
                     .disabled(pasted.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
@@ -172,7 +172,7 @@ struct ConnectView: View {
                 let name = trimmed.isEmpty ? "Friend" : trimmed
                 contacts.add(name: name, idHex: f.idHex, verificationHex: f.verificationHex)
                 FeedStore.shared.syncWithContacts()   // say hello over the network
-                withAnimation(KithTheme.bouncy) { addedName = name }
+                withAnimation(HavenTheme.bouncy) { addedName = name }
             }
             .buttonStyle(BrandButtonStyle())
             Text("You'll be connected the moment you're both online.")
@@ -202,7 +202,7 @@ struct ConnectView: View {
                     Text(w)
                         .font(.callout.weight(.semibold).monospaced())
                         .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(KithTheme.brandHorizontal.opacity(0.18), in: Capsule())
+                        .background(HavenTheme.brandHorizontal.opacity(0.18), in: Capsule())
                 }
             }
             Text(note).font(.caption).foregroundStyle(.secondary)
@@ -216,7 +216,7 @@ struct ConnectView: View {
         problem = nil
         do {
             let info = try parseLink(s: pasted.trimmingCharacters(in: .whitespacesAndNewlines))
-            withAnimation(KithTheme.bouncy) { found = info }
+            withAnimation(HavenTheme.bouncy) { found = info }
         } catch {
             problem = "That doesn't look like a Haven invite link. Double-check and try again."
         }

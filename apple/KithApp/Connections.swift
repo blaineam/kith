@@ -62,7 +62,7 @@ struct BlockedPeopleView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             if connections.blocked.isEmpty {
                 ContentUnavailableView("No one's blocked", systemImage: "hand.raised",
                                        description: Text("People you block show up here so you can unblock them."))
@@ -78,7 +78,7 @@ struct BlockedPeopleView: View {
                             }
                             Spacer()
                             Button("Unblock") { connections.unblock(idHex) }
-                                .font(.subheadline.weight(.medium)).tint(KithTheme.pink)
+                                .font(.subheadline.weight(.medium)).tint(HavenTheme.pink)
                         }
                         .listRowBackground(Color.clear)
                     }
@@ -101,7 +101,7 @@ struct ConnectionRequestsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 if connections.pending.isEmpty {
                     Text("No pending requests.").foregroundStyle(.secondary)
                 } else {
@@ -110,14 +110,14 @@ struct ConnectionRequestsView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(req.name).font(.headline)
                                 Text(req.safetyWords.joined(separator: " · "))
-                                    .font(.caption.monospaced()).foregroundStyle(KithTheme.pink)
+                                    .font(.caption.monospaced()).foregroundStyle(HavenTheme.pink)
                                 Text("Check these safety words match what they see before adding.")
                                     .font(.caption2).foregroundStyle(.secondary)
                                 HStack(spacing: 12) {
                                     Button { approveTarget = req } label: {
                                         Label("Add", systemImage: "checkmark.circle.fill")
                                     }
-                                    .buttonStyle(.borderedProminent).tint(KithTheme.pink)
+                                    .buttonStyle(.borderedProminent).tint(HavenTheme.pink)
                                     Button(role: .destructive) { store.blockConnection(req.idHex) } label: {
                                         Label("Block", systemImage: "hand.raised.fill")
                                     }

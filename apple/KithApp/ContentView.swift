@@ -18,7 +18,7 @@ struct YouView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 ScrollView {
                     VStack(spacing: 20) {
                         profileHeader.entrance(appeared, delay: 0.00)
@@ -67,18 +67,18 @@ struct YouView: View {
                 ConnectView(account: account, contacts: contacts)
             }
             .sheet(isPresented: $showEditProfile) { EditProfileSheet() }
-            .onAppear { withAnimation(KithTheme.smooth) { appeared = true } }
+            .onAppear { withAnimation(HavenTheme.smooth) { appeared = true } }
         }
     }
 
     private var profileHeader: some View {
         VStack(spacing: 10) {
             Button { showEditProfile = true } label: {
-                KithAvatar(image: profile.avatar, emoji: profile.emoji, size: 92)
-                    .shadow(color: KithTheme.pink.opacity(0.35), radius: 16, y: 8)
+                HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 92)
+                    .shadow(color: HavenTheme.pink.opacity(0.35), radius: 16, y: 8)
                     .overlay(alignment: .bottomTrailing) {
                         Image(systemName: "pencil.circle.fill")
-                            .font(.title3).foregroundStyle(KithTheme.pink)
+                            .font(.title3).foregroundStyle(HavenTheme.pink)
                             .background(Circle().fill(.background))
                     }
             }
@@ -108,7 +108,7 @@ struct YouView: View {
             if contacts.contacts.isEmpty {
                 HStack(spacing: 12) {
                     Image(systemName: "sparkles")
-                        .font(.title2).foregroundStyle(KithTheme.pink)
+                        .font(.title2).foregroundStyle(HavenTheme.pink)
                     Text("It's just you for now. Invite someone you love to get started.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
@@ -116,7 +116,7 @@ struct YouView: View {
                 ForEach(contacts.contacts) { c in
                     let connected = feed.isConnected(c.idHex)
                     HStack(spacing: 12) {
-                        Circle().fill(KithTheme.brand).frame(width: 34, height: 34)
+                        Circle().fill(HavenTheme.brand).frame(width: 34, height: 34)
                             .overlay(Text(String(c.displayName.prefix(1))).font(.caption.bold()).foregroundStyle(.white))
                         Text(c.displayName).font(.subheadline.weight(.medium))
                         Spacer()
@@ -161,7 +161,7 @@ struct AdvancedView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             ScrollView {
                 VStack(spacing: 20) {
                     detailsCard
@@ -223,7 +223,7 @@ struct AdvancedView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            .tint(KithTheme.pink)
+            .tint(HavenTheme.pink)
             .onChange(of: iCloudSync) { _, on in accountStore.setICloudSync(on) }
             Divider()
             NavigationLink { TransferIdentityView(accountStore: accountStore) } label: {
@@ -260,13 +260,13 @@ struct AdvancedView: View {
     private var privacyCheckCard: some View {
         VStack(spacing: 14) {
             Button {
-                withAnimation(KithTheme.bouncy) { report = selfTest(); runCount += 1 }
+                withAnimation(HavenTheme.bouncy) { report = selfTest(); runCount += 1 }
             } label: {
                 Label("Run privacy check", systemImage: "checkmark.shield.fill")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(KithTheme.pink)
+                    .foregroundStyle(HavenTheme.pink)
                     .padding(.vertical, 13).frame(maxWidth: .infinity)
-                    .background(Capsule().strokeBorder(KithTheme.brandHorizontal, lineWidth: 1.5))
+                    .background(Capsule().strokeBorder(HavenTheme.brandHorizontal, lineWidth: 1.5))
             }
             .buttonStyle(PressableStyle())
             .accessibilityIdentifier("privacyCheck")
@@ -306,7 +306,7 @@ struct AdvancedView: View {
         }
         .opacity(report != nil ? 1 : 0)
         .offset(x: report != nil ? 0 : -16)
-        .animation(KithTheme.bouncy.delay(Double(index) * 0.08), value: runCount)
+        .animation(HavenTheme.bouncy.delay(Double(index) * 0.08), value: runCount)
     }
 }
 
@@ -318,7 +318,7 @@ struct Entrance: ViewModifier {
         content
             .opacity(shown ? 1 : 0)
             .offset(y: shown ? 0 : 18)
-            .animation(KithTheme.smooth.delay(delay), value: shown)
+            .animation(HavenTheme.smooth.delay(delay), value: shown)
     }
 }
 

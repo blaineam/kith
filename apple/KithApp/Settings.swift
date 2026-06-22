@@ -72,29 +72,29 @@ struct SettingsView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             Form {
                 Section {
                     Toggle("Silent mode", isOn: $settings.silent)
-                        .tint(KithTheme.pink)
+                        .tint(HavenTheme.pink)
                 } footer: {
                     Text("Mute the whole app — post music and video sound stay quiet so you can browse silently. Also toggleable from the speaker button on your feed.")
                 }
                 Section {
                     Toggle("Save to Photos", isOn: $settings.saveToPhotos)
-                        .tint(KithTheme.pink)
+                        .tint(HavenTheme.pink)
                 } footer: {
                     Text("Automatically save photos and videos you share or receive to your Photos library, so they're ready whenever you open Photos.")
                 }
                 Section {
                     Toggle("Auto-optimize media", isOn: $settings.autoOptimize)
-                        .tint(KithTheme.pink)
+                        .tint(HavenTheme.pink)
                 } footer: {
                     Text("Share smaller, optimized photos and videos by default. Turn off to send pristine originals.")
                 }
                 Section {
                     Toggle("Index posts in Spotlight", isOn: $settings.spotlightEnabled)
-                        .tint(KithTheme.pink)
+                        .tint(HavenTheme.pink)
                 } footer: {
                     Text("Find your circle's posts from system search. Off by default — when on, post text is added to the on-device Spotlight index (never uploaded).")
                 }
@@ -106,7 +106,7 @@ struct SettingsView: View {
                         Text("After 3 months").tag(90)
                         Text("After 1 year").tag(365)
                     }
-                    .tint(KithTheme.pink)
+                    .tint(HavenTheme.pink)
                 } footer: {
                     Text("Automatically remove posts older than this from your feed. A sender can set a shorter limit on their own posts — the shorter one always wins.")
                 }

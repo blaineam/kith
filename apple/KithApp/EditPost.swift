@@ -23,7 +23,7 @@ struct EditPostSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         TextField("Say something…", text: $text, axis: .vertical)
@@ -60,7 +60,7 @@ struct EditPostSheet: View {
                             }
                             Spacer()
                         }
-                        .buttonStyle(.bordered).tint(KithTheme.pink)
+                        .buttonStyle(.bordered).tint(HavenTheme.pink)
 
                         if let t = track {
                             Label("\(t.title) · \(t.artist)", systemImage: "music.note")
@@ -73,7 +73,7 @@ struct EditPostSheet: View {
                                 Label(muteVideo ? "Video muted (silent)" : "Play video sound",
                                       systemImage: muteVideo ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             }
-                            .tint(KithTheme.pink)
+                            .tint(HavenTheme.pink)
                         }
                         Spacer(minLength: 0)
                     }

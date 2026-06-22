@@ -366,7 +366,7 @@ struct CallOverlay: View {
 
     private var incoming: some View {
         ZStack {
-            KithTheme.brand.opacity(0.96).ignoresSafeArea()
+            HavenTheme.brand.opacity(0.96).ignoresSafeArea()
             VStack(spacing: 16) {
                 Spacer()
                 Image(systemName: "phone.fill.arrow.down.left").font(.system(size: 40)).foregroundStyle(.white)
@@ -397,7 +397,7 @@ struct CallOverlay: View {
                 LinearGradient(colors: [.black.opacity(0.55), .clear, .black.opacity(0.55)],
                                startPoint: .top, endPoint: .bottom).ignoresSafeArea()
             } else {
-                KithTheme.brand.opacity(0.96).ignoresSafeArea()
+                HavenTheme.brand.opacity(0.96).ignoresSafeArea()
             }
             // Local camera preview (picture-in-picture) when our video is on.
             if let mine = call.localFrame {

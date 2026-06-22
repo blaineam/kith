@@ -9,13 +9,13 @@ struct ReactionDetailView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 List {
                     ForEach(reactions, id: \.emoji) { r in
                         Section {
                             ForEach(r.authors, id: \.self) { hex in
                                 HStack(spacing: 10) {
-                                    Circle().fill(KithTheme.brand).frame(width: 30, height: 30)
+                                    Circle().fill(HavenTheme.brand).frame(width: 30, height: 30)
                                         .overlay(Text(String(name(hex).prefix(1)))
                                             .font(.caption.bold()).foregroundStyle(.white))
                                     Text(name(hex)).font(.subheadline)

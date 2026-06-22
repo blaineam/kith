@@ -33,7 +33,7 @@ struct NowPlayingPill: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(KithTheme.pink.opacity(0.35)))
+            .overlay(Capsule().strokeBorder(HavenTheme.pink.opacity(0.35)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -52,7 +52,7 @@ struct EqualizerBars: View {
         HStack(alignment: .bottom, spacing: 2.5) {
             ForEach(0..<4, id: \.self) { i in
                 Capsule()
-                    .fill(KithTheme.brandHorizontal)
+                    .fill(HavenTheme.brandHorizontal)
                     .frame(width: 3, height: 15)
                     .scaleEffect(y: scale(i), anchor: .bottom)
                     .animation(

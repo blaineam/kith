@@ -40,7 +40,7 @@ struct SecretBubble: View {
                 .padding(.horizontal, 12).padding(.vertical, 9)
             }
         }
-        .background(isMe ? AnyShapeStyle(KithTheme.brand) : AnyShapeStyle(Color(.secondarySystemBackground)),
+        .background(isMe ? AnyShapeStyle(HavenTheme.brand) : AnyShapeStyle(Color(.secondarySystemBackground)),
                     in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(alignment: .topTrailing) {
             if !revealed { Image(systemName: "eye.slash.fill").font(.system(size: 9)).foregroundStyle(.white.opacity(0.7)).padding(5) }

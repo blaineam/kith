@@ -3,7 +3,7 @@ import SwiftUI
 /// Kith's design system — the single source of brand color, depth, motion, and
 /// tactile feel. Keeping it here makes the look consistent and portable to other
 /// platforms' UIs.
-enum KithTheme {
+enum HavenTheme {
     static let violet = Color(red: 0.486, green: 0.227, blue: 0.929) // #7C3AED
     static let pink = Color(red: 0.925, green: 0.282, blue: 0.600)   // #EC4899
     static let amber = Color(red: 0.961, green: 0.620, blue: 0.043)  // #F59E0B
@@ -26,16 +26,16 @@ enum KithTheme {
 }
 
 /// Soft branded backdrop: grouped-background base with two gentle brand glows.
-struct KithBackground: View {
+struct HavenBackground: View {
     var body: some View {
         ZStack {
             Color(.systemGroupedBackground)
             RadialGradient(
-                colors: [KithTheme.pink.opacity(0.22), .clear],
+                colors: [HavenTheme.pink.opacity(0.22), .clear],
                 center: UnitPoint(x: 0.85, y: -0.05), startRadius: 0, endRadius: 460
             )
             RadialGradient(
-                colors: [KithTheme.violet.opacity(0.20), .clear],
+                colors: [HavenTheme.violet.opacity(0.20), .clear],
                 center: UnitPoint(x: 0.05, y: 0.18), startRadius: 0, endRadius: 420
             )
         }
@@ -68,7 +68,7 @@ struct PressableStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .opacity(configuration.isPressed ? 0.9 : 1)
-            .animation(KithTheme.snappy, value: configuration.isPressed)
+            .animation(HavenTheme.snappy, value: configuration.isPressed)
     }
 }
 
@@ -80,11 +80,11 @@ struct BrandButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .padding(.vertical, 13)
             .frame(maxWidth: .infinity)
-            .background(KithTheme.brandHorizontal, in: Capsule())
+            .background(HavenTheme.brandHorizontal, in: Capsule())
             .opacity(configuration.isPressed ? 0.9 : 1)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .shadow(color: KithTheme.pink.opacity(0.35), radius: 10, x: 0, y: 5)
-            .animation(KithTheme.snappy, value: configuration.isPressed)
+            .shadow(color: HavenTheme.pink.opacity(0.35), radius: 10, x: 0, y: 5)
+            .animation(HavenTheme.snappy, value: configuration.isPressed)
     }
 }
 
@@ -122,6 +122,6 @@ struct BrandText: View {
     let text: String
     var font: Font = .largeTitle.bold()
     var body: some View {
-        Text(text).font(font).foregroundStyle(KithTheme.brand)
+        Text(text).font(font).foregroundStyle(HavenTheme.brand)
     }
 }

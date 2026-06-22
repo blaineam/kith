@@ -48,7 +48,7 @@ struct SongPicker: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 VStack(spacing: 0) {
                     Picker("", selection: $source) {
                         ForEach(Source.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -110,7 +110,7 @@ struct SongPicker: View {
         HStack(spacing: 12) {
             Button(action: onPreview) {
                 Image(systemName: previewing == key ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.title2).foregroundStyle(KithTheme.pink)
+                    .font(.title2).foregroundStyle(HavenTheme.pink)
             }
             .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
@@ -119,7 +119,7 @@ struct SongPicker: View {
             }
             Spacer()
             Button("Use", action: onUse)
-                .font(.subheadline.weight(.semibold)).tint(KithTheme.pink).buttonStyle(.bordered)
+                .font(.subheadline.weight(.semibold)).tint(HavenTheme.pink).buttonStyle(.bordered)
         }
         .listRowBackground(Color.clear)
     }

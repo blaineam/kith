@@ -11,11 +11,11 @@ struct TransferIdentityView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             ScrollView {
                 VStack(spacing: 20) {
                     Image(systemName: "iphone.gen3.radiowaves.left.and.right")
-                        .font(.system(size: 44)).foregroundStyle(KithTheme.pink).padding(.top, 8)
+                        .font(.system(size: 44)).foregroundStyle(HavenTheme.pink).padding(.top, 8)
                     Text("Move to another device").font(.title3.bold())
                     Text("On your other device, choose **Restore identity** and scan this code. You'll be the same person in your circle — same posts, same contacts.")
                         .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -33,7 +33,7 @@ struct TransferIdentityView: View {
                         } label: {
                             Label(copied ? "Copied" : "Copy transfer code", systemImage: copied ? "checkmark" : "doc.on.doc")
                         }
-                        .buttonStyle(.bordered).tint(KithTheme.pink)
+                        .buttonStyle(.bordered).tint(HavenTheme.pink)
                         Label("Anyone with this code can become you. Never share it with anyone else, and don't post it.",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
@@ -67,7 +67,7 @@ struct RestoreIdentityView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             ScrollView {
                 VStack(spacing: 18) {
                     Text("Restore your identity").font(.title3.bold()).padding(.top, 8)
@@ -77,7 +77,7 @@ struct RestoreIdentityView: View {
                     if scanning {
                         QRScannerView { code in attempt(code) }
                             .frame(height: 280).clipShape(RoundedRectangle(cornerRadius: 18))
-                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(KithTheme.brandHorizontal, lineWidth: 2))
+                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(HavenTheme.brandHorizontal, lineWidth: 2))
                     }
 
                     VStack(spacing: 8) {

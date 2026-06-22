@@ -71,7 +71,7 @@ struct RootView: View {
                 main
             }
         }
-        .animation(KithTheme.smooth, value: profile.onboarded)
+        .animation(HavenTheme.smooth, value: profile.onboarded)
         .onOpenURL { url in
             // Invite deep links: kith://u/<id>#<verify> (opened from wemiller.com/apps/haven).
             let s = url.absoluteString
@@ -103,16 +103,16 @@ struct RootView: View {
             .tabItem { Label("You", systemImage: "person.crop.circle.fill") }
             .badge(connections.pending.count)
         }
-        .tint(KithTheme.pink)
+        .tint(HavenTheme.pink)
         .onChange(of: tab) { _, t in
             if t == "circle" { feedStore.markCircleSeen() }
             if t == "messages" { feedStore.markMessagesSeen() }
         }
         .overlay {
             CallOverlay()
-                .animation(KithTheme.smooth, value: CallManager.shared.connecting)
-                .animation(KithTheme.smooth, value: CallManager.shared.inCall)
-                .animation(KithTheme.smooth, value: CallManager.shared.ringing)
+                .animation(HavenTheme.smooth, value: CallManager.shared.connecting)
+                .animation(HavenTheme.smooth, value: CallManager.shared.inCall)
+                .animation(HavenTheme.smooth, value: CallManager.shared.ringing)
         }
         // Manual "add a friend" (onboarding / the + button) — no incoming link.
         .sheet(isPresented: $showConnect) {

@@ -59,7 +59,7 @@ struct StorageSettingsView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             Form {
                 if let cfg = mailbox.config {
                     Section {
@@ -78,7 +78,7 @@ struct StorageSettingsView: View {
                             HStack {
                                 Label(p.title, systemImage: p.icon).foregroundStyle(.primary)
                                 Spacer()
-                                if store.provider == p { Image(systemName: "checkmark").foregroundStyle(KithTheme.pink) }
+                                if store.provider == p { Image(systemName: "checkmark").foregroundStyle(HavenTheme.pink) }
                             }
                         }
                     }
@@ -111,14 +111,14 @@ struct StorageSettingsView: View {
                 Toggle(isOn: $store.shareCircleMedia) {
                     Label("Be the circle's backup", systemImage: "heart.circle.fill")
                 }
-                .tint(KithTheme.pink)
+                .tint(HavenTheme.pink)
                 Button {
                     FeedStore.shared.shareBucketWithCircle(); shared = true
                 } label: {
                     Label(shared ? "Shared with your circle ✓" : "Share this bucket as my circle's relay",
                           systemImage: "antenna.radiowaves.left.and.right")
                 }
-                .tint(KithTheme.pink)
+                .tint(HavenTheme.pink)
             } header: { Text("Volunteer as tribute") }
             footer: { Text("Your bucket becomes the circle's shared mailbox: every post is stored sealed and re-served to anyone who's missing it — so messages and memories arrive even when the sender is offline and you're never online at the same time. Tap “Share as my circle's relay” to send these credentials (sealed, only your circle can open them) so everyone uses the same bucket — rent one from any S3 provider, no server to run. Heads up: members you share with can read (still sealed) and write to the bucket, so only share with a circle you trust, and rotate the key if someone leaves.") }
         }

@@ -14,7 +14,7 @@ struct OnboardingView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             VStack {
                 content
                     .transition(.asymmetric(
@@ -29,7 +29,7 @@ struct OnboardingView: View {
         .sheet(isPresented: $showRestore) {
             NavigationStack {
                 RestoreIdentityView(accountStore: accountStore) {
-                    withAnimation(KithTheme.smooth) { profile.onboarded = true }
+                    withAnimation(HavenTheme.smooth) { profile.onboarded = true }
                 }
             }
         }
@@ -47,10 +47,10 @@ struct OnboardingView: View {
         VStack(spacing: 20) {
             Spacer()
             Circle()
-                .fill(KithTheme.brand)
+                .fill(HavenTheme.brand)
                 .frame(width: 112, height: 112)
                 .overlay(ConstellationMark().frame(width: 66, height: 66))
-                .shadow(color: KithTheme.pink.opacity(0.4), radius: 20, y: 10)
+                .shadow(color: HavenTheme.pink.opacity(0.4), radius: 20, y: 10)
             BrandText(text: "Welcome to Haven")
             Text("A private little place for the people you love.\nNo ads. No tracking. No strangers. Just your people.")
                 .font(.body)
@@ -59,7 +59,7 @@ struct OnboardingView: View {
             Button { showRestore = true } label: {
                 Text("I already have Haven — restore my identity").font(.subheadline.weight(.medium))
             }
-            .tint(KithTheme.pink)
+            .tint(HavenTheme.pink)
             Spacer()
         }
     }
@@ -71,13 +71,13 @@ struct OnboardingView: View {
                 .font(.title.bold())
                 .multilineTextAlignment(.center)
 
-            KithAvatar(image: pickedImage, emoji: emoji, size: 96)
-                .shadow(color: KithTheme.pink.opacity(0.3), radius: 12, y: 6)
+            HavenAvatar(image: pickedImage, emoji: emoji, size: 96)
+                .shadow(color: HavenTheme.pink.opacity(0.3), radius: 12, y: 6)
             Button { showPhotoPicker = true } label: {
                 Label(pickedImage == nil ? "Add a photo" : "Change photo", systemImage: "photo")
                     .font(.subheadline)
             }
-            .buttonStyle(.bordered).tint(KithTheme.pink)
+            .buttonStyle(.bordered).tint(HavenTheme.pink)
             .sheet(isPresented: $showPhotoPicker) { SingleImagePicker { pickedImage = $0 } }
 
             TextField("Your name or nickname", text: $name)
@@ -94,9 +94,9 @@ struct OnboardingView: View {
                 ForEach(ProfileStore.avatarChoices, id: \.self) { e in
                     Text(e).font(.system(size: 30))
                         .frame(width: 44, height: 44)
-                        .background(emoji == e ? AnyShapeStyle(KithTheme.brandHorizontal.opacity(0.25)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Circle())
-                        .overlay(Circle().strokeBorder(emoji == e ? KithTheme.pink : .clear, lineWidth: 2))
-                        .onTapGesture { withAnimation(KithTheme.snappy) { emoji = e } }
+                        .background(emoji == e ? AnyShapeStyle(HavenTheme.brandHorizontal.opacity(0.25)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Circle())
+                        .overlay(Circle().strokeBorder(emoji == e ? HavenTheme.pink : .clear, lineWidth: 2))
+                        .onTapGesture { withAnimation(HavenTheme.snappy) { emoji = e } }
                 }
             }
             Spacer()
@@ -138,9 +138,9 @@ struct OnboardingView: View {
             HStack(spacing: 7) {
                 ForEach(0..<3) { i in
                     Capsule()
-                        .fill(i == step ? AnyShapeStyle(KithTheme.brandHorizontal) : AnyShapeStyle(Color(.tertiaryLabel)))
+                        .fill(i == step ? AnyShapeStyle(HavenTheme.brandHorizontal) : AnyShapeStyle(Color(.tertiaryLabel)))
                         .frame(width: i == step ? 22 : 7, height: 7)
-                        .animation(KithTheme.bouncy, value: step)
+                        .animation(HavenTheme.bouncy, value: step)
                 }
             }
         }
@@ -153,9 +153,9 @@ struct OnboardingView: View {
             if let pickedImage { profile.setAvatar(pickedImage) }
         }
         if step >= 2 {
-            withAnimation(KithTheme.smooth) { profile.onboarded = true }
+            withAnimation(HavenTheme.smooth) { profile.onboarded = true }
         } else {
-            withAnimation(KithTheme.smooth) { step += 1 }
+            withAnimation(HavenTheme.smooth) { step += 1 }
         }
     }
 }

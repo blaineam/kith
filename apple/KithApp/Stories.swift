@@ -202,7 +202,7 @@ struct StoryViewer: View {
             if !replyText.trimmingCharacters(in: .whitespaces).isEmpty {
                 Button { sendReply(to: s) } label: {
                     Image(systemName: "paperplane.fill").foregroundStyle(.white).padding(10)
-                        .background(KithTheme.brand, in: Circle())
+                        .background(HavenTheme.brand, in: Circle())
                 }
             }
         }
@@ -285,10 +285,10 @@ struct StoryViewer: View {
 
     @ViewBuilder private func sharerAvatar(_ s: FeedItemFfi) -> some View {
         if s.isMe {
-            KithAvatar(image: ProfileStore.shared.avatar, emoji: ProfileStore.shared.emoji, size: 30)
+            HavenAvatar(image: ProfileStore.shared.avatar, emoji: ProfileStore.shared.emoji, size: 30)
         } else {
             let name = ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName
-            Circle().fill(KithTheme.brand).frame(width: 30, height: 30)
+            Circle().fill(HavenTheme.brand).frame(width: 30, height: 30)
                 .overlay(Text(String(name.prefix(1))).font(.caption.bold()).foregroundStyle(.white))
         }
     }

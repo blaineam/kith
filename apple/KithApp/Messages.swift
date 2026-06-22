@@ -12,7 +12,7 @@ struct MessagesView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             List {
                 if store.dmCircles.isEmpty {
                     Text("No messages yet. Tap the pencil to start one.")
@@ -50,7 +50,7 @@ struct MessagesView: View {
     private func rowLabel(_ circleId: String) -> some View {
         let name = store.dmPartnerName(circleId)
         return HStack(spacing: 12) {
-            Circle().fill(KithTheme.brand).frame(width: 40, height: 40)
+            Circle().fill(HavenTheme.brand).frame(width: 40, height: 40)
                 .overlay(Text(String(name.prefix(1))).font(.headline).foregroundStyle(.white))
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.subheadline.weight(.medium))
@@ -74,12 +74,12 @@ struct DMContactPicker: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                KithBackground()
+                HavenBackground()
                 List(contacts.contacts) { c in
                     Button { onPick(store.startDM(with: c.idHex, name: c.displayName)) } label: {
                         HStack(spacing: 12) {
                             Circle()
-                                .fill(LinearGradient(colors: [KithTheme.amber, KithTheme.pink], startPoint: .top, endPoint: .bottom))
+                                .fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
                                 .frame(width: 40, height: 40)
                                 .overlay(Text(String(c.displayName.prefix(1)).uppercased())
                                     .font(.headline).foregroundStyle(.white))
@@ -117,7 +117,7 @@ struct DMThreadView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -214,7 +214,7 @@ struct DMThreadView: View {
                 } else if !m.body.isEmpty {
                     Text(m.body)
                         .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(m.isMe ? AnyShapeStyle(KithTheme.brand) : AnyShapeStyle(Color(.secondarySystemBackground)),
+                        .background(m.isMe ? AnyShapeStyle(HavenTheme.brand) : AnyShapeStyle(Color(.secondarySystemBackground)),
                                     in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .foregroundStyle(m.isMe ? .white : .primary)
                 }
@@ -235,7 +235,7 @@ struct DMThreadView: View {
                         // sent → checkmark; on the circle's relay → filled (store-and-forward delivered)
                         Image(systemName: store.relayReachable ? "checkmark.circle.fill" : "checkmark")
                             .font(.system(size: 9))
-                            .foregroundStyle(store.relayReachable ? KithTheme.pink : Color.secondary)
+                            .foregroundStyle(store.relayReachable ? HavenTheme.pink : Color.secondary)
                     }
                 }
             }
@@ -282,7 +282,7 @@ struct DMThreadView: View {
                     Spacer()
                     Button("Off") { disappearSecs = nil }.font(.caption)
                 }
-                .foregroundStyle(KithTheme.pink).padding(.horizontal, 6)
+                .foregroundStyle(HavenTheme.pink).padding(.horizontal, 6)
             }
             if !attachedMedia.isEmpty || attachedTrack != nil {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -294,7 +294,7 @@ struct DMThreadView: View {
                                     Button { attachedMedia.removeAll { $0 == ref } } label: { Image(systemName: "xmark.circle.fill") }
                                 }
                                 .padding(.horizontal, 8).padding(.vertical, 8)
-                                .background(KithTheme.pink.opacity(0.18), in: Capsule())
+                                .background(HavenTheme.pink.opacity(0.18), in: Capsule())
                             } else if let img = MediaStore.shared.item(ref)?.image {
                                 ZStack(alignment: .topTrailing) {
                                     Image(uiImage: img).resizable().scaledToFill().frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10))
@@ -311,7 +311,7 @@ struct DMThreadView: View {
                                 Button { attachedTrack = nil } label: { Image(systemName: "xmark.circle.fill") }
                             }
                             .font(.caption).padding(.horizontal, 8).padding(.vertical, 6)
-                            .background(KithTheme.pink.opacity(0.18), in: Capsule())
+                            .background(HavenTheme.pink.opacity(0.18), in: Capsule())
                         }
                     }
                     .padding(.horizontal, 4)
@@ -330,15 +330,15 @@ struct DMThreadView: View {
                         Button { disappearSecs = 604_800 } label: { Text("After 1 week") }
                     } label: { Label("Disappearing", systemImage: "timer") }
                 } label: {
-                    Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(KithTheme.pink)
+                    Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(HavenTheme.pink)
                 }
                 TextField(secret ? "Secret message…" : "Message…", text: $text, axis: .vertical)
                     .focused($focused)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(.background, in: Capsule())
-                    .overlay(Capsule().strokeBorder(secret ? KithTheme.pink.opacity(0.6) : Color.white.opacity(0.08)))
+                    .overlay(Capsule().strokeBorder(secret ? HavenTheme.pink.opacity(0.6) : Color.white.opacity(0.08)))
                 Button { send() } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(KithTheme.pink)
+                    Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(HavenTheme.pink)
                 }
                 .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty && attachedMedia.isEmpty && attachedTrack == nil)
             }
@@ -406,7 +406,7 @@ struct DMSongChip: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .foregroundStyle(isMe ? .white : .primary)
-            .background(isMe ? AnyShapeStyle(KithTheme.brand) : AnyShapeStyle(Color(.secondarySystemBackground)),
+            .background(isMe ? AnyShapeStyle(HavenTheme.brand) : AnyShapeStyle(Color(.secondarySystemBackground)),
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)

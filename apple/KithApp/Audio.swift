@@ -49,13 +49,13 @@ struct AudioRecorderView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             VStack(spacing: 24) {
                 Text(rec.isRecording ? "Recording…" : "Record an audio reply")
                     .font(.headline)
                 Text(String(format: "%0.1fs", rec.elapsed))
                     .font(.system(size: 40, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(rec.isRecording ? KithTheme.pink : .secondary)
+                    .foregroundStyle(rec.isRecording ? HavenTheme.pink : .secondary)
                 EqualizerBars(animating: rec.isRecording).frame(width: 60, height: 30)
 
                 Button {
@@ -68,7 +68,7 @@ struct AudioRecorderView: View {
                 } label: {
                     Image(systemName: rec.isRecording ? "stop.circle.fill" : "mic.circle.fill")
                         .font(.system(size: 72))
-                        .foregroundStyle(KithTheme.brand)
+                        .foregroundStyle(HavenTheme.brand)
                 }
                 Button("Cancel") { rec.stop(); dismiss() }
                     .foregroundStyle(.secondary)
@@ -94,7 +94,7 @@ struct AudioPlayerPill: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(KithTheme.pink.opacity(0.35)))
+            .overlay(Capsule().strokeBorder(HavenTheme.pink.opacity(0.35)))
         }
         .buttonStyle(PressableStyle())
     }

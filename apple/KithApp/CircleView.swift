@@ -21,7 +21,7 @@ struct CircleView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             List {
                 Section {
                     if membersInCircle.isEmpty {
@@ -41,7 +41,7 @@ struct CircleView: View {
                             .swipeActions(edge: .leading) {
                                 Button { store.forceSync() } label: {
                                     Label("Reconnect", systemImage: "arrow.clockwise")
-                                }.tint(KithTheme.pink)
+                                }.tint(HavenTheme.pink)
                             }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) { store.blockConnection(c.idHex) } label: {
@@ -76,7 +76,7 @@ struct CircleView: View {
                                 HStack {
                                     Text(c.displayName).foregroundStyle(.primary)
                                     Spacer()
-                                    Image(systemName: "plus.circle.fill").foregroundStyle(KithTheme.pink)
+                                    Image(systemName: "plus.circle.fill").foregroundStyle(HavenTheme.pink)
                                 }
                             }.listRowBackground(Color.clear)
                         }
@@ -109,7 +109,7 @@ struct CircleView: View {
     private func row(_ c: Contact) -> some View {
         let connected = store.isConnected(c.idHex)
         return HStack(spacing: 12) {
-            Circle().fill(KithTheme.brand).frame(width: 38, height: 38)
+            Circle().fill(HavenTheme.brand).frame(width: 38, height: 38)
                 .overlay(Text(String(c.displayName.prefix(1))).font(.subheadline.bold()).foregroundStyle(.white))
             VStack(alignment: .leading, spacing: 2) {
                 Text(c.displayName).font(.subheadline.weight(.medium))

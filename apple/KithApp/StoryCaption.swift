@@ -5,7 +5,7 @@ import SwiftUI
 /// The choice is encoded into the story body so the viewer renders it identically.
 enum StoryCaptions {
     static let colors: [Color] = [
-        .white, .black, KithTheme.pink, KithTheme.violet, KithTheme.amber,
+        .white, .black, HavenTheme.pink, HavenTheme.violet, HavenTheme.amber,
         .red, .orange, .green, .blue, .cyan, .yellow, .mint,
     ]
     /// Typography choices (design + weight); the point size is scaled by `Spec.size`.

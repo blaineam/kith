@@ -8,7 +8,7 @@ struct ConnectionView: View {
 
     var body: some View {
         ZStack {
-            KithBackground()
+            HavenBackground()
             ScrollView {
                 VStack(spacing: 16) {
                     statusCard
