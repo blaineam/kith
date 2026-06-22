@@ -315,6 +315,7 @@ struct StoryComposerView: View {
                 }
                 if !editingCaption { shareBar }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)   // pin controls to the screen, never the media's size
             .padding(.bottom, editingCaption ? kbHeight : 0)   // keep the style controls above the keyboard
             .animation(.easeOut(duration: 0.25), value: kbHeight)
         }
