@@ -24,6 +24,11 @@ final class AccountStore: ObservableObject {
         case .found(let seed):
             if let restored = try? Account.fromSeed(seed: seed) {
                 account = restored
+                // Re-store device-local: converts any legacy *synchronizable* seed to
+                // device-only so iCloud Keychain can never carry/clobber it again. Also record
+                // it in the recoverable identity history.
+                Self.saveSeed(seed)
+                Self.archive(seed)
             } else {
                 // Seed present but un-deriveable — NEVER overwrite it; use a temp identity.
                 account = Account.generate(); usingTemporaryIdentity = true
@@ -31,7 +36,8 @@ final class AccountStore: ObservableObject {
         case .notFound:
             // Genuinely a new install → make + save the first identity. (Only here do we write.)
             let fresh = Account.generate()
-            Self.saveSeed(fresh.secretSeed(), synced: Self.iCloudSyncEnabled)
+            Self.saveSeed(fresh.secretSeed())
+            Self.archive(fresh.secretSeed())
             account = fresh
         case .lockedOrError:
             // Keychain not accessible yet (locked). Generating + saving here would DESTROY the
@@ -50,11 +56,13 @@ final class AccountStore: ObservableObject {
         FeedStore.shared.reconfigure(seed: account.secretSeed())
     }
 
-    /// Wipe the identity and create a new one ("start over").
+    /// Wipe the identity and create a new one ("start over"). The old identity is archived to
+    /// the history first, so it can still be rolled back to.
     func reset() {
+        Self.archive(account.secretSeed())
         Self.deleteSeed()
         let fresh = Account.generate()
-        Self.saveSeed(fresh.secretSeed(), synced: Self.iCloudSyncEnabled)
+        Self.saveSeed(fresh.secretSeed())
         account = fresh
     }
 
@@ -118,16 +126,15 @@ final class AccountStore: ObservableObject {
         ]
     }
 
-    private static func saveSeed(_ data: Data, synced: Bool) {
+    /// The seed is ALWAYS stored device-local and NON-synchronizable. iCloud Keychain must never
+    /// carry the identity — a syncable seed let a fresh install on one device roll another
+    /// device's identity. Cross-device is only ever via an explicit, user-confirmed transfer code.
+    private static func saveSeed(_ data: Data, synced: Bool = false) {
         deleteSeed()
         var query = baseQuery()
         query[kSecValueData as String] = data
-        // Synchronizable items can't be "ThisDeviceOnly"; use AfterFirstUnlock so iCloud
-        // Keychain can carry them. Non-synced stays device-only (the conservative default).
-        query[kSecAttrAccessible as String] = synced
-            ? kSecAttrAccessibleAfterFirstUnlock
-            : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        query[kSecAttrSynchronizable as String] = synced ? kCFBooleanTrue! : kCFBooleanFalse!
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        query[kSecAttrSynchronizable as String] = kCFBooleanFalse!
         SecItemAdd(query as CFDictionary, nil)
     }
 
@@ -158,5 +165,59 @@ final class AccountStore: ObservableObject {
         var query = baseQuery()
         query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny   // delete either variant
         SecItemDelete(query as CFDictionary)
+    }
+
+    // MARK: - Recoverable identity history (for rolling back a changed identity)
+
+    private static let historyKey = "account-identity-history"
+    private static func historyQuery() -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service, kSecAttrAccount as String: historyKey]
+    }
+
+    /// Append a seed to the identity history (newest first, deduped, capped at 12). The history
+    /// is a *recovery archive* and never the active identity, so it's safe to back up to iCloud
+    /// when the user opts in (`iCloudSyncEnabled`); the active seed always stays device-local.
+    static func archive(_ seed: Data) {
+        let b64 = seed.base64EncodedString()
+        var hist = previousIdentities()
+        hist.removeAll { $0 == b64 }
+        hist.insert(b64, at: 0)
+        if hist.count > 12 { hist = Array(hist.prefix(12)) }
+        guard let data = try? JSONEncoder().encode(hist) else { return }
+        var del = historyQuery(); del[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        SecItemDelete(del as CFDictionary)
+        let synced = iCloudSyncEnabled
+        var add = historyQuery()
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = synced ? kSecAttrAccessibleAfterFirstUnlock
+                                                   : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        add[kSecAttrSynchronizable as String] = synced ? kCFBooleanTrue! : kCFBooleanFalse!
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    /// Past identities (base64 seeds), newest first.
+    static func previousIdentities() -> [String] {
+        var q = historyQuery()
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        q[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+              let d = item as? Data, let arr = try? JSONDecoder().decode([String].self, from: d)
+        else { return [] }
+        return arr
+    }
+
+    /// Roll back to a previous identity from the history (current one is archived first).
+    @discardableResult
+    func restoreIdentity(_ b64: String) -> Bool {
+        guard let seed = Data(base64Encoded: b64), seed.count == 32,
+              let restored = try? Account.fromSeed(seed: seed) else { return false }
+        Self.archive(account.secretSeed())
+        Self.saveSeed(seed)
+        account = restored
+        FeedStore.shared.reconfigure(seed: account.secretSeed())
+        return true
     }
 }
