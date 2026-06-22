@@ -1,0 +1,12 @@
+name = "haven-push"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+[vars]
+APNS_TOPIC = "com.blaineam.kith"
+APNS_HOST  = "api.push.apple.com"
+
+# Create the namespace once: `wrangler kv namespace create TOKENS`, then paste the id here.
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "REPLACE_WITH_KV_ID"

@@ -274,6 +274,9 @@ impl SocialDemo {
                         media: c.media,
                         edited: c.edited,
                         unsent: c.unsent,
+                        reactions: c.reactions.into_iter().map(|r| ReactionFfi {
+                            emoji: r.emoji, count: r.count, mine: r.authors.contains(&me), authors: r.authors,
+                        }).collect(),
                     })
                     .collect(),
                 reactions: it
@@ -333,6 +336,7 @@ pub struct FeedCommentFfi {
     pub media: Vec<String>,
     pub edited: bool,
     pub unsent: bool,
+    pub reactions: Vec<ReactionFfi>,
 }
 
 /// An attached Apple Music track (reference only — never audio).
@@ -483,6 +487,9 @@ fn map_feed(events: Vec<Event>, me: &str, now_ms: u64, viewer_retention_secs: Op
                     media: c.media,
                     edited: c.edited,
                     unsent: c.unsent,
+                    reactions: c.reactions.into_iter().map(|r| ReactionFfi {
+                        emoji: r.emoji, count: r.count, mine: r.authors.contains(&me.to_string()), authors: r.authors,
+                    }).collect(),
                 })
                 .collect(),
             reactions: it

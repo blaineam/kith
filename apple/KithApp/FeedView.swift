@@ -1376,6 +1376,9 @@ private struct PostCard: View {
     @State private var zoomTarget: ZoomTarget?
     @State private var players: [String: AVPlayer] = [:]
     @State private var showReactionPicker = false
+    @State private var editCommentId: String?
+    @State private var editCommentText = ""
+    @State private var editCommentMedia: [String] = []
     @State private var currentPage = 0
     @State private var showHeart = false
     @State private var showReactionDetail = false
@@ -1456,6 +1459,11 @@ private struct PostCard: View {
         .onChange(of: currentPage) { if isActive { playVisibleVideo() } }
         .sheet(isPresented: $showEdit) { EditPostSheet(item: item) }
         .fullScreenCover(item: $zoomTarget) { t in MediaZoomViewer(refs: t.refs, index: t.index) }
+        .alert("Edit comment", isPresented: Binding(get: { editCommentId != nil }, set: { if !$0 { editCommentId = nil } })) {
+            TextField("Comment", text: $editCommentText)
+            Button("Save") { if let id = editCommentId { feed.edit(id, editCommentText, media: editCommentMedia) }; editCommentId = nil }
+            Button("Cancel", role: .cancel) { editCommentId = nil }
+        }
     }
 
     @ViewBuilder private var mediaView: some View {
@@ -1694,6 +1702,32 @@ private struct PostCard: View {
                         Spacer()
                     }
                     if !c.unsent && !c.media.isEmpty { commentMediaRow(c.media) }
+                    if !c.reactions.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(c.reactions, id: \.emoji) { r in
+                                Text("\(r.emoji)\(r.count > 1 ? " \(r.count)" : "")")
+                                    .font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Color(.tertiarySystemFill), in: Capsule())
+                            }
+                        }
+                    }
+                }
+                .contextMenu {
+                    if !c.unsent {
+                        ControlGroup {
+                            ForEach(["❤️", "👍", "😂", "😮", "😢", "🔥"], id: \.self) { e in
+                                Button(e) { feed.react(c.id, e) }
+                            }
+                        }
+                        if c.isMe {
+                            if !c.body.isEmpty {
+                                Button { editCommentId = c.id; editCommentText = c.body; editCommentMedia = c.media } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                            }
+                            Button(role: .destructive) { feed.unsend(c.id) } label: { Label("Delete", systemImage: "trash") }
+                        }
+                    }
                 }
             }
         }

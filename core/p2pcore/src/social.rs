@@ -292,6 +292,7 @@ pub struct FeedComment {
     pub media: Vec<String>,
     pub edited: bool,
     pub unsent: bool,
+    pub reactions: Vec<ReactionGroup>,
 }
 
 /// A post/message with its comments and reactions resolved.
@@ -391,6 +392,7 @@ pub fn build_feed(
                         media: media.clone(),
                         edited: false,
                         unsent: false,
+                        reactions: Vec::new(),
                     },
                 );
             }
@@ -454,15 +456,22 @@ pub fn build_feed(
     // Aggregate reactions onto their targets.
     for e in &events {
         if let EventKind::Reaction { target, emoji } = &e.kind {
-            if let Some(it) = items.get_mut(target) {
-                match it.reactions.iter_mut().find(|r| &r.emoji == emoji) {
+            let bucket: Option<&mut Vec<ReactionGroup>> = if let Some(it) = items.get_mut(target) {
+                Some(&mut it.reactions)
+            } else if let Some(c) = comments.get_mut(target) {
+                Some(&mut c.reactions)   // reactions also work on comments
+            } else {
+                None
+            };
+            if let Some(reactions) = bucket {
+                match reactions.iter_mut().find(|r| &r.emoji == emoji) {
                     Some(rg) => {
                         if !rg.authors.contains(&e.author) {
                             rg.authors.push(e.author.clone());
                             rg.count += 1;
                         }
                     }
-                    None => it.reactions.push(ReactionGroup {
+                    None => reactions.push(ReactionGroup {
                         emoji: emoji.clone(),
                         count: 1,
                         authors: vec![e.author.clone()],
