@@ -21,12 +21,15 @@ object CircleLock {
         prefs = context.applicationContext.getSharedPreferences("haven.locks", Context.MODE_PRIVATE)
     }
 
-    private fun locked(): MutableSet<String> = prefs.getStringSet("locked", emptySet())!!.toMutableSet()
+    private val ready get() = this::prefs.isInitialized
+    private fun locked(): MutableSet<String> =
+        if (!ready) mutableSetOf() else prefs.getStringSet("locked", emptySet())!!.toMutableSet()
 
-    fun isLocked(circleId: String): Boolean = locked().contains(circleId)
+    fun isLocked(circleId: String): Boolean = ready && locked().contains(circleId)
     fun needsUnlock(circleId: String): Boolean = isLocked(circleId) && !unlocked.contains(circleId)
 
     fun setLocked(circleId: String, on: Boolean) {
+        if (!ready) return
         val s = locked()
         if (on) s.add(circleId) else { s.remove(circleId); unlocked.add(circleId) }
         prefs.edit().putStringSet("locked", s).apply()

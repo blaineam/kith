@@ -9,6 +9,7 @@ class HavenApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Notifications.ensureChannel(this)
+        com.blaineam.haven.core.CircleLock.init(this)   // cheap; avoids an uninit access during first compose
         SyncWorker.schedule(this)
     }
 }
