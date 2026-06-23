@@ -45,11 +45,21 @@ echo "▸ Building haven_ffi (release) for: $ABIS …"
 # cargo-ndk with -o lays the .so out under jniLibs/<abi>/libhaven_ffi.so directly.
 
 echo "▸ Generating Kotlin bindings…"
-( cd "$CORE" && "$CARGO" build -q -p haven_ffi --lib )   # host dylib for the generator
+( cd "$CORE" && "$CARGO" build -q -p haven_ffi --lib )   # host lib for the generator
 GEN="$HERE/app/src/main/java"
 rm -rf "$GEN/uniffi"
+# The host cdylib extension is OS-dependent: .dylib on macOS, .so on Linux, .dll on Windows.
+# Detect it so this script (the single source of truth) is portable across dev + CI runners.
+case "$(uname -s)" in
+  Darwin*)            HOST_LIB_EXT="dylib" ;;
+  Linux*)             HOST_LIB_EXT="so" ;;
+  MINGW*|MSYS*|CYGWIN*) HOST_LIB_EXT="dll" ;;
+  *)                  HOST_LIB_EXT="so" ;;
+esac
+HOST_LIB="target/debug/libhaven_ffi.$HOST_LIB_EXT"
+echo "▸ Host generator library: $HOST_LIB"
 ( cd "$CORE" && "$CARGO" run -q -p haven_ffi --bin uniffi-bindgen -- \
-    generate --library target/debug/libhaven_ffi.dylib --language kotlin --out-dir "$GEN" --no-format )
+    generate --library "$HOST_LIB" --language kotlin --out-dir "$GEN" --no-format )
 
 echo "✓ Done."
 echo "  .so → app/src/main/jniLibs/<abi>/libhaven_ffi.so"

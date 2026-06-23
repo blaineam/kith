@@ -1,0 +1,294 @@
+name: release
+
+# One-tag, fully-automated release. Push a `v*` tag (e.g. `v0.1.0`) and this builds EVERYTHING
+# and publishes it to a single GitHub Release:
+#
+#   • haven-relay static binary  → x86_64 / aarch64 / armv7 / armv6 (musl) + macOS arm64/x86_64
+#     named `haven-relay-<target>` (exactly what relay/install.sh downloads) + .deb packages
+#   • Desktop installers          → Windows .msi + NSIS .exe, Linux .deb/.rpm/AppImage
+#   • SteamOS Flatpak bundle       → haven.flatpak (built from the freshly-built .deb)
+#   • A version-pinned Flatpak manifest (com.blaineam.haven.yml) with the real .deb sha256,
+#     so `flatpak-builder` against the release manifest Just Works.
+#
+# The tag drives the version: it's stamped into tauri.conf.json + the relay crate before build.
+# Cut a release by tagging:  git tag v0.1.0 && git push origin v0.1.0
+# (relay-only hotfix? use a `relay-v*` tag → relay-release.yml instead.)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. v0.1.0 (dry-run: builds but only publishes on a tag)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          ref="${{ github.event.inputs.version || github.ref_name }}"
+          echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
+
+  # ── Relay: static binary for every installer arch + macOS, plus .deb packages ───────────
+  relay:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            deb: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            deb: true
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-musleabihf
+            deb: true
+          - os: ubuntu-latest
+            target: arm-unknown-linux-musleabihf
+            deb: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            deb: false
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            deb: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Stamp version
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          v = "${{ needs.meta.outputs.version }}"
+          p = pathlib.Path("core/haven-relay/Cargo.toml")
+          t = p.read_text()
+          t = re.sub(r'(?m)^version = ".*"', f'version = "{v}"', t, count=1)
+          p.write_text(t)
+          PY
+      - name: Linux cross toolchain
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@v1
+      - name: Install cargo-zigbuild + cargo-deb
+        if: runner.os == 'Linux'
+        run: cargo install cargo-zigbuild cargo-deb --locked
+      - name: Build (Linux, musl)
+        if: runner.os == 'Linux'
+        working-directory: core
+        run: cargo zigbuild --release -p haven-relay --target ${{ matrix.target }}
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        working-directory: core
+        run: cargo build --release -p haven-relay --target ${{ matrix.target }}
+      - name: Stage assets
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "core/target/${{ matrix.target }}/release/haven-relay" "dist/haven-relay-${{ matrix.target }}"
+      - name: Build .deb
+        if: matrix.deb
+        working-directory: core
+        run: cargo deb -p haven-relay --no-build --target ${{ matrix.target }} --output ../dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ── Desktop installers (Windows + Linux) ───────────────────────────────────────────────
+  desktop:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-latest
+            name: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf file
+      - name: Stamp version
+        shell: bash
+        run: |
+          node -e "const f='desktop/src-tauri/tauri.conf.json';const c=require('fs');const j=JSON.parse(c.readFileSync(f));j.version='${{ needs.meta.outputs.version }}';c.writeFileSync(f,JSON.stringify(j,null,2));"
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Build
+        working-directory: desktop/src-tauri
+        run: cargo tauri build
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p out
+          find desktop/src-tauri/target/release/bundle -type f \
+            \( -name '*.msi' -o -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+            -exec cp {} out/ \;
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error
+
+  # ── macOS desktop installer (.dmg, signed + notarized when secrets are present) ─────────
+  # The Apple iOS/macOS *app-store* pipeline lives elsewhere (rocket / native HavenMac); this
+  # builds the cross-platform Tauri desktop client as a downloadable .dmg for beta-testers.
+  macos-dmg:
+    needs: meta
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Stamp version
+        run: |
+          node -e "const f='desktop/src-tauri/tauri.conf.json';const c=require('fs');const j=JSON.parse(c.readFileSync(f));j.version='${{ needs.meta.outputs.version }}';c.writeFileSync(f,JSON.stringify(j,null,2));"
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Build .dmg (signed + notarized if Apple secrets are present)
+        working-directory: desktop/src-tauri
+        env:
+          # Code-signing + notarization. All gated: if the cert isn't provided Tauri produces an
+          # UNSIGNED .dmg (still installable for beta after a right-click→Open / Gatekeeper allow).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: cargo tauri build --bundles app dmg
+      - name: Collect .dmg
+        shell: bash
+        run: |
+          mkdir -p out
+          find desktop/src-tauri/target/release/bundle/dmg -name '*.dmg' -exec cp {} out/ \;
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          path: out/*
+          if-no-files-found: error
+
+  # ── SteamOS / Steam Deck Flatpak (built from the Linux .deb) ────────────────────────────
+  flatpak:
+    needs: desktop
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-47
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux
+          path: linux-build
+      - name: Point the manifest at the local .deb
+        run: |
+          deb=$(find linux-build -name '*.deb' | head -n1)
+          cp "$deb" desktop/flatpak/haven.deb
+          python3 - <<'PY'
+          import re, pathlib
+          m = pathlib.Path("desktop/flatpak/com.blaineam.haven.yml")
+          t = m.read_text()
+          t = re.sub(
+              r"      - type: file\n        # CI uploads.*?\n        url:.*?\n        sha256:.*?\n        dest-filename: haven\.deb",
+              "      - type: file\n        path: haven.deb",
+              t, flags=re.S)
+          m.write_text(t)
+          PY
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: haven.flatpak
+          manifest-path: desktop/flatpak/com.blaineam.haven.yml
+          cache-key: flatpak-${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: haven.flatpak
+          if-no-files-found: error
+
+  # ── Publish one Release with every artifact + a version-pinned Flatpak manifest ─────────
+  publish:
+    needs: [meta, relay, desktop, macos-dmg, flatpak]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Pin the Flatpak manifest to the released .deb
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import re, hashlib, glob, os, pathlib
+          tag, repo = os.environ["TAG"], os.environ["REPO"]
+          debs = glob.glob("dist/Haven_*amd64*.deb") or glob.glob("dist/haven_*amd64*.deb")
+          if debs:
+              deb = debs[0]; name = os.path.basename(deb)
+              sha = hashlib.sha256(open(deb, "rb").read()).hexdigest()
+              url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
+              t = pathlib.Path("desktop/flatpak/com.blaineam.haven.yml").read_text()
+              t = re.sub(r"        url:.*", f"        url: {url}", t, count=1)
+              t = re.sub(r"        sha256:.*", f"        sha256: {sha}", t, count=1)
+              pathlib.Path("dist/com.blaineam.haven.yml").write_text(t)
+              print("pinned", name, sha)
+          else:
+              print("no desktop .deb found; skipping manifest pin")
+          PY
+      - name: Generate release notes
+        run: |
+          cat > NOTES.md <<EOF
+          Haven ${{ needs.meta.outputs.version }}
+
+          **Desktop GUI** — Windows (.msi / NSIS .exe) · macOS (.dmg) · Linux (.deb / .rpm /
+          AppImage) · SteamOS / Steam Deck (\`haven.flatpak\` + the pinned \`com.blaineam.haven.yml\`).
+          **Android** — sideloadable .apk (universal + per-ABI), attached by the \`android\` workflow.
+          **Relay daemon** (\`haven-relay-<target>\`) — x86_64 / aarch64 / armv7 / armv6 (every
+          Raspberry Pi) + macOS, plus .deb packages. Installed by \`relay/install.sh\`.
+
+          See [docs/LINUX.md](https://github.com/${{ github.repository }}/blob/main/docs/LINUX.md)
+          for per-distro install instructions.
+          EOF
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: NOTES.md
+          fail_on_unmatched_files: true
