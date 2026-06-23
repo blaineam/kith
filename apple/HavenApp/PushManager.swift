@@ -64,7 +64,14 @@ final class PushManager: NSObject, ObservableObject {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         lastToken = hex
         guard let nodeId = myNodeId() else { return }
-        post("/register", ["nodeId": nodeId, "token": hex, "sandbox": isSandbox])
+        // platform tells the relay how to push: iOS gets alert+NSE; macOS gets a silent
+        // content-available push it decrypts in-process (no NSE on macOS).
+        #if os(macOS)
+        let platform = "macos"
+        #else
+        let platform = "ios"
+        #endif
+        post("/register", ["nodeId": nodeId, "token": hex, "sandbox": isSandbox, "platform": platform])
     }
 
     /// Register as an S3-bucket owner so the worker's cron can send a silent push to re-mint

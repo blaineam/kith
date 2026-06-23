@@ -66,6 +66,15 @@ final class HavenAppDelegate: NSObject, NSApplicationDelegate {
         if let seed = AccountStore.storedSeed() {
             Task { @MainActor in FeedStore.shared.configure(seed: seed) }
         }
+        // Resume serving as a circle relay if the user left it on (mirrors iOS startIfEnabled).
+        Task { @MainActor in RelayHost.shared.startIfEnabled() }
+    }
+
+    /// When the relay is ON, closing the window must NOT quit — Haven keeps forwarding from the
+    /// menu bar (the "invisible background relay"). With the relay off it behaves like a normal
+    /// Mac app and quits when the last window closes.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !RelayHost.shared.enabled
     }
 
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -78,6 +87,18 @@ final class HavenAppDelegate: NSObject, NSApplicationDelegate {
         }
         if userInfo["remint"] != nil {
             Task { @MainActor in PresignStore.shared.remintAllOwned() }
+        }
+        // macOS has no Notification Service Extension, so the relay sends a silent push carrying
+        // the sealed banner `e`; decrypt it IN-PROCESS (same seed-only FFI the iOS NSE uses) and
+        // post a local notification. The relay never sees plaintext. Locked circles are redacted.
+        if let e = userInfo["e"] as? String, let sealed = Data(base64Encoded: e),
+           let seed = SharedSeed.read(),
+           let plain = openSealedWithSeed(seed: seed, sealed: sealed),
+           let obj = try? JSONSerialization.jsonObject(with: plain) as? [String: Any] {
+            let locked = (obj["c"] as? String).map { SharedLockedCircles.read().contains($0) } ?? false
+            let title = locked ? "Haven" : ((obj["t"] as? String) ?? "Haven")
+            let body = locked ? "New activity in a locked circle" : ((obj["b"] as? String) ?? "New message")
+            Task { @MainActor in NotificationManager.shared.notify(title: title, body: body, dedupeKey: e) }
         }
         Task { @MainActor in FeedStore.shared.forceSync() }
     }
@@ -99,7 +120,7 @@ struct HavenApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             RootView()
                 .onAppear {
                     // Screenshot/offline harness: never raise the system notification prompt or
@@ -122,6 +143,16 @@ struct HavenApp: App {
                 if BiometricGate.shared.isLocked(cid) { BiometricGate.shared.unlock(cid) }
             }
         }
+
+        #if os(macOS)
+        // The "invisible background relay": a menu-bar item that keeps the in-process RelayHost
+        // serving even after the main window is closed (the delegate keeps the app alive).
+        MenuBarExtra {
+            MacMenuBarContent()
+        } label: {
+            MacMenuBarIcon()
+        }
+        #endif
     }
 }
 

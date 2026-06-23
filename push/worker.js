@@ -22,12 +22,14 @@ export default {
       if (url.pathname === "/register") {
         // A node id can have MULTIPLE devices (multi-device / linked devices) — keep a list of
         // tokens, not one, so a push reaches every device on that identity.
-        const { nodeId, token, sandbox } = await request.json();
+        const { nodeId, token, sandbox, platform } = await request.json();
         if (!nodeId || !token) return json({ error: "nodeId + token required" }, 400);
         const rec = (await env.TOKENS.get(nodeId, "json")) || { tokens: [] };
         const tokens = (rec.tokens || (rec.token ? [{ token: rec.token, sandbox: rec.sandbox }] : []))
           .filter((t) => t.token !== token);
-        tokens.push({ token, sandbox: !!sandbox });
+        // platform ("ios" | "macos") lets the push step pick alert+NSE (iOS) vs a silent
+        // content-available push the macOS app decrypts in-process (macOS has no NSE).
+        tokens.push({ token, sandbox: !!sandbox, platform: platform || "ios" });
         if (tokens.length > 10) tokens.splice(0, tokens.length - 10);   // cap per identity
         await env.TOKENS.put(nodeId, JSON.stringify({ tokens }));
         return json({ ok: true, devices: tokens.length });
@@ -89,9 +91,14 @@ export default {
         if (!tokens.length) return json({ error: "unknown node" }, 404);
 
         const jwt = await providerToken(env);
-        const body = JSON.stringify((() => {
-          const payload = silent
-            ? { aps: { "content-available": 1 } }
+        // Payload is per-token: macOS has no Notification Service Extension, so instead of an
+        // alert+mutable-content push (which the iOS NSE rewrites in place), we send macOS a
+        // SILENT content-available push carrying `e` — the running Mac app decrypts it
+        // in-process and posts its own local notification. iOS keeps the NSE path.
+        const bodyFor = (platform) => {
+          const isMac = platform === "macos";
+          const payload = (silent || isMac)
+            ? { aps: { "content-available": 1 }, ...(ciphertext ? { e: ciphertext } : {}) }
             : {
                 aps: {
                   "mutable-content": 1,                              // triggers the on-device NSE
@@ -102,22 +109,24 @@ export default {
               };
           // Inline the sealed event only if the whole payload stays under APNs' 4KB limit.
           if (event && JSON.stringify(payload).length + event.length < 3900) payload.ev = event;
-          return payload;
-        })());
+          return JSON.stringify(payload);
+        };
 
         const survivors = [];
         let anyOk = false;
         for (const t of tokens) {
           const host = t.sandbox ? "api.sandbox.push.apple.com" : (env.APNS_HOST || "api.push.apple.com");
+          // macOS uses a silent (background) push so the app can decrypt + notify itself.
+          const quiet = silent || t.platform === "macos";
           const res = await fetch(`https://${host}/3/device/${t.token}`, {
             method: "POST",
             headers: {
               authorization: `bearer ${jwt}`,
               "apns-topic": env.APNS_TOPIC,
-              "apns-push-type": silent ? "background" : "alert",
-              "apns-priority": silent ? "5" : "10",
+              "apns-push-type": quiet ? "background" : "alert",
+              "apns-priority": quiet ? "5" : "10",
             },
-            body,
+            body: bodyFor(t.platform),
           });
           if (res.ok) anyOk = true;
           if (res.status !== 410) survivors.push(t);   // drop tokens APNs says are dead
