@@ -88,7 +88,7 @@ private fun typefaceFor(i: Int): Typeface = when (i % 4) {
  * share. The filter + styled caption are baked into the bytes so recipients see the exact composition.
  */
 @Composable
-fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
+fun StoryEditor(ref: String, isVideo: Boolean, initialFilter: Int = 0, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var caption by remember { mutableStateOf("") }
@@ -99,7 +99,7 @@ fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
     var highlightIdx by remember { mutableStateOf(0) }
     var fontIdx by remember { mutableStateOf(0) }
     var sizeSp by remember { mutableStateOf(30f) }
-    var filterIdx by remember { mutableStateOf(0) }
+    var filterIdx by remember { mutableStateOf(initialFilter.coerceIn(0, HavenFilter.all.size - 1)) }
     var showColors by remember { mutableStateOf(false) }
     var boxSize by remember { mutableStateOf(IntSize.Zero) }
     var sharing by remember { mutableStateOf(false) }

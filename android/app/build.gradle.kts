@@ -22,12 +22,31 @@ android {
         }
     }
 
+    // Release signing is wired from env vars (set by CI from repository secrets). When the
+    // keystore env isn't present we leave `signingConfigs` empty so `assembleRelease` produces
+    // an UNSIGNED APK — CI falls back to `assembleDebug` for zero-setup betas in that case.
+    val havenKeystoreFile = System.getenv("HAVEN_KEYSTORE_FILE")
+    if (havenKeystoreFile != null && file(havenKeystoreFile).exists()) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(havenKeystoreFile)
+                storePassword = System.getenv("HAVEN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HAVEN_KEY_ALIAS")
+                keyPassword = System.getenv("HAVEN_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
         }
         release {
             isMinifyEnabled = false   // tighten later; JNA + reflection need care under R8
+            // Only attach the release signing config when CI actually provided a keystore.
+            if (havenKeystoreFile != null && file(havenKeystoreFile).exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -96,8 +115,12 @@ dependencies {
     // Background sync (serverless, like the iOS BGAppRefreshTask) for local notifications.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
-    // Biometric (per-circle Face/fingerprint lock).
+    // Biometric (per-circle Face/fingerprint lock) — needs a FragmentActivity host.
     implementation("androidx.biometric:biometric:1.1.0")
+    // Force a modern Fragment: biometric 1.1.0 drags in fragment 1.2.5, whose legacy 16-bit
+    // requestCode check crashes Compose's ActivityResultRegistry permission launcher
+    // ("Can only use lower 16 bits for requestCode") on every fresh Android 13+ launch.
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
 
     // EXIF orientation for picked photos (so they aren't sideways/blank).
     implementation("androidx.exifinterface:exifinterface:1.3.7")

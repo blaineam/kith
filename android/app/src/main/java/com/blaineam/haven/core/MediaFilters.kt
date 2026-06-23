@@ -71,11 +71,38 @@ void main() {
         return Triple(r, gr, b)
     }
 
-    fun fragmentFor(spec: FilterSpec): String {
+    /** Vertex shader for the live camera (applies the SurfaceTexture transform to the OES coords). */
+    const val CAMERA_VERTEX = """
+attribute vec4 aPosition;
+attribute vec4 aTextureCoord;
+uniform mat4 uTexMatrix;
+varying highp vec2 vTextureCoord;
+void main() {
+    gl_Position = aPosition;
+    vTextureCoord = (uTexMatrix * aTextureCoord).xy;
+}
+"""
+
+    /** sampler2D fragment shader — used by the offscreen photo pass and the video transcoder. */
+    fun fragmentFor(spec: FilterSpec): String = buildString {
+        append("precision mediump float;\n")
+        append("varying highp vec2 vTextureCoord;\n")
+        append("uniform lowp sampler2D sTexture;\n")
+        append(mainBody(spec))
+    }
+
+    /** External-OES fragment shader — same grading, used by the live camera preview. */
+    fun fragmentForOes(spec: FilterSpec): String = buildString {
+        append("#extension GL_OES_EGL_image_external : require\n")
+        append("precision mediump float;\n")
+        append("varying highp vec2 vTextureCoord;\n")
+        append("uniform samplerExternalOES sTexture;\n")
+        append(mainBody(spec))
+    }
+
+    /** The shared main() — samples sTexture and applies the grading pipeline. */
+    private fun mainBody(spec: FilterSpec): String {
         val sb = StringBuilder()
-        sb.append("precision mediump float;\n")
-        sb.append("varying highp vec2 vTextureCoord;\n")
-        sb.append("uniform lowp sampler2D sTexture;\n")
         sb.append("const vec3 L = vec3(0.299, 0.587, 0.114);\n")
         sb.append("void main() {\n")
         sb.append("    vec2 uv = vTextureCoord;\n")

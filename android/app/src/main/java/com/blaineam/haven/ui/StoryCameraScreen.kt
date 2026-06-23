@@ -26,6 +26,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
@@ -61,6 +62,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -79,7 +82,7 @@ import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
 private const val TAG = "StoryCamera"
-private data class StoryDraft(val ref: String, val isVideo: Boolean)
+private data class StoryDraft(val ref: String, val isVideo: Boolean, val filterIdx: Int = 0)
 
 /** In-app story camera: TAP = photo, HOLD = video (release to stop), flip. Then the editor. */
 @SuppressLint("MissingPermission")
@@ -87,12 +90,13 @@ private data class StoryDraft(val ref: String, val isVideo: Boolean)
 fun StoryCameraScreen(onClose: () -> Unit) {
     var draft by remember { mutableStateOf<StoryDraft?>(null) }
     val d = draft
-    if (d != null) { StoryEditor(ref = d.ref, isVideo = d.isVideo, onClose = onClose); return }
+    if (d != null) { StoryEditor(ref = d.ref, isVideo = d.isVideo, initialFilter = d.filterIdx, onClose = onClose); return }
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     var lensFront by remember { mutableStateOf(false) }
+    var liveFilterIdx by remember { mutableStateOf(0) }
     var status by remember { mutableStateOf("Tap for photo · hold for video") }
     var isRecording by remember { mutableStateOf(false) }
     val imageCapture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build() }
@@ -127,7 +131,7 @@ fun StoryCameraScreen(onClose: () -> Unit) {
                             raw?.let { uprightJpeg(it, rot, mirror = lensFront) }
                                 ?.let { LocalMedia.store(DEFAULT_CIRCLE, it) }
                         }
-                        if (ref != null) draft = StoryDraft(ref, false) else status = "Couldn't capture"
+                        if (ref != null) draft = StoryDraft(ref, false, liveFilterIdx) else status = "Couldn't capture"
                     }
                 }
                 override fun onError(e: ImageCaptureException) { status = "Capture failed" }
@@ -156,7 +160,7 @@ fun StoryCameraScreen(onClose: () -> Unit) {
                                 LocalMedia.store(DEFAULT_CIRCLE, bytes, isVideo = true)
                             }.getOrNull()
                         }
-                        if (ref != null) draft = StoryDraft(ref, true) else status = "Couldn't save video"
+                        if (ref != null) draft = StoryDraft(ref, true, liveFilterIdx) else status = "Couldn't save video"
                     }
                 } else {
                     runCatching { file.delete() }
@@ -168,25 +172,54 @@ fun StoryCameraScreen(onClose: () -> Unit) {
 
     fun stopVideo() { runCatching { recordingRef[0]?.stop() } }
 
+    // Live filter-applied GL preview (the camera frame is rendered through the same grading shader).
+    val glView = remember { FilteredCameraView(context) }
+    var surfaceTex by remember { mutableStateOf<android.graphics.SurfaceTexture?>(null) }
+    DisposableEffect(glView) {
+        glView.onSurfaceTextureReady = { surfaceTex = it }
+        onDispose { glView.onSurfaceTextureReady = null }
+    }
+    LaunchedEffect(liveFilterIdx) { glView.setFilter(com.blaineam.haven.core.HavenFilter.all[liveFilterIdx].spec) }
+    LaunchedEffect(surfaceTex, lensFront) {
+        val st = surfaceTex ?: return@LaunchedEffect
+        val provider = awaitCameraProvider(context)
+        val preview = Preview.Builder().build().also { p ->
+            p.setSurfaceProvider(ContextCompat.getMainExecutor(context)) { req ->
+                st.setDefaultBufferSize(req.resolution.width, req.resolution.height)
+                val surface = android.view.Surface(st)
+                req.provideSurface(surface, ContextCompat.getMainExecutor(context)) { surface.release() }
+            }
+        }
+        val selector = if (lensFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+        runCatching {
+            provider.unbindAll()
+            provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture, videoCapture)
+        }.onFailure {
+            runCatching { provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture) }
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { PreviewView(it) },
-            update = { previewView ->
-                val future = ProcessCameraProvider.getInstance(context)
-                future.addListener({
-                    val provider = future.get()
-                    val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-                    val selector = if (lensFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                    runCatching {
-                        provider.unbindAll()
-                        provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture, videoCapture)
-                    }.onFailure {
-                        runCatching { provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture) }
-                    }
-                }, ContextCompat.getMainExecutor(context))
+            modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                var dx = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dx = 0f },
+                    onHorizontalDrag = { _, amount -> dx += amount },
+                    onDragEnd = {
+                        val n = com.blaineam.haven.core.HavenFilter.all.size
+                        if (dx <= -40f) liveFilterIdx = (liveFilterIdx + 1) % n
+                        else if (dx >= 40f) liveFilterIdx = (liveFilterIdx - 1 + n) % n
+                    },
+                )
             },
+            factory = { glView },
         )
+
+        // Current live-filter name + swipe hint.
+        Text(com.blaineam.haven.core.HavenFilter.all[liveFilterIdx].title, color = Color.White, fontSize = 15.sp,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 200.dp)
+                .clip(CircleShape).background(Color.Black.copy(alpha = 0.4f)).padding(horizontal = 16.dp, vertical = 6.dp))
 
         Box(Modifier.align(Alignment.TopStart).padding(16.dp).size(42.dp).clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.35f)).pointerInput(Unit) { detectTap(onClose) },
@@ -231,4 +264,11 @@ private fun uprightJpeg(jpeg: ByteArray, rotation: Int, mirror: Boolean): ByteAr
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTap(onTap: () -> Unit) {
     awaitEachGesture { awaitFirstDown(); if (waitForUpOrCancellation() != null) onTap() }
 }
+
+/** Await the CameraX provider as a suspend call (it's delivered via a ListenableFuture). */
+private suspend fun awaitCameraProvider(context: android.content.Context): ProcessCameraProvider =
+    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        val f = ProcessCameraProvider.getInstance(context)
+        f.addListener({ runCatching { cont.resumeWith(Result.success(f.get())) } }, ContextCompat.getMainExecutor(context))
+    }
 
