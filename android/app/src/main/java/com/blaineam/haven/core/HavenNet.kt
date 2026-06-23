@@ -74,8 +74,11 @@ object HavenNet : InboundListener {
     private val stateFile: File get() = File(appContext.filesDir, "haven_social_state.bin")
     private val prefs get() = appContext.getSharedPreferences("haven.contacts", Context.MODE_PRIVATE)
 
+    @Volatile private var ready = false
+
+    @Synchronized
     fun init(context: Context) {
-        if (this::appContext.isInitialized) return
+        if (ready) return   // atomic: never expose half-initialized state to a concurrent caller
         appContext = context.applicationContext
         // Must run before any iroh/TLS networking, or the node panics on Android.
         NativeBridge.ensureAndroidContext(appContext)
@@ -83,10 +86,12 @@ object HavenNet : InboundListener {
         profile = ProfileStore.get(appContext)
         social = HavenSocial(core.seed)
         LocalMedia.init(appContext)
+        Presign.init(appContext)
         restoreState()
         loadContacts()
         loadBlocked()
         loadRelayNodes()
+        ready = true
     }
 
     /** Start the iroh node and begin syncing. Safe to call repeatedly. */
@@ -148,6 +153,7 @@ object HavenNet : InboundListener {
                 Wire.HELLO -> handleHello(body)
                 Wire.EVENT -> handleEvent(body)
                 Wire.RELAY_NODE -> handleRelayNode(body)
+                Wire.PRESIGN -> handlePresignBootstrap(body)
                 Wire.MEDIA_REQ -> handleMediaRequest(body)
                 Wire.MEDIA_CHUNK -> handleMediaChunk(body)
                 CallWire.INVITE, CallWire.ACCEPT, CallWire.HANGUP, CallWire.OFFER,
@@ -319,6 +325,7 @@ object HavenNet : InboundListener {
 
     /** Periodic/triggered sync: greet every contact so circles form + back-fill. */
     fun syncWithContacts() {
+        if (!ready) return
         val snapshot = contacts.map { it.idHex }
         for (idHex in snapshot) sendHello(DEFAULT_CIRCLE, idHex)
     }
@@ -427,6 +434,21 @@ object HavenNet : InboundListener {
         }
     }
 
+    /** Frame 20: [LP circleId][sealCircleMedia(bootstrap GET URL)] for the S3 pre-signed pool. */
+    private fun handlePresignBootstrap(body: ByteArray) {
+        val r = Wire.Reader(body)
+        val cidBytes = r.lp() ?: return
+        val circleId = String(cidBytes, Charsets.UTF_8)
+        val sealed = r.rest()
+        if (circleId.isEmpty() || sealed.isEmpty()) return
+        val open = runCatching { social.openCircleMedia(circleId, sealed) }.getOrNull() ?: return
+        val url = String(open, Charsets.UTF_8).trim()
+        if (!url.startsWith("http")) return
+        Presign.setBootstrap(circleId, url)
+        Log.i(TAG, "adopted S3 presign pool for $circleId")
+        scope.launch { backfillMailbox(circleId); pollMailbox() }
+    }
+
     /** Manually adopt a relay node for all circles (Settings paste) + tell contacts via frame 19. */
     fun adoptRelay(nodeHex: String) {
         val hex = nodeHex.trim().lowercase()
@@ -489,8 +511,15 @@ object HavenNet : InboundListener {
         return "haven/mailbox/$circleId/$h"
     }
 
-    /** Drop a sealed event into the circle's mailbox (idempotent). */
+    /** Drop a sealed event into the circle's mailbox (Haven relay node and/or S3 pre-signed pool). */
     private suspend fun uploadEvent(circleId: String, env: ByteArray) {
+        // S3 pre-signed pool (the BYO-bucket path many circles use).
+        if (Presign.hasBootstrap(circleId)) {
+            if (Presign.uploadEvent(circleId, nodeIdHex, env)) {
+                withContext(Dispatchers.Main) { relayActive.value = true }
+            }
+        }
+        // Haven relay node over iroh.
         val nodeHex = relayNodes[circleId] ?: return
         val client = relayClientFor(nodeHex) ?: return
         val key = mailboxKey(circleId, env)
@@ -504,7 +533,7 @@ object HavenNet : InboundListener {
 
     /** Re-upload every post I authored in a circle (for members who were offline when I posted). */
     private suspend fun backfillMailbox(circleId: String) {
-        if (relayNodes[circleId] == null) return
+        if (relayNodes[circleId] == null && !Presign.hasBootstrap(circleId)) return
         val envs = runCatching { social.exportMyEnvelopes(circleId) }.getOrDefault(emptyList())
         for (env in envs) uploadEvent(circleId, env)
         // Also push the media bytes of anything I've posted here that I still hold locally.
@@ -514,7 +543,19 @@ object HavenNet : InboundListener {
 
     /** Poll every circle's mailbox; ingest envelopes we haven't seen. */
     suspend fun pollMailbox() {
+        if (!ready) return
         var changed = false
+        // S3 pre-signed pools (the BYO-bucket path).
+        for (circleId in Presign.circles()) {
+            val items = runCatching { Presign.poll(circleId, seenMailbox) }.getOrDefault(emptyList())
+            if (items.isNotEmpty()) withContext(Dispatchers.Main) { relayActive.value = true }
+            for ((key, env) in items) {
+                seenMailbox.add(key)
+                if (runCatching { social.receive(circleId, env) }.getOrDefault(false)) {
+                    changed = true; notifyInbound(circleId)
+                }
+            }
+        }
         for ((circleId, nodeHex) in relayNodes.toMap()) {
             val client = relayClientFor(nodeHex) ?: continue
             val prefix = "haven/mailbox/$circleId/"
@@ -548,6 +589,7 @@ object HavenNet : InboundListener {
 
     /** Fetch missing feed media: try the circle relay (haven/media/<ref>) first, then ask contacts. */
     fun requestMissingMedia() {
+        if (!ready) return
         val myHex = nodeIdHex
         val missing = LinkedHashMap<String, String>()   // ref -> circleId
         for (c in social.circles()) {
@@ -722,12 +764,13 @@ object HavenNet : InboundListener {
         prefs.edit().putString("relayNodes", o.toString()).apply()
     }
 
-    /** Whether any circle has a relay configured (for the UI indicator). */
-    fun hasRelay(): Boolean = relayNodes.isNotEmpty()
+    /** Whether any circle has a mailbox configured — Haven relay node or S3 pool (UI indicator). */
+    fun hasRelay(): Boolean = relayNodes.isNotEmpty() || Presign.anyBootstrap()
 
     fun reset() {
         contacts.clear(); pending.clear(); blocked.clear(); initiated.clear()
         relayNodes.clear(); relayClients.clear(); seenMailbox.clear()
+        Presign.reset()
         relayActive.value = false
         prefs.edit().clear().apply()
         runCatching { stateFile.delete() }

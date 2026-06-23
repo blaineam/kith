@@ -21,6 +21,7 @@ object Wire {
     const val MEDIA_CHUNK: Int = 5
     const val RELAY: Int = 9
     const val RELAY_NODE: Int = 19   // circle relay/mailbox node id share
+    const val PRESIGN: Int = 20      // S3 pre-signed URL pool bootstrap
     const val CALL_INVITE: Int = 10
     const val CALL_ACCEPT: Int = 11
     const val CALL_HANGUP: Int = 12
