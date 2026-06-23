@@ -87,6 +87,7 @@ object HavenNet : InboundListener {
         social = HavenSocial(core.seed)
         LocalMedia.init(appContext)
         Presign.init(appContext)
+        CircleLock.init(appContext)
         restoreState()
         loadContacts()
         loadBlocked()
@@ -828,6 +829,7 @@ object HavenNet : InboundListener {
         contacts.clear(); pending.clear(); blocked.clear(); initiated.clear()
         relayNodes.clear(); relayClients.clear(); seenMailbox.clear()
         Presign.reset()
+        CircleLock.reset()
         relayActive.value = false
         activeCircle.value = DEFAULT_CIRCLE
         prefs.edit().clear().apply()

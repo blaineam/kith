@@ -96,6 +96,9 @@ dependencies {
     // Background sync (serverless, like the iOS BGAppRefreshTask) for local notifications.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+    // Biometric (per-circle Face/fingerprint lock).
+    implementation("androidx.biometric:biometric:1.1.0")
+
     // Nearby Connections — offline mesh over BLE/Wi-Fi (the Android take on MultipeerConnectivity).
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
 

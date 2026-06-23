@@ -2,14 +2,14 @@ package com.blaineam.haven
 
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.fragment.app.FragmentActivity
 import com.blaineam.haven.core.ShareInbox
 import com.blaineam.haven.ui.HavenAppTheme
 import com.blaineam.haven.ui.RootScreen
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)

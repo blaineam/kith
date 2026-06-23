@@ -134,7 +134,21 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                 HavenNet.pending.forEach { PendingCard(it) }
             }
 
-            if (posts.isEmpty()) {
+            val lockV by com.blaineam.haven.core.CircleLock.version
+            if (remember(active, lockV) { com.blaineam.haven.core.CircleLock.needsUnlock(active) }) {
+                Column(Modifier.fillMaxWidth().weight(1f).padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Text("🔒", fontSize = 48.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Text("This circle is locked", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(16.dp))
+                    BrandButton(text = "Unlock", modifier = Modifier.fillMaxWidth(0.6f)) {
+                        (context as? androidx.fragment.app.FragmentActivity)?.let {
+                            com.blaineam.haven.core.CircleLock.authenticate(it, active) {}
+                        }
+                    }
+                }
+            } else if (posts.isEmpty()) {
                 Column(
                     Modifier.fillMaxWidth().weight(1f).padding(32.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -321,6 +335,11 @@ private fun CircleSwitcher(activeId: String, circlesVersion: Int) {
                 )
             }
             androidx.compose.material3.HorizontalDivider(color = HavenTheme.cardBorder)
+            val locked = com.blaineam.haven.core.CircleLock.isLocked(activeId)
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text(if (locked) "🔓 Unlock this circle" else "🔒 Lock this circle", color = Color.White) },
+                onClick = { com.blaineam.haven.core.CircleLock.setLocked(activeId, !locked); menu = false },
+            )
             androidx.compose.material3.DropdownMenuItem(
                 text = { Text("+ New circle", color = HavenTheme.pink) },
                 onClick = { menu = false; showCreate = true },
