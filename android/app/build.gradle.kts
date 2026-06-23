@@ -109,6 +109,12 @@ dependencies {
     // the same DTLS-SRTP media + SDP/ICE-over-sealed-channel design as iOS.
     implementation("io.getstream:stream-webrtc-android:1.3.8")
 
+    // Video filter transcode (MediaCodec + OpenGL decode→shader→encode). Apache-2.0, bundled in
+    // the APK — no Google services, offline, de-Google-able. We feed it our own GLSL so the look
+    // matches the iOS FilterSpec pipeline exactly (incl. Kodak Gold). Photos use the same shader
+    // via an offscreen GL pass, so photo + video + iOS are pixel-consistent.
+    implementation("com.github.MasayukiSuda:Mp4Composer-android:v0.4.1")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // --- Tests ---
