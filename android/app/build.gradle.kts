@@ -46,6 +46,16 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    // Per-ABI APKs so a sideloadable arm64 build is ~half the size of the universal one.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = true   // also keep a universal one for the emulator
+        }
+    }
 }
 
 dependencies {
