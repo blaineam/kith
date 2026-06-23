@@ -35,6 +35,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blaineam.haven.core.HavenNet
@@ -48,6 +50,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     val profile = remember { ProfileStore.get(context) }
     var retention by remember { mutableIntStateOf(profile.retentionDays) }
     var confirmReset by remember { mutableStateOf(false) }
+    var showTransfer by remember { mutableStateOf(false) }
+    var showRestore by remember { mutableStateOf(false) }
 
     val options = listOf(0 to "Keep forever", 7 to "After 1 week", 30 to "After 1 month", 90 to "After 3 months", 365 to "After 1 year")
 
@@ -201,10 +205,58 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            // Identity — move to another device / restore here.
+            Spacer(Modifier.height(16.dp))
+            Column(Modifier.fillMaxWidth().havenCard().padding(16.dp)) {
+                Text("Your identity", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("Move your account to a new phone, or restore it here. Your keys never touch a server.",
+                    color = HavenTheme.textSecondary, fontSize = 12.sp)
+                Spacer(Modifier.height(10.dp))
+                Text("Move to another device →", color = HavenTheme.pink, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showTransfer = true }.padding(vertical = 8.dp))
+                Text("Restore identity here →", color = HavenTheme.pink, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showRestore = true }.padding(vertical = 8.dp))
+            }
+
             Spacer(Modifier.height(24.dp))
             Text("Start over (new identity)", color = Color(0xFFF87171), fontWeight = FontWeight.Medium,
                 fontSize = 15.sp, modifier = Modifier.clip(RoundedCornerShape(8.dp))
                     .clickable { confirmReset = true }.padding(8.dp))
+        }
+    }
+
+    // Transfer: show this identity's seed QR for the new device to scan.
+    if (showTransfer) {
+        FullScreenOverlay(onDismiss = { showTransfer = false }) {
+            val core = remember { com.blaineam.haven.core.HavenCore.get(context) }
+            val qr = rememberQr(core.exportSeedUri())
+            Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Done", color = HavenTheme.textSecondary, modifier = Modifier.align(Alignment.End).clickable { showTransfer = false }.padding(8.dp))
+                Spacer(Modifier.height(12.dp))
+                BrandText("Move to another device", fontSize = 22)
+                Spacer(Modifier.height(8.dp))
+                Text("On your other phone: Settings → Restore identity here → scan this. Keep it private — anyone who scans it becomes you.",
+                    color = HavenTheme.textSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(20.dp))
+                qr?.let { androidx.compose.foundation.Image(it, "Identity transfer QR",
+                    Modifier.size(260.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF101018)).padding(8.dp)) }
+            }
+        }
+    }
+    // Restore: scan a seed QR from another device, adopt it, restart clean.
+    if (showRestore) {
+        FullScreenOverlay(onDismiss = { showRestore = false }) {
+            QrScannerScreen(
+                onResult = { text ->
+                    showRestore = false
+                    if (text.startsWith("haven-seed:") && com.blaineam.haven.core.HavenCore.get(context).importSeed(text)) {
+                        HavenNet.reset()
+                        com.blaineam.haven.core.restartApp(context)
+                    }
+                },
+                onCancel = { showRestore = false },
+            )
         }
     }
 

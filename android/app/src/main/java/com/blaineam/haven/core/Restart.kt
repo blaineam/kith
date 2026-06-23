@@ -14,7 +14,11 @@ fun startOver(context: Context) {
     runCatching { ProfileStore.get(context).reset() }
     runCatching { HavenNet.reset() }
     runCatching { LocalMedia.clear() }
+    restartApp(context)
+}
 
+/** Relaunch the app from a clean process (used after adopting a transferred identity). */
+fun restartApp(context: Context) {
     val ctx = context.applicationContext
     val intent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
         ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK) }

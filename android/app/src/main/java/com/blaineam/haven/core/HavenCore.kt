@@ -40,6 +40,18 @@ class HavenCore private constructor(
         prefs.edit().remove(KEY_SEED).apply()
     }
 
+    /** A QR/transfer payload carrying this identity's master seed (to adopt on another device). */
+    fun exportSeedUri(): String = "haven-seed:" + Base64.encodeToString(seed, Base64.NO_WRAP)
+
+    /** Adopt a seed scanned from another device. Returns true if it was a valid 32-byte seed. */
+    fun importSeed(uri: String): Boolean {
+        val b64 = uri.trim().removePrefix("haven-seed:")
+        val s = runCatching { Base64.decode(b64, Base64.NO_WRAP) }.getOrNull() ?: return false
+        if (s.size != 32) return false
+        prefs.edit().putString(KEY_SEED, Base64.encodeToString(s, Base64.NO_WRAP)).apply()
+        return true
+    }
+
     private fun loadOrCreate(): Account {
         val stored = prefs.getString(KEY_SEED, null)
         if (stored != null) {

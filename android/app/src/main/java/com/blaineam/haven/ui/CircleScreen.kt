@@ -1,7 +1,9 @@
 package com.blaineam.haven.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -450,10 +452,13 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
                     Box(
                         Modifier.clip(RoundedCornerShape(20.dp))
                             .background(if (mine) HavenTheme.pink.copy(alpha = 0.25f) else HavenTheme.background)
-                            .clickable {
-                                if (mine) HavenNet.unreact(circleId, item.id, r.emoji)
-                                else HavenNet.react(circleId, item.id, r.emoji)
-                            }
+                            .combinedClickable(
+                                onClick = {
+                                    if (mine) HavenNet.unreact(circleId, item.id, r.emoji)
+                                    else HavenNet.react(circleId, item.id, r.emoji)
+                                },
+                                onLongClick = { whoReacted = r },
+                            )
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                     ) { Text("${r.emoji} ${r.count}", fontSize = 13.sp, color = Color.White) }
                 }

@@ -26,3 +26,9 @@ HavenApp/Info.plist
 
 # agent worktrees (never commit)
 .claude/worktrees/
+
+# App Store screenshot pipeline scratch (committed copies live under docs/appstore-screenshots/)
+apple/screenshots/
+
+# Kotlin build cache
+android/.kotlin/
