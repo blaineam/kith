@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -45,6 +46,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import com.blaineam.haven.core.DEFAULT_CIRCLE
 import com.blaineam.haven.core.HavenNet
@@ -60,6 +62,14 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
     var pendingPhoto by remember { mutableStateOf<String?>(null) }   // media id staged for the next post
+    // A link shared into Haven from another app prefills the composer.
+    val sharedText = com.blaineam.haven.core.ShareInbox.pending
+    LaunchedEffect(sharedText) {
+        if (!sharedText.isNullOrBlank()) {
+            draft = if (draft.isBlank()) sharedText else "$draft $sharedText"
+            com.blaineam.haven.core.ShareInbox.take()
+        }
+    }
     val profile = remember { com.blaineam.haven.core.ProfileStore.get(context) }
     val version by HavenNet.feedVersion          // recompose when the feed changes
     val items: List<FeedItemFfi> = remember(version, profile.retentionDays) {
@@ -70,8 +80,13 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     var viewingStory by remember { mutableStateOf<Int?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
-            val bytes = loadAndDownscale(context, uri)
-            if (bytes != null) pendingPhoto = LocalMedia.store(DEFAULT_CIRCLE, bytes)
+            if (com.blaineam.haven.core.isVideoUri(context, uri)) {
+                val bytes = com.blaineam.haven.core.readVideoBytes(context, uri)
+                if (bytes != null) pendingPhoto = LocalMedia.store(DEFAULT_CIRCLE, bytes, isVideo = true)
+            } else {
+                val bytes = loadAndDownscale(context, uri)
+                if (bytes != null) pendingPhoto = LocalMedia.store(DEFAULT_CIRCLE, bytes)
+            }
         }
     }
     val storyPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -134,9 +149,16 @@ fun CircleScreen(onAddFriend: () -> Unit) {
             }
 
             // Staged photo preview.
-            pendingPhoto?.let { id ->
+            pendingPhoto?.let { ref ->
                 Box(Modifier.padding(start = 16.dp, bottom = 4.dp)) {
-                    MediaImage(DEFAULT_CIRCLE, id, Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)))
+                    if (LocalMedia.isVideo(ref)) {
+                        Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).background(HavenTheme.card),
+                            contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.Videocam, "Video", tint = Color.White)
+                        }
+                    } else {
+                        MediaImage(DEFAULT_CIRCLE, ref, Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)))
+                    }
                     Text("✕", color = Color.White, fontSize = 16.sp,
                         modifier = Modifier.align(Alignment.TopEnd).clip(CircleShape)
                             .background(Color.Black.copy(alpha = 0.6f)).clickable { pendingPhoto = null }
@@ -150,10 +172,10 @@ fun CircleScreen(onAddFriend: () -> Unit) {
             ) {
                 Box(
                     Modifier.size(44.dp).clip(CircleShape).clickable {
-                        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
                     },
                     contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Filled.AddPhotoAlternate, "Add photo", tint = HavenTheme.pink) }
+                ) { Icon(Icons.Filled.AddPhotoAlternate, "Add photo or video", tint = HavenTheme.pink) }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
@@ -196,7 +218,8 @@ private fun PendingCard(req: PendingRequest) {
     ) {
         Column(Modifier.weight(1f)) {
             Text("${req.name} wants to connect", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text("Safety: ${req.verifyHex.take(12)}…", color = HavenTheme.textSecondary, fontSize = 11.sp)
+            Text("Safety: ${com.blaineam.haven.core.SafetyWords.phrase(req.verifyHex)}",
+                color = HavenTheme.textSecondary, fontSize = 11.sp)
         }
         Text("Accept", color = HavenTheme.pink, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { HavenNet.approve(req) }.padding(8.dp))
@@ -238,6 +261,37 @@ private fun ConnectionDot() {
     }
 }
 
+/** Plays an attached video from its decrypted cache file (tap to start), with controls. */
+@Composable
+fun VideoTile(circleId: String, ref: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var file by remember(ref) { mutableStateOf<java.io.File?>(null) }
+    LaunchedEffect(ref, circleId) {
+        file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            LocalMedia.videoFile(circleId, ref)
+        }
+    }
+    val f = file
+    if (f == null) {
+        Box(modifier.background(HavenTheme.card).padding(40.dp), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Videocam, "Video", tint = HavenTheme.textSecondary)
+        }
+    } else {
+        AndroidView(
+            modifier = modifier,
+            factory = { ctx ->
+                android.widget.VideoView(ctx).apply {
+                    setVideoPath(f.absolutePath)
+                    val mc = android.widget.MediaController(ctx)
+                    mc.setAnchorView(this)
+                    setMediaController(mc)
+                    setOnPreparedListener { it.isLooping = true }
+                }
+            },
+        )
+    }
+}
+
 private val QUICK_EMOJI = listOf("❤️", "😂", "🔥", "👍", "🎉", "😮")
 
 @Composable
@@ -260,13 +314,17 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
         }
         if (item.body.isNotBlank()) {
             Spacer(Modifier.height(10.dp))
-            Text(item.body, color = Color.White, fontSize = 15.sp)
+            LinkedText(item.body, color = Color.White, fontSize = 15.sp)
         }
 
-        // Attached photos.
-        item.media.forEach { id ->
+        // Attached photos / videos.
+        item.media.forEach { ref ->
             Spacer(Modifier.height(10.dp))
-            MediaImage(circleId, id, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)))
+            if (LocalMedia.isVideo(ref)) {
+                VideoTile(circleId, ref, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)))
+            } else {
+                MediaImage(circleId, ref, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)))
+            }
         }
 
         // Existing reactions.
@@ -298,8 +356,9 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showComment = !showComment }.padding(6.dp))
         }
         if (showPicker) {
+            var customEmoji by remember(item.id) { mutableStateOf("") }
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 QUICK_EMOJI.forEach { e ->
                     Box(
                         Modifier.clip(CircleShape).clickable {
@@ -307,6 +366,24 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
                         }.padding(6.dp),
                     ) { Text(e, fontSize = 22.sp) }
                 }
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = customEmoji,
+                    onValueChange = { customEmoji = it },
+                    placeholder = { Text("Any emoji…", fontSize = 13.sp) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = HavenTheme.pink, cursorColor = HavenTheme.pink),
+                )
+                Text("Add", color = if (customEmoji.isNotBlank()) HavenTheme.pink else HavenTheme.textSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(enabled = customEmoji.isNotBlank()) {
+                        HavenNet.react(circleId, item.id, customEmoji.trim()); customEmoji = ""; showPicker = false
+                    }.padding(10.dp))
             }
         }
 

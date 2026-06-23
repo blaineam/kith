@@ -22,23 +22,37 @@ object LocalMedia {
         dir = File(context.applicationContext.filesDir, "media").apply { mkdirs() }
     }
 
-    /** Store plaintext bytes sealed to [circleId]; returns the content id (sha-256 hex). */
-    fun store(circleId: String, bytes: ByteArray): String {
-        val id = sha256Hex(bytes)
+    /**
+     * Store plaintext bytes sealed to [circleId]; returns a media ref. Videos are tagged "v:" so
+     * the feed renders them as players (images stay bare for backward compatibility).
+     */
+    fun store(circleId: String, bytes: ByteArray, isVideo: Boolean = false): String {
+        val hash = sha256Hex(bytes)
         val toWrite = runCatching { HavenNet.engine.sealCircleMedia(circleId, bytes) }.getOrNull() ?: bytes
-        runCatching { File(dir, id).writeBytes(toWrite) }
-        return id
+        runCatching { File(dir, hash).writeBytes(toWrite) }
+        return if (isVideo) "v:$hash" else hash
     }
 
-    /** Load + decrypt a stored media id, or null if we don't have it. */
-    fun load(circleId: String, id: String): ByteArray? {
-        val f = File(dir, id)
+    fun isVideo(ref: String): Boolean = ref.startsWith("v:")
+    private fun bareId(ref: String): String = ref.removePrefix("v:").removePrefix("i:")
+
+    /** Load + decrypt a stored media ref, or null if we don't have it. */
+    fun load(circleId: String, ref: String): ByteArray? {
+        val f = File(dir, bareId(ref))
         if (!f.exists()) return null
         val stored = f.readBytes()
         return runCatching { HavenNet.engine.openCircleMedia(circleId, stored) }.getOrNull() ?: stored
     }
 
-    fun has(id: String): Boolean = File(dir, id).exists()
+    /** Decrypt a video ref to a cache file VideoView/MediaPlayer can read; null if missing. */
+    fun videoFile(circleId: String, ref: String): File? {
+        val bytes = load(circleId, ref) ?: return null
+        val out = File(dir.parentFile, "vid_${bareId(ref)}.mp4")
+        if (!out.exists()) runCatching { out.writeBytes(bytes) } else Unit
+        return if (out.exists()) out else null
+    }
+
+    fun has(ref: String): Boolean = File(dir, bareId(ref)).exists()
 
     /** Delete every stored media file (part of "start over"). */
     fun clear() {
@@ -48,6 +62,19 @@ object LocalMedia {
     private fun sha256Hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 }
+
+/** Read a picked video's raw bytes, capped to avoid huge attachments (default 60 MB). */
+fun readVideoBytes(context: Context, uri: Uri, maxBytes: Int = 60 * 1024 * 1024): ByteArray? =
+    runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val bytes = input.readBytes()
+            if (bytes.size > maxBytes) null else bytes
+        }
+    }.getOrNull()
+
+/** True if the picked uri is a video (by MIME type). */
+fun isVideoUri(context: Context, uri: Uri): Boolean =
+    context.contentResolver.getType(uri)?.startsWith("video") == true
 
 /** Read a picked image, downscale to <= maxDim and JPEG-compress (parity with iOS ~2560px cap). */
 fun loadAndDownscale(context: Context, uri: Uri, maxDim: Int = 2048, quality: Int = 82): ByteArray? {

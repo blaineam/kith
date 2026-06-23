@@ -160,6 +160,6 @@ private fun Bubble(text: String, mine: Boolean) {
             Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(18.dp))
                 .background(if (mine) HavenTheme.pink else HavenTheme.card)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
-        ) { Text(text, color = Color.White, fontSize = 15.sp) }
+        ) { LinkedText(text, color = Color.White, fontSize = 15.sp) }
     }
 }

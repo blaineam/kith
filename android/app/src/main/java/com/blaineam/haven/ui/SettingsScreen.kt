@@ -96,6 +96,24 @@ fun SettingsScreen(onBack: () -> Unit) {
                     else "Paste a relay node id (from your Mac/iPhone or a haven-relay daemon) so posts deliver when peers are offline.",
                     color = HavenTheme.textSecondary, fontSize = 12.sp,
                 )
+
+                // Host the relay on THIS device.
+                Spacer(Modifier.height(12.dp))
+                val hosting by HavenNet.hosting
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Run the relay on this phone", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text("This device serves the circle's mailbox so everyone stays in sync — no cloud.",
+                            color = HavenTheme.textSecondary, fontSize = 11.sp)
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = hosting,
+                        onCheckedChange = { on -> if (on) HavenNet.startHosting() else HavenNet.stopHosting() },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(
+                            checkedThumbColor = Color.White, checkedTrackColor = HavenTheme.pink),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
                 Spacer(Modifier.height(10.dp))
                 var relayInput by remember { mutableStateOf("") }
                 androidx.compose.material3.OutlinedTextField(

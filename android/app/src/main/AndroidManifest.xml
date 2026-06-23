@@ -35,6 +35,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="haven" />
             </intent-filter>
+            <!-- Share a YouTube/web link (or any text) from another app into Haven. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

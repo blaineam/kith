@@ -111,7 +111,7 @@ fun YouScreen(onAddFriend: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 KeyVal("Your id", core.nodeIdHex.take(24) + "…")
                 Spacer(Modifier.height(6.dp))
-                KeyVal("Safety words", core.verificationHex.take(16) + "…")
+                KeyVal("Safety words", com.blaineam.haven.core.SafetyWords.phrase(core.verificationHex))
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "Haven uses hybrid post-quantum encryption (X25519 + ML-KEM-768, Ed25519 + ML-DSA). Your keys never leave this device.",

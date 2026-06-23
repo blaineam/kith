@@ -397,6 +397,35 @@ object HavenNet : InboundListener {
         }
     }
 
+    // ---- Hosting: run the circle's relay in-process on this device ----
+
+    private var relayHost: uniffi.haven_ffi.RelayServerHandle? = null
+    val hosting = mutableStateOf(false)
+
+    /** Start serving the circle's mailbox from this device + adopt it for every circle. */
+    fun startHosting() {
+        if (relayHost != null) return
+        scope.launch {
+            // A stable relay-specific seed, distinct from the messaging identity (per the core's contract).
+            val relaySeed = MessageDigest.getInstance("SHA-256")
+                .digest(core.seed + "haven-relay".toByteArray())
+            val dir = File(appContext.filesDir, "relay").apply { mkdirs() }.absolutePath
+            val h = runCatching { uniffi.haven_ffi.RelayServerHandle.start(relaySeed, dir) }
+                .getOrElse { Log.e(TAG, "relay host start failed", it); return@launch }
+            relayHost = h
+            withContext(Dispatchers.Main) { hosting.value = true }
+            val nodeHex = h.nodeIdHex()
+            Log.i(TAG, "hosting circle relay: ${nodeHex.take(8)}")
+            adoptRelay(nodeHex)   // use it + tell contacts via frame 19
+        }
+    }
+
+    fun stopHosting() {
+        runCatching { relayHost?.close() }
+        relayHost = null
+        hosting.value = false
+    }
+
     private suspend fun relayClientFor(nodeHex: String): RelayClient? = relayMutex.withLock {
         relayClients[nodeHex]?.let { return it }
         val c = runCatching { RelayClient.connect(core.seed, nodeHex) }.getOrNull() ?: return null
