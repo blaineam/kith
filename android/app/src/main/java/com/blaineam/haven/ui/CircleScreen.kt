@@ -399,12 +399,30 @@ fun VideoTile(circleId: String, ref: String, modifier: Modifier = Modifier) {
 
 private val QUICK_EMOJI = listOf("❤️", "😂", "🔥", "👍", "🎉", "😮")
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
     var showComment by remember(item.id) { mutableStateOf(false) }
     var commentDraft by remember(item.id) { mutableStateOf("") }
     var showPicker by remember(item.id) { mutableStateOf(false) }
     var showEdit by remember(item.id) { mutableStateOf(false) }
+    var whoReacted by remember(item.id) { mutableStateOf<uniffi.haven_ffi.ReactionFfi?>(null) }
+
+    whoReacted?.let { r ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { whoReacted = null }, containerColor = HavenTheme.card,
+            title = { Text("${r.emoji}  ${r.count}", color = Color.White) },
+            text = {
+                Column {
+                    r.authors.forEach { a ->
+                        Text(if (a.startsWith(HavenNet.nodeIdHex.take(8))) "You" else HavenNet.displayName(a.take(8)),
+                            color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(vertical = 2.dp))
+                    }
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { whoReacted = null }) { Text("Done", color = HavenTheme.pink) } },
+        )
+    }
 
     Column(Modifier.fillMaxWidth().havenCard().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
