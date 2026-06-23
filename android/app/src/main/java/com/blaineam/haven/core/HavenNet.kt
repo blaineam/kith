@@ -97,15 +97,32 @@ object HavenNet : InboundListener {
         if (payload.isEmpty()) return
         val type = payload[0].toInt() and 0xFF
         val body = payload.copyOfRange(1, payload.size)
+        // Call frames lead with a 64-char sender hex — drop blocked senders early (parity with iOS).
+        if (type in intArrayOf(CallWire.INVITE, CallWire.ACCEPT, CallWire.HANGUP, CallWire.OFFER,
+                CallWire.ANSWER, CallWire.ICE, CallWire.GROUP_INVITE)) {
+            if (body.size >= 64) {
+                val head = String(body.copyOfRange(0, 64), Charsets.UTF_8)
+                if (head.length == 64 && blocked.contains(head)) return
+            }
+        }
         scope.launch {
             withContext(Dispatchers.Main) { internetActive.value = true }
             when (type) {
                 Wire.HELLO -> handleHello(body)
                 Wire.EVENT -> handleEvent(body)
+                CallWire.INVITE, CallWire.ACCEPT, CallWire.HANGUP, CallWire.OFFER,
+                CallWire.ANSWER, CallWire.ICE, CallWire.GROUP_INVITE ->
+                    withContext(Dispatchers.Main) { callRouter?.invoke(type, body) }
                 else -> Log.d(TAG, "ignoring frame type $type (not yet handled)")
             }
         }
     }
+
+    /** CallManager registers here to receive call frames (kept as a hook to avoid a hard dependency). */
+    var callRouter: ((type: Int, body: ByteArray) -> Unit)? = null
+
+    /** Send a call signaling frame to one node (used by CallManager). */
+    fun sendCallFrame(type: Int, payload: ByteArray, toNodeHex: String) = sendFrame(type, payload, toNodeHex)
 
     private fun handleHello(payload: ByteArray) {
         val hello = Wire.parseHello(payload) ?: return

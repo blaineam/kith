@@ -104,6 +104,25 @@ class CoreInstrumentedTest {
         assertTrue(bobSocial.feed(dmId, 2UL, null).any { it.body == "hey bob, dm" && !it.isMe })
     }
 
+    @Test fun call_signal_sdp_and_ice_json_round_trip() {
+        // SDP/ICE JSON must match the iOS CallSignal shape ({t,sdp} / {c,m,i}) for call interop.
+        val sdpJson = com.blaineam.haven.core.CallSignal.encodeSdp("offer", "v=0\r\no=- 1 2 IN IP4 0.0.0.0")
+        val sdp = com.blaineam.haven.core.CallSignal.decodeSdp(sdpJson)!!
+        assertEquals("offer", sdp.type)
+        assertTrue(sdp.sdp.startsWith("v=0"))
+        // The JSON keys are exactly t/sdp.
+        val obj = org.json.JSONObject(String(sdpJson))
+        assertTrue(obj.has("t") && obj.has("sdp"))
+
+        val iceJson = com.blaineam.haven.core.CallSignal.encodeCandidate("candidate:1 1 udp", 0, "0")
+        val ice = com.blaineam.haven.core.CallSignal.decodeCandidate(iceJson)!!
+        assertEquals("candidate:1 1 udp", ice.candidate)
+        assertEquals(0, ice.mLineIndex)
+        assertEquals("0", ice.mid)
+        val iceObj = org.json.JSONObject(String(iceJson))
+        assertTrue(iceObj.has("c") && iceObj.has("m"))
+    }
+
     @Test fun story_flag_round_trips_through_the_feed() {
         val a = Account.generate()
         val s = HavenSocial(a.secretSeed())

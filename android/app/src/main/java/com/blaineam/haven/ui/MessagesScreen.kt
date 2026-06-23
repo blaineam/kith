@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -114,6 +115,13 @@ private fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
                 }
                 Spacer(Modifier.size(4.dp))
                 Text(partner.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                val startCall = rememberCallStarter()
+                Box(Modifier.size(40.dp).clip(CircleShape).clickable {
+                    startCall(listOf(partner.idHex), partner.name)
+                }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.Videocam, "Video call", tint = HavenTheme.pink)
+                }
             }
 
             LazyColumn(

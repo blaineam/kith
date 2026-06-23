@@ -76,6 +76,10 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
+    // WebRTC (maintained libwebrtc fork, prebuilt .so) for mesh group calls — Android side of
+    // the same DTLS-SRTP media + SDP/ICE-over-sealed-channel design as iOS.
+    implementation("io.getstream:stream-webrtc-android:1.3.8")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // --- Tests ---

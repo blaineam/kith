@@ -68,6 +68,7 @@ private fun MainScaffold() {
     LaunchedEffect(Unit) {
         HavenNet.init(context)
         HavenNet.start()
+        com.blaineam.haven.core.CallManager.init(context, HavenNet.nodeIdHex)
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -117,4 +118,7 @@ private fun MainScaffold() {
     ) {
         ConnectScreen(onDone = { showConnect = false })
     }
+
+    // Call overlay (incoming ring / in-call mesh grid) sits above everything.
+    CallOverlay()
 }
