@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Haven store screenshot scenes",
+  "type": "object",
+  "properties": {
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "platform", "source", "headline"],
+        "properties": {
+          "id": { "type": "string", "description": "Unique scene id; used in output filename." },
+          "platform": { "enum": ["android", "windows"], "description": "Selects device frame + default store sizes." },
+          "source": { "type": "string", "description": "Path to raw screenshot, relative to tools/screenshots/." },
+          "headline": { "type": "string", "description": "Bold brand-gradient headline." },
+          "subtitle": { "type": "string", "description": "Optional supporting line." },
+          "background": { "enum": ["dark", "gradient"], "default": "dark" },
+          "accent": { "type": "string", "description": "Optional accent hex; defaults to brand pink." },
+          "tab": { "type": "string", "description": "Android demo tab: circle|messages|you (for capture script)." },
+          "scene": { "type": "string", "description": "Optional deep-link scene name (for capture scripts)." },
+          "sizes": {
+            "type": "array",
+            "items": { "enum": ["play_phone", "play_phone_hd", "ms_32", "ms_169"] },
+            "description": "Override the default sizes for this platform."
+          }
+        }
+      }
+    }
+  }
+}

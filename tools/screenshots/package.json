@@ -1,0 +1,21 @@
+{
+  "name": "haven-screenshots",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Config-driven screenshot pipeline that turns raw Haven app screenshots into polished, branded store marketing images for Google Play (Android) and the Microsoft Store (Windows).",
+  "type": "module",
+  "bin": {
+    "haven-shots": "./src/cli.js"
+  },
+  "scripts": {
+    "frame": "node src/cli.js frame",
+    "frame:samples": "node src/cli.js samples",
+    "list": "node src/cli.js list"
+  },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

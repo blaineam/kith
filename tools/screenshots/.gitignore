@@ -1,0 +1,7 @@
+node_modules/
+raw/android/*.png
+raw/windows/*.png
+out/android/*.png
+out/windows/*.png
+# Keep sample renders + placeholder inputs committed so the pipeline is
+# inspectable without running the app. (samples/ is intentionally NOT ignored.)

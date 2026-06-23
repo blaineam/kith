@@ -1,0 +1,94 @@
+{
+  "$schema": "./screens.schema.json",
+  "comment": "Each scene is framed into branded store art. Edit headline/subtitle freely. `source` is relative to tools/screenshots/. `platform` picks output sizes + device frame (android=phone bezel, windows=desktop window). `tab`/`scene` are passed to the capture scripts. `background` is 'dark' (default, calm) or 'gradient'.",
+  "scenes": [
+    {
+      "id": "android-feed",
+      "platform": "android",
+      "tab": "circle",
+      "scene": "feed",
+      "source": "raw/android/circle.png",
+      "headline": "Your circle, end-to-end encrypted",
+      "subtitle": "Share photos and moments only with the people you love.",
+      "background": "dark"
+    },
+    {
+      "id": "android-stories",
+      "platform": "android",
+      "tab": "circle",
+      "scene": "story",
+      "source": "raw/android/story.png",
+      "headline": "Stories with real film filters",
+      "subtitle": "Capture the day with beautiful, true-to-life looks.",
+      "background": "gradient"
+    },
+    {
+      "id": "android-calls",
+      "platform": "android",
+      "tab": "circle",
+      "scene": "call",
+      "source": "raw/android/call.png",
+      "headline": "Group video calls, no servers",
+      "subtitle": "Peer-to-peer calls that never touch the cloud.",
+      "background": "dark"
+    },
+    {
+      "id": "android-messages",
+      "platform": "android",
+      "tab": "messages",
+      "scene": "dm",
+      "source": "raw/android/messages.png",
+      "headline": "Private DMs",
+      "subtitle": "Every message encrypted, just between you two.",
+      "background": "dark"
+    },
+    {
+      "id": "android-keys",
+      "platform": "android",
+      "tab": "you",
+      "scene": "keys",
+      "source": "raw/android/keys.png",
+      "headline": "Your keys never leave your device",
+      "subtitle": "No accounts, no servers, no one in the middle.",
+      "background": "gradient"
+    },
+    {
+      "id": "android-profile",
+      "platform": "android",
+      "tab": "you",
+      "scene": "profile",
+      "source": "raw/android/profile.png",
+      "headline": "A calm home for your people",
+      "subtitle": "No ads. No tracking. Nothing you share ever leaves your circle.",
+      "background": "dark"
+    },
+
+    {
+      "id": "windows-feed",
+      "platform": "windows",
+      "scene": "feed",
+      "source": "raw/windows/feed.png",
+      "headline": "Your circle on the desktop, encrypted",
+      "subtitle": "The same private Haven, now on Windows.",
+      "background": "dark"
+    },
+    {
+      "id": "windows-calls",
+      "platform": "windows",
+      "scene": "call",
+      "source": "raw/windows/call.png",
+      "headline": "Group video calls & screen share",
+      "subtitle": "Serverless, peer-to-peer, end-to-end encrypted.",
+      "background": "gradient"
+    },
+    {
+      "id": "windows-messages",
+      "platform": "windows",
+      "scene": "dm",
+      "source": "raw/windows/messages.png",
+      "headline": "Private messages, big screen",
+      "subtitle": "Pick up the conversation right where you left off.",
+      "background": "dark"
+    }
+  ]
+}
