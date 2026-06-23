@@ -326,13 +326,21 @@ object HavenNet : InboundListener {
     }
 
     /** Author a post in a circle and broadcast the sealed event to its members. */
-    fun post(circleId: String, body: String, media: List<String> = emptyList()) {
-        if (body.isBlank() && media.isEmpty()) return
+    fun post(circleId: String, body: String, media: List<String> = emptyList(),
+             music: uniffi.haven_ffi.TrackRefFfi? = null) {
+        if (body.isBlank() && media.isEmpty() && music == null) return
         val env = runCatching {
-            social.post(circleId, body, media, null, null, false, false, nowMs())
+            social.post(circleId, body, media, music, null, false, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
     }
+
+    /** Build a portable track reference from a shared streaming link (YouTube/Spotify/etc.). */
+    fun trackFromLink(url: String, title: String, artist: String): uniffi.haven_ffi.TrackRefFfi =
+        uniffi.haven_ffi.TrackRefFfi(
+            catalogId = url, title = title.ifBlank { "Shared track" },
+            artist = artist, artworkUrl = "", durationMs = 0UL,
+        )
 
     /** Post a story (a post with the story flag + 24h retention; auto-expires). */
     fun postStory(body: String, mediaId: String?) {

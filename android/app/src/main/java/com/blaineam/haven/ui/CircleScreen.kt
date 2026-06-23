@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -62,6 +63,8 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
     var pendingPhoto by remember { mutableStateOf<String?>(null) }   // media id staged for the next post
+    var pendingMusic by remember { mutableStateOf<uniffi.haven_ffi.TrackRefFfi?>(null) }
+    var showMusicDialog by remember { mutableStateOf(false) }
     // A link shared into Haven from another app prefills the composer.
     val sharedText = com.blaineam.haven.core.ShareInbox.pending
     LaunchedEffect(sharedText) {
@@ -168,6 +171,17 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                             .padding(horizontal = 6.dp))
                 }
             }
+            // Staged music chip.
+            pendingMusic?.let { m ->
+                Row(Modifier.padding(start = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.MusicNote, null, tint = HavenTheme.pink, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("${m.title} · ${m.artist}", color = Color.White, fontSize = 12.sp, maxLines = 1)
+                    Spacer(Modifier.size(8.dp))
+                    Text("✕", color = HavenTheme.textSecondary, fontSize = 14.sp,
+                        modifier = Modifier.clickable { pendingMusic = null })
+                }
+            }
             // Composer.
             Row(
                 Modifier.fillMaxWidth().padding(12.dp),
@@ -179,6 +193,10 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                     },
                     contentAlignment = Alignment.Center,
                 ) { Icon(Icons.Filled.AddPhotoAlternate, "Add photo or video", tint = HavenTheme.pink) }
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).clickable { showMusicDialog = true },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Filled.MusicNote, "Add a song", tint = HavenTheme.pink) }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
@@ -192,13 +210,13 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                     ),
                 )
                 Spacer(Modifier.size(8.dp))
-                val canPost = draft.isNotBlank() || pendingPhoto != null
+                val canPost = draft.isNotBlank() || pendingPhoto != null || pendingMusic != null
                 Box(
                     Modifier.size(48.dp).clip(CircleShape)
                         .background(HavenTheme.brandHorizontal)
                         .clickable(enabled = canPost) {
-                            HavenNet.post(DEFAULT_CIRCLE, draft.trim(), listOfNotNull(pendingPhoto))
-                            draft = ""; pendingPhoto = null
+                            HavenNet.post(DEFAULT_CIRCLE, draft.trim(), listOfNotNull(pendingPhoto), pendingMusic)
+                            draft = ""; pendingPhoto = null; pendingMusic = null
                         },
                     contentAlignment = Alignment.Center,
                 ) { Icon(Icons.AutoMirrored.Filled.Send, "Post", tint = Color.White) }
@@ -213,6 +231,43 @@ fun CircleScreen(onAddFriend: () -> Unit) {
         if (showStoryCamera) {
             StoryCameraScreen(onClose = { showStoryCamera = false })
         }
+    }
+
+    if (showMusicDialog) {
+        var link by remember { mutableStateOf("") }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showMusicDialog = false },
+            containerColor = HavenTheme.card,
+            title = { Text("Add a song", color = Color.White) },
+            text = {
+                Column {
+                    Text("Paste a YouTube, Spotify, or Apple Music link. It rides along with your post.",
+                        color = HavenTheme.textSecondary, fontSize = 13.sp)
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = link, onValueChange = { link = it }, singleLine = true,
+                        placeholder = { Text("https://…") }, modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = HavenTheme.pink, cursorColor = HavenTheme.pink),
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = link.isNotBlank(),
+                    onClick = {
+                        val domain = runCatching { java.net.URL(link.trim()).host.removePrefix("www.") }.getOrDefault("link")
+                        pendingMusic = HavenNet.trackFromLink(link.trim(), "Song", domain)
+                        showMusicDialog = false
+                    },
+                ) { Text("Attach", color = HavenTheme.pink) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showMusicDialog = false }) {
+                    Text("Cancel", color = HavenTheme.textSecondary)
+                }
+            },
+        )
     }
 }
 
@@ -332,6 +387,25 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
                 VideoTile(circleId, ref, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)))
             } else {
                 MediaImage(circleId, ref, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)))
+            }
+        }
+
+        // Attached song.
+        item.music?.let { m ->
+            val ctx = LocalContext.current
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(HavenTheme.background)
+                    .clickable { if (m.catalogId.isNotBlank()) openInApp(ctx, m.catalogId) }.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.MusicNote, null, tint = HavenTheme.pink, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.size(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(m.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    if (m.artist.isNotBlank()) Text(m.artist, color = HavenTheme.textSecondary, fontSize = 12.sp, maxLines = 1)
+                }
+                Text("Play", color = HavenTheme.pink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 
