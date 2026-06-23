@@ -56,7 +56,16 @@ fun YouScreen(onAddFriend: () -> Unit) {
     var report by remember { mutableStateOf<SelfTestReport?>(null) }
     var showEdit by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showPeople by remember { mutableStateOf(false) }
     val contactCount = com.blaineam.haven.core.HavenNet.contacts.size
+    val feedVersion by com.blaineam.haven.core.HavenNet.feedVersion
+    val myPosts = remember(feedVersion) {
+        runCatching {
+            com.blaineam.haven.core.HavenNet.engine
+                .feed(com.blaineam.haven.core.DEFAULT_CIRCLE, com.blaineam.haven.core.nowMs(), null)
+                .filter { it.isMe && !it.story }
+        }.getOrDefault(emptyList())
+    }
 
     HavenBackground {
         Column(
@@ -95,8 +104,9 @@ fun YouScreen(onAddFriend: () -> Unit) {
             Spacer(Modifier.height(4.dp))
             Text(
                 if (contactCount == 0) "This is just for the people you choose."
-                else "$contactCount ${if (contactCount == 1) "person" else "people"} in your circle.",
-                color = HavenTheme.textSecondary, fontSize = 13.sp,
+                else "$contactCount ${if (contactCount == 1) "person" else "people"} in your circle  ›",
+                color = HavenTheme.pink, fontSize = 13.sp,
+                modifier = Modifier.clickable(enabled = contactCount > 0) { showPeople = true }.padding(4.dp),
             )
 
             Spacer(Modifier.height(24.dp))
@@ -104,6 +114,18 @@ fun YouScreen(onAddFriend: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text("Share invite link", color = HavenTheme.pink, fontSize = 13.sp,
                 modifier = Modifier.clickable { shareInvite(context, core.inviteUri()) }.padding(6.dp))
+
+            // Your posts — this screen is your profile, like iOS.
+            if (myPosts.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Text("Your posts", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
+                    modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                myPosts.forEach { post ->
+                    PostCard(post)
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
 
             Spacer(Modifier.height(20.dp))
             Card {
@@ -138,14 +160,13 @@ fun YouScreen(onAddFriend: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
 
-        // Edit-profile + settings overlays slide in from the right.
-        AnimatedVisibility(visible = showEdit, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }) {
-            EditProfileScreen(onDone = { showEdit = false })
-        }
-        AnimatedVisibility(visible = showSettings, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }) {
-            SettingsScreen(onBack = { showSettings = false })
-        }
+    // Full-screen overlays (cover the tab bar — true full-screen, like iOS).
+    if (showEdit) FullScreenOverlay(onDismiss = { showEdit = false }) { EditProfileScreen(onDone = { showEdit = false }) }
+    if (showSettings) FullScreenOverlay(onDismiss = { showSettings = false }) { SettingsScreen(onBack = { showSettings = false }) }
+    if (showPeople) FullScreenOverlay(onDismiss = { showPeople = false }) {
+        PeopleScreen(onAddFriend = { showPeople = false; onAddFriend() }, onClose = { showPeople = false })
     }
 }
 

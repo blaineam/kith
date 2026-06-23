@@ -98,7 +98,7 @@ private fun ThreadList(onOpen: (Contact) -> Unit) {
 }
 
 @Composable
-private fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
+fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
     var draft by remember { mutableStateOf("") }
     val version by HavenNet.feedVersion
     val msgs = remember(version, circleId) { HavenNet.messages(circleId) }
