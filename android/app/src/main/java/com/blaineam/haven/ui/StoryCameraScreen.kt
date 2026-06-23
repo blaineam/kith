@@ -2,13 +2,20 @@ package com.blaineam.haven.ui
 
 import android.annotation.SuppressLint
 import android.content.ContentValues
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.provider.MediaStore
+import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
@@ -20,19 +27,21 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,9 +53,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -59,23 +75,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
-/** A captured story (a stored media ref + whether it's video), handed to the editor. */
+private const val TAG = "StoryCamera"
 private data class StoryDraft(val ref: String, val isVideo: Boolean)
 
-/**
- * In-app story camera: live preview, TAP = photo, HOLD = video (release to stop), flip. After
- * capture it hands off to [StoryEditor] for a caption + song, then posts. Proper recording
- * lifecycle (start on hold, stop on release, one recording at a time) — fixes the prior crash.
- */
+/** In-app story camera: TAP = photo, HOLD = video (release to stop), flip. Then the editor. */
 @SuppressLint("MissingPermission")
 @Composable
 fun StoryCameraScreen(onClose: () -> Unit) {
     var draft by remember { mutableStateOf<StoryDraft?>(null) }
     val d = draft
-    if (d != null) {
-        StoryEditor(ref = d.ref, isVideo = d.isVideo, onClose = onClose)
-        return
-    }
+    if (d != null) { StoryEditor(ref = d.ref, isVideo = d.isVideo, onClose = onClose); return }
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -84,20 +93,33 @@ fun StoryCameraScreen(onClose: () -> Unit) {
     var status by remember { mutableStateOf("Tap for photo · hold for video") }
     var isRecording by remember { mutableStateOf(false) }
     val imageCapture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build() }
-    val videoCapture = remember { VideoCapture.withOutput(Recorder.Builder().build()) }
+    val videoCapture = remember {
+        VideoCapture.withOutput(
+            Recorder.Builder().setQualitySelector(
+                QualitySelector.fromOrderedList(
+                    listOf(Quality.HD, Quality.SD, Quality.LOWEST),
+                    FallbackStrategy.lowerQualityOrHigherThan(Quality.LOWEST),
+                ),
+            ).build(),
+        )
+    }
     val recordingRef = remember { arrayOfNulls<Recording>(1) }
+    val hasAudio = ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
 
     fun takePhoto() {
         status = "Capturing…"
         imageCapture.takePicture(ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-                    val bytes = runCatching {
+                    val rot = image.imageInfo.rotationDegrees
+                    val raw = runCatching {
                         val buf = image.planes[0].buffer
                         ByteArray(buf.remaining()).also { buf.get(it) }
                     }.getOrNull()
                     image.close()
-                    if (bytes != null) draft = StoryDraft(LocalMedia.store(DEFAULT_CIRCLE, bytes), false)
+                    val upright = raw?.let { uprightJpeg(it, rot, mirror = lensFront) }
+                    if (upright != null) draft = StoryDraft(LocalMedia.store(DEFAULT_CIRCLE, upright), false)
                     else status = "Couldn't capture"
                 }
                 override fun onError(e: ImageCaptureException) { status = "Capture failed" }
@@ -107,29 +129,27 @@ fun StoryCameraScreen(onClose: () -> Unit) {
     fun startVideo() {
         if (recordingRef[0] != null) return
         status = "Recording…"; isRecording = true
-        val name = "haven_${System.nanoTime()}"
-        val opts = MediaStoreOutputOptions.Builder(
-            context.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-        ).setContentValues(ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, name)
-        }).build()
-        recordingRef[0] = videoCapture.output.prepareRecording(context, opts)
-            .start(ContextCompat.getMainExecutor(context)) { ev ->
-                if (ev is VideoRecordEvent.Finalize) {
-                    isRecording = false
-                    recordingRef[0] = null
-                    if (!ev.hasError()) {
-                        val bytes = readVideoBytes(context, ev.outputResults.outputUri)
-                        if (bytes != null) draft = StoryDraft(LocalMedia.store(DEFAULT_CIRCLE, bytes, isVideo = true), true)
-                        else status = "Couldn't read video"
-                    } else status = "Recording failed"
+        val opts = MediaStoreOutputOptions.Builder(context.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+            .setContentValues(ContentValues().apply { put(MediaStore.Video.Media.DISPLAY_NAME, "haven_${System.nanoTime()}") })
+            .build()
+        val pending = videoCapture.output.prepareRecording(context, opts)
+        val rec = if (hasAudio) pending.withAudioEnabled() else pending
+        recordingRef[0] = rec.start(ContextCompat.getMainExecutor(context)) { ev ->
+            if (ev is VideoRecordEvent.Finalize) {
+                isRecording = false; recordingRef[0] = null
+                if (!ev.hasError()) {
+                    val bytes = readVideoBytes(context, ev.outputResults.outputUri)
+                    if (bytes != null) draft = StoryDraft(LocalMedia.store(DEFAULT_CIRCLE, bytes, isVideo = true), true)
+                    else status = "Couldn't read video"
+                } else {
+                    Log.e(TAG, "record error ${ev.error}", ev.cause)
+                    status = "Recording failed"
                 }
             }
+        }
     }
 
-    fun stopVideo() {
-        runCatching { recordingRef[0]?.stop() }
-    }
+    fun stopVideo() { runCatching { recordingRef[0]?.stop() } }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
@@ -145,30 +165,26 @@ fun StoryCameraScreen(onClose: () -> Unit) {
                         provider.unbindAll()
                         provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture, videoCapture)
                     }.onFailure {
-                        // Some older cameras can't bind photo+video together — fall back to photo-only.
                         runCatching { provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture) }
                     }
                 }, ContextCompat.getMainExecutor(context))
             },
         )
 
-        Box(Modifier.align(Alignment.TopStart).padding(16.dp).size(40.dp).clip(CircleShape)
-            .pointerInput(Unit) { detectClose(onClose) }, contentAlignment = Alignment.Center) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close", tint = Color.White)
-        }
-        Box(Modifier.align(Alignment.TopEnd).padding(16.dp).size(40.dp).clip(CircleShape)
-            .pointerInput(Unit) { detectClose { lensFront = !lensFront } }, contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Cameraswitch, "Flip camera", tint = Color.White)
-        }
+        Box(Modifier.align(Alignment.TopStart).padding(16.dp).size(42.dp).clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f)).pointerInput(Unit) { detectTap(onClose) },
+            contentAlignment = Alignment.Center) { Icon(Icons.Filled.Close, "Close", tint = Color.White) }
+        Box(Modifier.align(Alignment.TopEnd).padding(16.dp).size(42.dp).clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f)).pointerInput(Unit) { detectTap { lensFront = !lensFront } },
+            contentAlignment = Alignment.Center) { Icon(Icons.Filled.Cameraswitch, "Flip", tint = Color.White) }
 
         Text(status, color = Color.White, fontSize = 13.sp,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 150.dp))
 
-        // Shutter: tap = photo, press-and-hold = video (release to stop).
         Box(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 56.dp).size(78.dp).clip(CircleShape)
-                .border(4.dp, if (isRecording) Color(0xFFEF4444) else Color.White, CircleShape)
-                .background(if (isRecording) Color(0xFFEF4444).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.25f))
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 56.dp).size(82.dp).clip(CircleShape)
+                .border(5.dp, if (isRecording) Color(0xFFEF4444) else Color.White, CircleShape)
+                .background(if (isRecording) Color(0xFFEF4444).copy(alpha = 0.55f) else Color.White.copy(alpha = 0.22f))
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         awaitFirstDown()
@@ -183,17 +199,25 @@ fun StoryCameraScreen(onClose: () -> Unit) {
     }
 }
 
-/** A tap detector for the small icon buttons (so they don't interfere with the shutter gesture). */
-private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectClose(onTap: () -> Unit) {
-    awaitEachGesture {
-        awaitFirstDown()
-        if (waitForUpOrCancellation() != null) onTap()
+/** Decode a captured JPEG, rotate it upright (and un-mirror the front camera), re-encode. */
+private fun uprightJpeg(jpeg: ByteArray, rotation: Int, mirror: Boolean): ByteArray? = runCatching {
+    val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return null
+    val out = if (rotation == 0 && !mirror) bmp else {
+        val m = Matrix()
+        if (rotation != 0) m.postRotate(rotation.toFloat())
+        if (mirror) m.postScale(-1f, 1f)
+        Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
     }
+    ByteArrayOutputStream().also { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
+}.getOrNull()
+
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTap(onTap: () -> Unit) {
+    awaitEachGesture { awaitFirstDown(); if (waitForUpOrCancellation() != null) onTap() }
 }
 
 /**
- * The story editor (parity with the iOS story composer): the captured photo/video full-screen, a
- * caption you type over it, an optional song, then Share to story.
+ * Story editor — full-bleed media with the caption written directly on it (no form box), top/bottom
+ * scrims, and a clean control row. Closer to the iOS story composer.
  */
 @Composable
 fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
@@ -210,44 +234,54 @@ fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
         if (isVideo) VideoTile(DEFAULT_CIRCLE, ref, Modifier.fillMaxSize())
         else MediaImage(DEFAULT_CIRCLE, ref, Modifier.fillMaxSize())
 
-        // Top: back.
-        Box(Modifier.align(Alignment.TopStart).padding(16.dp).size(40.dp).clip(CircleShape)
-            .clickable { onClose() }, contentAlignment = Alignment.Center) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
-        }
+        // Top + bottom scrims for control legibility.
+        Box(Modifier.fillMaxWidth().size(120.dp).align(Alignment.TopCenter)
+            .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.5f), Color.Transparent))))
+        Box(Modifier.fillMaxWidth().size(220.dp).align(Alignment.BottomCenter)
+            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f)))))
 
-        // Caption overlaid on the media.
-        androidx.compose.material3.OutlinedTextField(
+        // Caption written directly on the photo (centred, bold, shadowed).
+        BasicTextField(
             value = caption, onValueChange = { caption = it },
-            placeholder = { Text("Add a caption…", color = Color.White.copy(alpha = 0.7f)) },
-            modifier = Modifier.align(Alignment.Center).padding(24.dp).fillMaxWidth(),
-            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color.White, unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
-                focusedTextColor = Color.White, unfocusedTextColor = Color.White, cursorColor = HavenTheme.pink),
+            textStyle = TextStyle(color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center, shadow = Shadow(Color.Black.copy(alpha = 0.7f), Offset(0f, 2f), 8f)),
+            cursorBrush = SolidColor(HavenTheme.pink),
+            modifier = Modifier.align(Alignment.Center).fillMaxWidth().padding(28.dp),
+            decorationBox = { inner ->
+                if (caption.isEmpty()) Text("Tap to add a caption", color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 22.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth())
+                inner()
+            },
         )
 
-        // Song chip (above the controls).
-        music?.let { m ->
-            Box(Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 96.dp)) {
-                MusicChip(m)
-            }
+        // Close.
+        Box(Modifier.align(Alignment.TopStart).padding(16.dp).size(42.dp).clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f)).clickable { onClose() }, contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Close, "Back", tint = Color.White)
         }
 
-        // Bottom controls: add song + Share.
-        Row(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 32.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text(if (music == null) "♪ Add song" else "♪ Change song", color = Color.White, fontSize = 14.sp,
-                modifier = Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.18f))
-                    .clickable { pickSong = true }.padding(horizontal = 16.dp, vertical = 10.dp))
+        // Song chip if attached.
+        music?.let { m ->
+            Box(Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 92.dp)) { MusicChip(m) }
+        }
+
+        // Bottom controls: music pill + Share pill.
+        Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.18f))
+                .clickable { pickSong = true }.padding(horizontal = 16.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(if (music == null) "Music" else "Change", color = Color.White, fontSize = 14.sp)
+            }
             Text("Share to story", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.clip(CircleShape).background(HavenTheme.brandHorizontal)
                     .clickable {
                         com.blaineam.haven.core.HavenNet.postStory(caption.trim(), ref, music)
                         onClose()
-                    }.padding(horizontal = 22.dp, vertical = 10.dp))
+                    }.padding(horizontal = 26.dp, vertical = 13.dp))
         }
     }
 }

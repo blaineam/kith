@@ -87,13 +87,13 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val posts = remember(items) { items.filter { !it.story } }
     var viewingStory by remember { mutableStateOf<Int?>(null) }
     var showStoryCamera by remember { mutableStateOf(false) }
-    val camPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) showStoryCamera = true
+    val camPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants[android.Manifest.permission.CAMERA] == true) showStoryCamera = true
     }
     fun openStoryCamera() {
         if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)
             == android.content.pm.PackageManager.PERMISSION_GRANTED) showStoryCamera = true
-        else camPermission.launch(android.Manifest.permission.CAMERA)
+        else camPermission.launch(arrayOf(android.Manifest.permission.CAMERA, android.Manifest.permission.RECORD_AUDIO))
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
