@@ -30,6 +30,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.blaineam.haven.core.DemoEnv
+import com.blaineam.haven.core.DemoSeeder
 import com.blaineam.haven.core.HavenCore
 import com.blaineam.haven.core.HavenNet
 import com.blaineam.haven.core.ProfileStore
@@ -40,11 +42,31 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     You("You", Icons.Filled.Person),
 }
 
+/** Map the DEBUG `haven_tab` launch extra to the starting tab (null = default to Circle). */
+private fun demoTab(): Tab? = when (DemoEnv.tab) {
+    "circle" -> Tab.Circle
+    "messages" -> Tab.Messages
+    "you" -> Tab.You
+    else -> null
+}
+
 /** Top-level: onboarding gates the app, then the 3-tab scaffold (parity with iOS RootView). */
 @Composable
 fun RootScreen() {
     val context = LocalContext.current
     val profile = remember { ProfileStore.get(context) }
+
+    // DEBUG-only demo mode: seed the synthetic dataset once and jump straight into the app
+    // (skip onboarding), without ever requiring the live P2P node.
+    if (DemoEnv.isDemo) {
+        LaunchedEffect(Unit) {
+            HavenNet.init(context)
+            DemoSeeder.seed(context)
+            if (!DemoEnv.noNet) HavenNet.start()
+        }
+        MainScaffold()
+        return
+    }
 
     Crossfade(targetState = profile.onboarded, label = "root") { onboarded ->
         if (!onboarded) {
@@ -61,15 +83,23 @@ fun RootScreen() {
 @Composable
 private fun MainScaffold() {
     val context = LocalContext.current
-    var tab by remember { mutableStateOf(Tab.Circle) }
+    var tab by remember { mutableStateOf(demoTab() ?: Tab.Circle) }
     var showConnect by remember { mutableStateOf(false) }
 
-    // Bring the transport up once we're past onboarding; re-sync on resume.
+    // Bring the transport up once we're past onboarding; re-sync on resume. In demo mode the
+    // RootScreen LaunchedEffect already did init/seed, and `haven_no_net` keeps the node offline.
     LaunchedEffect(Unit) {
-        HavenNet.init(context)
-        HavenNet.start()
-        com.blaineam.haven.core.CallManager.init(context, HavenNet.nodeIdHex)
-        com.blaineam.haven.core.ConnectionService.restoreIfEnabled(context)
+        if (DemoEnv.isDemo) {
+            if (!DemoEnv.noNet) {
+                HavenNet.start()
+                com.blaineam.haven.core.CallManager.init(context, HavenNet.nodeIdHex)
+            }
+        } else {
+            HavenNet.init(context)
+            HavenNet.start()
+            com.blaineam.haven.core.CallManager.init(context, HavenNet.nodeIdHex)
+            com.blaineam.haven.core.ConnectionService.restoreIfEnabled(context)
+        }
     }
     // Notification permission on Android 13+ (no-op below).
     val notifPermission = androidx.activity.compose.rememberLauncherForActivityResult(

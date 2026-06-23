@@ -59,6 +59,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true   // BuildConfig.DEBUG gates the debug-only demo seeder
     }
     packaging {
         resources {

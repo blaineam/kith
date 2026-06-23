@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.fragment.app.FragmentActivity
+import com.blaineam.haven.core.DemoEnv
 import com.blaineam.haven.core.ShareInbox
 import com.blaineam.haven.ui.HavenAppTheme
 import com.blaineam.haven.ui.RootScreen
@@ -13,6 +14,7 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        DemoEnv.configure(intent)   // DEBUG-only: arms demo mode from launch-intent extras
         handleShare(intent)
         setContent {
             HavenAppTheme {

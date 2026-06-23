@@ -838,6 +838,36 @@ object HavenNet : InboundListener {
     }
 
     val engine: HavenSocial get() = social
+
+    // ---- Demo seeding support (DEBUG-only; see DemoSeed.kt) ------------------------------
+    //
+    // These thin hooks let DemoSeed populate the same in-memory state the live handshake would,
+    // without any networking. They are harmless in a real launch (only called when demo is on).
+
+    /** True once [init] has run, so the seeder can drive the engine. */
+    val isReady: Boolean get() = ready
+
+    /** Register a synthetic contact (name + verified id) directly, as if a handshake completed. */
+    fun demoAddContact(idHex: String, name: String, verifyHex: String) {
+        if (idHex.isEmpty()) return
+        if (contacts.none { it.idHex == idHex }) contacts.add(Contact(idHex, name, verifyHex))
+    }
+
+    /** Persist the engine state the seeder authored into (idempotent within a launch). */
+    fun demoPersist() = persist()
+
+    /** Present the seeded demo as a healthy, connected app for screenshots (no live node). */
+    fun demoMarkConnected() {
+        started.value = true
+        internetActive.value = true
+        relayActive.value = true
+    }
+
+    /** Recompose the feed/circle switcher after the seeder authored content. */
+    fun demoRefresh() {
+        bumpCircles()
+        feedVersion.value++
+    }
 }
 
 /** node-id hex = first 32 bytes of the bundle, lowercase hex (matches iOS nodeHex). */
