@@ -26,13 +26,16 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -118,9 +121,14 @@ fun StoryCameraScreen(onClose: () -> Unit) {
                         ByteArray(buf.remaining()).also { buf.get(it) }
                     }.getOrNull()
                     image.close()
-                    val upright = raw?.let { uprightJpeg(it, rot, mirror = lensFront) }
-                    if (upright != null) draft = StoryDraft(LocalMedia.store(DEFAULT_CIRCLE, upright), false)
-                    else status = "Couldn't capture"
+                    // Rotate + compress + encrypt + write off the main thread (was freezing the UI).
+                    scope.launch {
+                        val ref = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                            raw?.let { uprightJpeg(it, rot, mirror = lensFront) }
+                                ?.let { LocalMedia.store(DEFAULT_CIRCLE, it) }
+                        }
+                        if (ref != null) draft = StoryDraft(ref, false) else status = "Couldn't capture"
+                    }
                 }
                 override fun onError(e: ImageCaptureException) { status = "Capture failed" }
             })
@@ -129,21 +137,30 @@ fun StoryCameraScreen(onClose: () -> Unit) {
     fun startVideo() {
         if (recordingRef[0] != null) return
         status = "Recording…"; isRecording = true
-        val opts = MediaStoreOutputOptions.Builder(context.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-            .setContentValues(ContentValues().apply { put(MediaStore.Video.Media.DISPLAY_NAME, "haven_${System.nanoTime()}") })
-            .build()
+        // Record to an app cache file (no MediaStore/scoped-storage — far more reliable).
+        val file = java.io.File(context.cacheDir, "haven_rec_${System.nanoTime()}.mp4")
+        val opts = androidx.camera.video.FileOutputOptions.Builder(file).build()
         val pending = videoCapture.output.prepareRecording(context, opts)
         val rec = if (hasAudio) pending.withAudioEnabled() else pending
         recordingRef[0] = rec.start(ContextCompat.getMainExecutor(context)) { ev ->
             if (ev is VideoRecordEvent.Finalize) {
                 isRecording = false; recordingRef[0] = null
-                if (!ev.hasError()) {
-                    val bytes = readVideoBytes(context, ev.outputResults.outputUri)
-                    if (bytes != null) draft = StoryDraft(LocalMedia.store(DEFAULT_CIRCLE, bytes, isVideo = true), true)
-                    else status = "Couldn't read video"
+                // ERROR_NO_VALID_DATA(8) just means the tap was too brief — treat as "hold longer".
+                val ok = !ev.hasError() || ev.error == VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA
+                if (ev.hasError()) Log.e(TAG, "record finalize error ${ev.error}", ev.cause)
+                if (!ev.hasError() && file.exists() && file.length() > 0) {
+                    scope.launch {
+                        val ref = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching {
+                                val bytes = file.readBytes(); file.delete()
+                                LocalMedia.store(DEFAULT_CIRCLE, bytes, isVideo = true)
+                            }.getOrNull()
+                        }
+                        if (ref != null) draft = StoryDraft(ref, true) else status = "Couldn't save video"
+                    }
                 } else {
-                    Log.e(TAG, "record error ${ev.error}", ev.cause)
-                    status = "Recording failed"
+                    runCatching { file.delete() }
+                    status = if (ok) "Hold longer to record" else "Recording failed (${ev.error})"
                 }
             }
         }
@@ -182,7 +199,7 @@ fun StoryCameraScreen(onClose: () -> Unit) {
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 150.dp))
 
         Box(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 56.dp).size(82.dp).clip(CircleShape)
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 40.dp).size(82.dp).clip(CircleShape)
                 .border(5.dp, if (isRecording) Color(0xFFEF4444) else Color.White, CircleShape)
                 .background(if (isRecording) Color(0xFFEF4444).copy(alpha = 0.55f) else Color.White.copy(alpha = 0.22f))
                 .pointerInput(Unit) {
@@ -224,6 +241,8 @@ fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
     var caption by remember { mutableStateOf("") }
     var music by remember { mutableStateOf<uniffi.haven_ffi.TrackRefFfi?>(null) }
     var pickSong by remember { mutableStateOf(false) }
+    var captionStyle by remember { mutableStateOf(0) }
+    var capOffset by remember { mutableStateOf(Offset.Zero) }
 
     if (pickSong) {
         MusicSearchSheet(onPick = { music = it; pickSong = false }, onDismiss = { pickSong = false })
@@ -240,25 +259,40 @@ fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
         Box(Modifier.fillMaxWidth().size(220.dp).align(Alignment.BottomCenter)
             .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f)))))
 
-        // Caption written directly on the photo (centred, bold, shadowed).
-        BasicTextField(
-            value = caption, onValueChange = { caption = it },
-            textStyle = TextStyle(color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center, shadow = Shadow(Color.Black.copy(alpha = 0.7f), Offset(0f, 2f), 8f)),
-            cursorBrush = SolidColor(HavenTheme.pink),
-            modifier = Modifier.align(Alignment.Center).fillMaxWidth().padding(28.dp),
-            decorationBox = { inner ->
-                if (caption.isEmpty()) Text("Tap to add a caption", color = Color.White.copy(alpha = 0.65f),
-                    fontSize = 22.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth())
-                inner()
-            },
-        )
+        // Caption — draggable, with cycling styles (drag to position, tap to type).
+        val style = captionStyles[captionStyle % captionStyles.size]
+        Box(
+            Modifier.align(Alignment.Center)
+                .offset { androidx.compose.ui.unit.IntOffset(capOffset.x.toInt(), capOffset.y.toInt()) }
+                .pointerInput(Unit) {
+                    detectDragGestures { _, drag -> capOffset += drag }
+                }
+                .padding(horizontal = 20.dp),
+        ) {
+            BasicTextField(
+                value = caption, onValueChange = { caption = it },
+                textStyle = TextStyle(color = style.fg, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    shadow = if (style.bg == Color.Transparent) Shadow(Color.Black.copy(alpha = 0.7f), Offset(0f, 2f), 10f) else null),
+                cursorBrush = SolidColor(HavenTheme.pink),
+                modifier = Modifier.background(style.bg, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
+                decorationBox = { inner ->
+                    if (caption.isEmpty()) Text("Tap to add a caption", color = Color.White.copy(alpha = 0.65f),
+                        fontSize = 22.sp, fontWeight = FontWeight.Medium)
+                    inner()
+                },
+            )
+        }
 
         // Close.
         Box(Modifier.align(Alignment.TopStart).padding(16.dp).size(42.dp).clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.35f)).clickable { onClose() }, contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Close, "Back", tint = Color.White)
+        }
+        // Text-style cycle button (top-right).
+        Box(Modifier.align(Alignment.TopEnd).padding(16.dp).size(42.dp).clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.35f)).clickable { captionStyle++ }, contentAlignment = Alignment.Center) {
+            Text("Aa", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
 
         // Song chip if attached.
@@ -267,7 +301,7 @@ fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
         }
 
         // Bottom controls: music pill + Share pill.
-        Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp),
+        Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(20.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Row(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.18f))
                 .clickable { pickSong = true }.padding(horizontal = 16.dp, vertical = 11.dp),
@@ -285,3 +319,13 @@ fun StoryEditor(ref: String, isVideo: Boolean, onClose: () -> Unit) {
         }
     }
 }
+
+/** Caption style presets (foreground + optional highlight background), cycled with the "Aa" button. */
+private data class CapStyle(val fg: Color, val bg: Color)
+private val captionStyles = listOf(
+    CapStyle(Color.White, Color.Transparent),
+    CapStyle(Color.Black, Color.White),
+    CapStyle(Color.White, Color(0xFFEC4899)),
+    CapStyle(Color(0xFFEC4899), Color.Transparent),
+    CapStyle(Color.Black, Color(0xFFF59E0B)),
+)

@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Icon
@@ -52,6 +53,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import com.blaineam.haven.core.DEFAULT_CIRCLE
 import com.blaineam.haven.core.HavenNet
 import com.blaineam.haven.core.LocalMedia
@@ -316,8 +319,60 @@ fun MediaImage(circleId: String, id: String, modifier: Modifier = Modifier,
     }
     bmp?.let { Image(it, contentDescription = "Photo", modifier = modifier, contentScale = contentScale) }
         ?: Box(modifier.background(HavenTheme.card), contentAlignment = Alignment.Center) {
-            Text("…", color = HavenTheme.textSecondary)
+            androidx.compose.material3.CircularProgressIndicator(
+                color = HavenTheme.pink, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
         }
+}
+
+/** A small media thumbnail (image or a video tile with a play glyph), tappable to open. */
+@Composable
+private fun MediaThumb(circleId: String, ref: String, modifier: Modifier, onOpen: () -> Unit) {
+    Box(modifier.clip(RoundedCornerShape(12.dp)).clickable { onOpen() }) {
+        MediaImage(circleId, ref, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        if (LocalMedia.isVideo(ref)) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.PlayCircle, "Play", tint = Color.White, modifier = Modifier.size(40.dp))
+            }
+        }
+    }
+}
+
+/** Post media: a single item fills the card; multiple items scroll as a 2-row grid (like iOS). */
+@Composable
+fun MediaGallery(circleId: String, refs: List<String>, onOpen: (Int) -> Unit) {
+    if (refs.size == 1) {
+        MediaThumb(circleId, refs[0], Modifier.fillMaxWidth().height(240.dp)) { onOpen(0) }
+        return
+    }
+    androidx.compose.foundation.lazy.grid.LazyHorizontalGrid(
+        rows = androidx.compose.foundation.lazy.grid.GridCells.Fixed(2),
+        modifier = Modifier.fillMaxWidth().height(264.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        gridItems(refs) { ref ->
+            MediaThumb(circleId, ref, Modifier.size(129.dp)) { onOpen(refs.indexOf(ref)) }
+        }
+    }
+}
+
+/** Full-screen media viewer: swipe between items, tap/back to close. */
+@Composable
+fun MediaViewer(circleId: String, refs: List<String>, startIndex: Int, onClose: () -> Unit) {
+    val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = startIndex) { refs.size }
+    Box(Modifier.fillMaxSize().background(Color.Black).clickable { onClose() }) {
+        androidx.compose.foundation.pager.HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+            val ref = refs[page]
+            if (LocalMedia.isVideo(ref)) VideoTile(circleId, ref, Modifier.fillMaxSize())
+            else MediaImage(circleId, ref, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        }
+        Box(Modifier.align(Alignment.TopStart).padding(16.dp).size(42.dp).clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.4f)).clickable { onClose() }, contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Close, "Close", tint = Color.White)
+        }
+        if (refs.size > 1) Text("${pager.currentPage + 1} / ${refs.size}", color = Color.White, fontSize = 13.sp,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp))
+    }
 }
 
 /** Feed-circle switcher: tap the title for a dropdown of your circles + "New circle". */
@@ -383,13 +438,12 @@ private fun ConnectionDot() {
     val relay by HavenNet.relayActive
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier.padding(end = 8.dp)) {
-        val color = if (online) Color(0xFF34D399) else if (started) Color(0xFFF59E0B) else HavenTheme.textSecondary
+        // The node being up == connected to the iroh network; "Connecting" only during startup.
+        val color = if (started) Color(0xFF34D399) else Color(0xFFF59E0B)
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Text(if (online) "Online" else if (started) "Connecting" else "Offline",
+        Text(if (started) (if (online || relay) "Connected" else "Online") else "Connecting",
             color = HavenTheme.textSecondary, fontSize = 11.sp)
-        if (relay) {
-            Text("· Relay", color = Color(0xFF34D399), fontSize = 11.sp)
-        }
+        if (relay) Text("· Relay", color = Color(0xFF34D399), fontSize = 11.sp)
     }
 }
 
@@ -434,6 +488,12 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
     var showPicker by remember(item.id) { mutableStateOf(false) }
     var showEdit by remember(item.id) { mutableStateOf(false) }
     var whoReacted by remember(item.id) { mutableStateOf<uniffi.haven_ffi.ReactionFfi?>(null) }
+    var viewerStart by remember(item.id) { mutableStateOf<Int?>(null) }
+    viewerStart?.let { start ->
+        FullScreenOverlay(onDismiss = { viewerStart = null }) {
+            MediaViewer(circleId, item.media, start) { viewerStart = null }
+        }
+    }
 
     whoReacted?.let { r ->
         androidx.compose.material3.AlertDialog(
@@ -472,14 +532,10 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
             LinkPreviewCard(item.body, Modifier.padding(top = 10.dp))
         }
 
-        // Attached photos / videos.
-        item.media.forEach { ref ->
+        // Attached photos / videos — gallery with tap-to-open full-screen viewer.
+        if (item.media.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            if (LocalMedia.isVideo(ref)) {
-                VideoTile(circleId, ref, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)))
-            } else {
-                MediaImage(circleId, ref, Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)))
-            }
+            MediaGallery(circleId, item.media) { viewerStart = it }
         }
 
         // Attached song — artwork + 30s preview playback, resolved via iTunes Search.
