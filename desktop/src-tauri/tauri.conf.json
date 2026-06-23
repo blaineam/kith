@@ -40,6 +40,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "dmg": {
+        "background": "dmg/background.png",
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 145, "y": 185 },
+        "applicationFolderPosition": { "x": 515, "y": 185 }
+      }
+    },
     "windows": {
       "webviewInstallMode": { "type": "embedBootstrapper" }
     },
