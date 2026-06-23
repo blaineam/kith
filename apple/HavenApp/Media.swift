@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AVKit
 import CoreImage
 import CoreLocation
 import ImageIO
@@ -35,13 +36,101 @@ enum MediaSaver {
 }
 
 #if os(macOS)
-/// Native macOS has no UIVideoEditorController; trim isn't offered (canTrim → false). This stub
-/// just dismisses itself if ever presented.
+/// Native macOS has no `UIVideoEditorController`, so this is a small AVFoundation trimmer:
+/// preview the clip, pick a start/end with two sliders, and export the selected range to a new
+/// MP4 (handed back via `onTrimmed`). Functional parity with the iOS system trim editor.
 struct VideoTrimmer: View {
     let path: String
     var onTrimmed: (URL) -> Void
     @Environment(\.dismiss) private var dismiss
-    var body: some View { Color.clear.onAppear { dismiss() } }
+
+    @State private var player = AVPlayer()
+    @State private var duration: Double = 0
+    @State private var start: Double = 0
+    @State private var end: Double = 0
+    @State private var exporting = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            VideoPlayer(player: player)
+                .frame(minWidth: 420, minHeight: 280)
+                .cornerRadius(12)
+
+            if duration > 0 {
+                VStack(spacing: 10) {
+                    HStack {
+                        Text("Start \(timeLabel(start))").font(.caption).monospacedDigit()
+                        Slider(value: $start, in: 0...duration) { editing in
+                            if !editing { if start > end - 0.5 { start = max(0, end - 0.5) }; seek(start) }
+                        }
+                    }
+                    HStack {
+                        Text("End \(timeLabel(end))").font(.caption).monospacedDigit()
+                        Slider(value: $end, in: 0...duration) { editing in
+                            if !editing { if end < start + 0.5 { end = min(duration, start + 0.5) }; seek(end) }
+                        }
+                    }
+                    Text("Trimmed length: \(timeLabel(max(0, end - start)))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView()
+            }
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button(exporting ? "Trimming…" : "Trim") { Task { await export() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(exporting || duration == 0)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 460)
+        .onAppear { load() }
+        .onDisappear { player.pause() }
+    }
+
+    private func load() {
+        let url = URL(fileURLWithPath: path)
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
+        Task {
+            let secs = (try? await item.asset.load(.duration).seconds) ?? 0
+            await MainActor.run { duration = secs.isFinite ? secs : 0; end = duration }
+        }
+    }
+
+    private func seek(_ t: Double) {
+        player.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func timeLabel(_ t: Double) -> String {
+        String(format: "%d:%02d", Int(t) / 60, Int(t) % 60)
+    }
+
+    private func export() async {
+        guard end > start else { dismiss(); return }
+        exporting = true
+        let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("trim_\(UUID().uuidString).mp4")
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            exporting = false; dismiss(); return
+        }
+        session.outputURL = dst
+        session.outputFileType = .mp4
+        session.timeRange = CMTimeRange(
+            start: CMTime(seconds: start, preferredTimescale: 600),
+            duration: CMTime(seconds: end - start, preferredTimescale: 600))
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            session.exportAsynchronously { c.resume() }
+        }
+        if session.status == .completed { onTrimmed(dst) }
+        exporting = false
+        dismiss()
+    }
 }
 #elseif targetEnvironment(macCatalyst)
 /// Mac Catalyst has no UIVideoEditorController; trim isn't offered there (canTrim → false).
@@ -450,9 +539,12 @@ final class MediaStore: ObservableObject {
         return item
     }
 
-    /// Can this video be trimmed by the system editor? (Not on Mac Catalyst.)
+    /// Can this video be trimmed? Native macOS has its own AVFoundation `VideoTrimmer`; iOS uses
+    /// the system editor. Only Mac Catalyst has neither.
     func canTrim(_ ref: String) -> Bool {
-        #if targetEnvironment(macCatalyst) || os(macOS)
+        #if os(macOS)
+        return storagePath(for: ref) != nil
+        #elseif targetEnvironment(macCatalyst)
         return false
         #else
         guard let url = storagePath(for: ref) else { return false }
