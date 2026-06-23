@@ -19,6 +19,17 @@ class ProfileStore private constructor(context: Context) {
     var bio by mutableStateOf(prefs.getString(KEY_BIO, "") ?: "")
     var emoji by mutableStateOf(prefs.getString(KEY_EMOJI, "🌅") ?: "🌅")
 
+    /** Auto-expire posts older than this many days (0 = keep forever). Parity with iOS retention. */
+    var retentionDays by mutableStateOf(prefs.getInt(KEY_RETENTION, 0))
+
+    /** Retention as a seconds value for the engine's feed() call (null = keep forever). */
+    fun retentionSecs(): ULong? = if (retentionDays <= 0) null else (retentionDays.toLong() * 86_400L).toULong()
+
+    fun setRetention(days: Int) {
+        retentionDays = days
+        prefs.edit().putInt(KEY_RETENTION, days).apply()
+    }
+
     fun completeOnboarding(name: String, emoji: String) {
         displayName = name
         this.emoji = emoji
@@ -51,6 +62,7 @@ class ProfileStore private constructor(context: Context) {
         private const val KEY_NAME = "name"
         private const val KEY_BIO = "bio"
         private const val KEY_EMOJI = "emoji"
+        private const val KEY_RETENTION = "retentionDays"
 
         @Volatile private var instance: ProfileStore? = null
         fun get(context: Context): ProfileStore =

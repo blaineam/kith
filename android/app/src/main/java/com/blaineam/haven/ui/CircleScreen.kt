@@ -60,9 +60,10 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
     var pendingPhoto by remember { mutableStateOf<String?>(null) }   // media id staged for the next post
+    val profile = remember { com.blaineam.haven.core.ProfileStore.get(context) }
     val version by HavenNet.feedVersion          // recompose when the feed changes
-    val items: List<FeedItemFfi> = remember(version) {
-        runCatching { HavenNet.engine.feed(DEFAULT_CIRCLE, nowMs(), null) }.getOrDefault(emptyList())
+    val items: List<FeedItemFfi> = remember(version, profile.retentionDays) {
+        runCatching { HavenNet.engine.feed(DEFAULT_CIRCLE, nowMs(), profile.retentionSecs()) }.getOrDefault(emptyList())
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {

@@ -40,6 +40,11 @@ object LocalMedia {
 
     fun has(id: String): Boolean = File(dir, id).exists()
 
+    /** Delete every stored media file (part of "start over"). */
+    fun clear() {
+        runCatching { dir.listFiles()?.forEach { it.delete() } }
+    }
+
     private fun sha256Hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 }

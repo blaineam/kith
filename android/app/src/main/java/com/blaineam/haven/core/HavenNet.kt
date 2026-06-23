@@ -50,6 +50,7 @@ object HavenNet : InboundListener {
     // Observable UI state.
     val contacts: SnapshotStateList<Contact> = mutableStateListOf()
     val pending: SnapshotStateList<PendingRequest> = mutableStateListOf()
+    val blocked: SnapshotStateList<String> = mutableStateListOf()
     var internetActive = mutableStateOf(false); private set
     var started = mutableStateOf(false); private set
     var feedVersion = mutableStateOf(0); private set   // bump to recompose the feed
@@ -69,6 +70,7 @@ object HavenNet : InboundListener {
         LocalMedia.init(appContext)
         restoreState()
         loadContacts()
+        loadBlocked()
     }
 
     /** Start the iroh node and begin syncing. Safe to call repeatedly. */
@@ -108,6 +110,7 @@ object HavenNet : InboundListener {
     private fun handleHello(payload: ByteArray) {
         val hello = Wire.parseHello(payload) ?: return
         val idHex = nodeHex(hello.bundle)
+        if (blocked.contains(idHex)) return   // a blocked node can't handshake back in
         val actualVerify = runCatching { social.bundleVerificationHex(hello.bundle) }.getOrNull() ?: return
         val name = runCatching { social.verifyProfile(hello.bundle, hello.signedProfile) }.getOrNull() ?: "Someone"
 
@@ -204,6 +207,20 @@ object HavenNet : InboundListener {
     }
 
     fun dismiss(req: PendingRequest) { pending.removeAll { it.idHex == req.idHex } }
+
+    /** Block a node: purge from every circle, drop from contacts, ignore future frames. */
+    fun block(idHex: String) {
+        runCatching { social.blockMember(idHex) }
+        contacts.removeAll { it.idHex == idHex }
+        pending.removeAll { it.idHex == idHex }
+        if (blocked.none { it == idHex }) blocked.add(idHex)
+        saveContacts(); saveBlocked(); persist()
+    }
+
+    fun unblock(idHex: String) {
+        blocked.removeAll { it == idHex }
+        saveBlocked()
+    }
 
     private fun acceptContact(
         circleId: String, bundle: ByteArray, idHex: String, name: String, verifyHex: String, helloBack: Boolean,
@@ -314,8 +331,23 @@ object HavenNet : InboundListener {
         prefs.edit().putString("contacts", arr.toString()).apply()
     }
 
+    private fun loadBlocked() {
+        val raw = prefs.getString("blocked", null) ?: return
+        runCatching {
+            val arr = JSONArray(raw)
+            blocked.clear()
+            for (i in 0 until arr.length()) blocked.add(arr.getString(i))
+        }
+    }
+
+    private fun saveBlocked() {
+        val arr = JSONArray()
+        blocked.forEach { arr.put(it) }
+        prefs.edit().putString("blocked", arr.toString()).apply()
+    }
+
     fun reset() {
-        contacts.clear(); pending.clear(); initiated.clear()
+        contacts.clear(); pending.clear(); blocked.clear(); initiated.clear()
         prefs.edit().clear().apply()
         runCatching { stateFile.delete() }
         feedVersion.value++

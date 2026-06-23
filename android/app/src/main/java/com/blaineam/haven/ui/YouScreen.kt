@@ -1,9 +1,13 @@
 package com.blaineam.haven.ui
 
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,6 +54,8 @@ fun YouScreen(onAddFriend: () -> Unit) {
     val core = remember { HavenCore.get(context) }
     val profile = remember { ProfileStore.get(context) }
     var report by remember { mutableStateOf<SelfTestReport?>(null) }
+    var showEdit by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     val contactCount = com.blaineam.haven.core.HavenNet.contacts.size
 
     HavenBackground {
@@ -59,13 +66,20 @@ fun YouScreen(onAddFriend: () -> Unit) {
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(12.dp))
-            // Avatar (emoji for now; photo avatars come with profile editing in Wave 2).
-            androidx.compose.foundation.layout.Box(
+            // Top bar: settings gear (parity with the iOS You toolbar).
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Box(Modifier.size(40.dp).clip(CircleShape).clickable { showSettings = true },
+                    contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.Settings, "Settings", tint = HavenTheme.textSecondary)
+                }
+            }
+            // Avatar — tap to edit your profile.
+            Box(
                 Modifier
                     .size(92.dp)
                     .clip(CircleShape)
-                    .background(HavenTheme.brand, CircleShape),
+                    .background(HavenTheme.brand, CircleShape)
+                    .clickable { showEdit = true },
                 contentAlignment = Alignment.Center,
             ) { Text(profile.emoji, fontSize = 44.sp) }
             Spacer(Modifier.height(12.dp))
@@ -73,6 +87,11 @@ fun YouScreen(onAddFriend: () -> Unit) {
                 profile.displayName.ifBlank { "You" },
                 color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold,
             )
+            if (profile.bio.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(profile.bio, color = HavenTheme.textSecondary, fontSize = 14.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
             Spacer(Modifier.height(4.dp))
             Text(
                 if (contactCount == 0) "This is just for the people you choose."
@@ -118,6 +137,14 @@ fun YouScreen(onAddFriend: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(24.dp))
+        }
+
+        // Edit-profile + settings overlays slide in from the right.
+        AnimatedVisibility(visible = showEdit, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }) {
+            EditProfileScreen(onDone = { showEdit = false })
+        }
+        AnimatedVisibility(visible = showSettings, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }) {
+            SettingsScreen(onBack = { showSettings = false })
         }
     }
 }
