@@ -6,7 +6,10 @@ import Photos
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
 
+    /// Default for saving media YOU create in-app to Photos (per-circle overrides in CircleSettingsStore).
     @Published var saveToPhotos: Bool { didSet { d.set(saveToPhotos, forKey: kSave) } }
+    /// Default for saving media OTHERS send you to Photos.
+    @Published var saveOthersToPhotos: Bool { didSet { d.set(saveOthersToPhotos, forKey: kSaveOthers) } }
     @Published var autoOptimize: Bool { didSet { d.set(autoOptimize, forKey: kOpt) } }
     /// Auto-delete posts older than this many days (0 = keep forever).
     @Published var retentionDays: Int { didSet { d.set(retentionDays, forKey: kRet) } }
@@ -14,53 +17,62 @@ final class SettingsStore: ObservableObject {
     @Published var silent: Bool {
         didSet { d.set(silent, forKey: kSilent); AudioCoordinator.shared.setSilent(silent) }
     }
-    /// Index your circle's posts into Spotlight (on-device search). Default OFF — opt-in,
-    /// since it puts post text into the OS index (on-device only, never uploaded).
-    @Published var spotlightEnabled: Bool {
-        didSet {
-            d.set(spotlightEnabled, forKey: kSpot)
-            if spotlightEnabled { SpotlightIndex.reindexAll() } else { SpotlightIndex.clearAll() }
-        }
-    }
-
     private let d = UserDefaults.standard
     private let kSave = "haven.saveToPhotos"
+    private let kSaveOthers = "haven.saveOthersToPhotos"
     private let kOpt = "haven.autoOptimize"
     private let kRet = "haven.retentionDays"
     private let kSilent = "haven.silent"
-    private let kSpot = "haven.spotlight"
 
     private init() {
         saveToPhotos = d.object(forKey: kSave) as? Bool ?? true   // default ON
+        saveOthersToPhotos = d.object(forKey: kSaveOthers) as? Bool ?? false   // default OFF — only my own posts auto-save
         autoOptimize = d.object(forKey: kOpt) as? Bool ?? true
         retentionDays = d.object(forKey: kRet) as? Int ?? 0       // default forever
         silent = d.object(forKey: kSilent) as? Bool ?? false
-        spotlightEnabled = d.object(forKey: kSpot) as? Bool ?? false   // default OFF
     }
 
     /// Viewer retention in seconds (nil = forever).
     var retentionSecs: UInt64? { retentionDays <= 0 ? nil : UInt64(retentionDays) * 86_400 }
 }
 
-/// Saves shared/received media into the user's Photos library so it's ready whenever
-/// they open Photos. Add-only permission (the lightest). Honest privacy note: media
-/// saved here leaves Haven's encrypted store for the user's own library, which may sync
-/// to iCloud Photos — that's the user's choice, controlled by the toggle.
+/// Saves Haven media into the user's Photos library, organized under a **Haven** folder with
+/// **Shared** (media you created in-app) and **Received** (media others sent you) albums.
+/// Library-selected media is never re-saved — it's already in Photos. We request read-write
+/// access because creating the folder/albums needs it; honest privacy note: media saved here
+/// leaves Haven's encrypted store for the user's own library, which may sync to iCloud Photos
+/// — their choice, controlled by the toggle.
 enum PhotoSaver {
     @MainActor
-    static func saveIfEnabled(_ item: MediaItem) {
-        guard SettingsStore.shared.saveToPhotos else { return }
-        save(item)
+    static func saveIfEnabled(_ item: MediaItem, to album: HavenAlbumKind, circleId: String) {
+        // Per circle: .shared = media you made; .received = media others sent you.
+        let allowed = album == .shared
+            ? CircleSettingsStore.shared.saveOwnToPhotos(circleId)
+            : CircleSettingsStore.shared.saveOthersToPhotos(circleId)
+        guard allowed else { return }
+        save(item, to: album)
     }
 
-    static func save(_ item: MediaItem) {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+    static func save(_ item: MediaItem, to album: HavenAlbumKind) {
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
             guard status == .authorized || status == .limited else { return }
-            PHPhotoLibrary.shared().performChanges {
-                if item.kind == .video, let url = item.videoURL {
-                    PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: url)
-                } else if let img = item.image {
-                    PHAssetCreationRequest.creationRequestForAsset(from: img)
+            HavenPhotoAlbums.shared.collection(for: album) { collection in
+                PHPhotoLibrary.shared().performChanges {
+                    let creation: PHAssetChangeRequest?
+                    if item.kind == .video, let url = item.videoURL {
+                        creation = PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                    } else if let img = item.image {
+                        creation = PHAssetCreationRequest.creationRequestForAsset(from: img)
+                    } else {
+                        creation = nil
+                    }
+                    // Drop the new asset into the Haven album (if we have one — otherwise it
+                    // still lands in the main library).
+                    if let placeholder = creation?.placeholderForCreatedAsset,
+                       let collection,
+                       let albumChange = PHAssetCollectionChangeRequest(for: collection) {
+                        albumChange.addAssets([placeholder] as NSArray)
+                    }
                 }
             }
         }
@@ -68,6 +80,9 @@ enum PhotoSaver {
 }
 
 struct SettingsView: View {
+    let account: Account
+    let accountStore: AccountStore
+    var onReset: () -> Void
     @ObservedObject private var settings = SettingsStore.shared
 
     var body: some View {
@@ -75,28 +90,29 @@ struct SettingsView: View {
             HavenBackground()
             Form {
                 Section {
-                    Toggle("Silent mode", isOn: $settings.silent)
-                        .tint(HavenTheme.pink)
-                } footer: {
-                    Text("Mute the whole app — post music and video sound stay quiet so you can browse silently. Also toggleable from the speaker button on your feed.")
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "lock.shield.fill").font(.title3).foregroundStyle(.green)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Your circle is private").font(.subheadline.weight(.semibold))
+                            Text("Everything you share is locked so only your people can see it. No ads, no tracking — ever.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Section {
-                    Toggle("Save to Photos", isOn: $settings.saveToPhotos)
+                    Toggle("Save your posts to Photos", isOn: $settings.saveToPhotos)
                         .tint(HavenTheme.pink)
-                } footer: {
-                    Text("Automatically save photos and videos you share or receive to your Photos library, so they're ready whenever you open Photos.")
+                    Toggle("Save others' posts to Photos", isOn: $settings.saveOthersToPhotos)
+                        .tint(HavenTheme.pink)
+                } header: { Text("Save to Photos — default") }
+                footer: {
+                    Text("Media you create lands in a **Haven ▸ Shared** album; media others send you in **Haven ▸ Received**. Photos you pick from your own library aren't re-saved. These are the defaults — any circle can override them in its own settings.")
                 }
                 Section {
                     Toggle("Auto-optimize media", isOn: $settings.autoOptimize)
                         .tint(HavenTheme.pink)
                 } footer: {
-                    Text("Share smaller, optimized photos and videos by default. Turn off to send pristine originals.")
-                }
-                Section {
-                    Toggle("Index posts in Spotlight", isOn: $settings.spotlightEnabled)
-                        .tint(HavenTheme.pink)
-                } footer: {
-                    Text("Find your circle's posts from system search. Off by default — when on, post text is added to the on-device Spotlight index (never uploaded).")
+                    Text("Share smaller, optimized photos and videos by default. Turn off to send pristine originals. Per-circle override available.")
                 }
                 Section {
                     Picker("Auto-delete old posts", selection: $settings.retentionDays) {
@@ -107,20 +123,46 @@ struct SettingsView: View {
                         Text("After 1 year").tag(365)
                     }
                     .tint(HavenTheme.pink)
-                } footer: {
-                    Text("Automatically remove posts older than this from your feed. A sender can set a shorter limit on their own posts — the shorter one always wins.")
+                } header: { Text("Auto-delete — default") }
+                footer: {
+                    Text("Automatically remove posts older than this from your feed. A sender can set a shorter limit on their own posts — the shorter one always wins. Per-circle override available.")
                 }
+                // Storage/relay is configured per circle (Circle ▸ Settings ▸ Storage) so each
+                // circle picks its own mailbox — there's intentionally no global Storage entry here.
                 Section {
-                    NavigationLink { StorageSettingsView() } label: {
-                        Label("Storage", systemImage: "externaldrive.fill")
+                    NavigationLink { BlockedPeopleView() } label: {
+                        Label("Blocked people", systemImage: "hand.raised.fill")
                     }
                 } footer: {
-                    Text("Choose where your encrypted media is stored — your iCloud, your own S3 bucket, or a connected cloud drive.")
+                    Text("People you've blocked can't see your posts or reach you. Unblock anyone here.")
+                }
+                Section {
+                    NavigationLink { IdentityBackupView(account: account, accountStore: accountStore) } label: {
+                        Label("Identity & iCloud backup", systemImage: "icloud.fill")
+                    }
+                } footer: {
+                    Text("Back up your identity to iCloud so it follows you to a new Apple device, move it to another device with a QR code, or restore/swap an identity here.")
+                }
+                Section {
+                    NavigationLink { LinkDeviceView(accountStore: accountStore) } label: {
+                        Label("Link a new device", systemImage: "iphone.and.arrow.forward")
+                    }
+                } footer: {
+                    Text("Use this identity on another device too — both can post and receive, and sync to each other directly.")
+                }
+                Section {
+                    NavigationLink {
+                        AdvancedView(account: account, accountStore: accountStore, onReset: onReset)
+                    } label: {
+                        Label("Advanced", systemImage: "wrench.and.screwdriver")
+                    }
+                } footer: {
+                    Text("Technical details, your identity, and starting over.")
                 }
             }
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
     }
 }

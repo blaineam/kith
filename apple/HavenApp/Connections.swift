@@ -87,7 +87,7 @@ struct BlockedPeopleView: View {
             }
         }
         .navigationTitle("Blocked")
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
     }
 }
 
@@ -132,8 +132,8 @@ struct ConnectionRequestsView: View {
                 }
             }
             .navigationTitle("Connection requests")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenConfirmTrailing) { Button("Done") { dismiss() } } }
             .confirmationDialog("Share your past posts with \(approveTarget?.name ?? "them")?",
                                 isPresented: Binding(get: { approveTarget != nil }, set: { if !$0 { approveTarget = nil } }),
                                 titleVisibility: .visible) {

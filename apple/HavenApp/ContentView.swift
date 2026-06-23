@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// The friendly "You" screen: who you are, your circle, and an easy way to invite
 /// people. The technical bits live behind "Advanced".
@@ -13,62 +17,128 @@ struct YouView: View {
 
     @State private var showConnect = false
     @State private var showEditProfile = false
-    @State private var appeared = false
+    @State private var showStories = false
+    @State private var storyIndex = 0
+    @State private var showIdentity = false   // screenshot harness: identity switcher sheet
 
     var body: some View {
         NavigationStack {
             ZStack {
                 HavenBackground()
                 ScrollView {
-                    VStack(spacing: 20) {
-                        profileHeader.entrance(appeared, delay: 0.00)
-                        inviteButton.entrance(appeared, delay: 0.06)
-                        NavigationLink { CircleView(account: account) } label: { circleCard }
-                            .buttonStyle(.plain)
-                            .entrance(appeared, delay: 0.12)
-                        NavigationLink { ProfileView(friendName: "Friend") } label: {
-                            HStack {
-                                Label("Your posts", systemImage: "square.stack.fill")
-                                    .font(.subheadline.weight(.medium))
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .havenCard()
-                        .entrance(appeared, delay: 0.15)
-                        privacyCard.entrance(appeared, delay: 0.18)
-                        NavigationLink {
-                            SettingsView()
-                        } label: {
-                            HStack {
-                                Label("Settings", systemImage: "gearshape.fill")
-                                    .font(.subheadline.weight(.medium))
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .havenCard()
-                        .entrance(appeared, delay: 0.22)
-                        NavigationLink {
-                            AdvancedView(account: account, accountStore: accountStore, onReset: onReset)
-                        } label: {
-                            Label("Advanced", systemImage: "wrench.and.screwdriver")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                        .entrance(appeared, delay: 0.28)
+                    VStack(spacing: 18) {
+                        profileHeader
+                        if !feed.myStories.isEmpty { storiesRow }
+                        postsSection
                     }
                     .padding(20)
                 }
             }
             .navigationTitle("You")
+            .toolbar {
+                ToolbarItem(placement: .havenTrailing) {
+                    NavigationLink {
+                        SettingsView(account: account, accountStore: accountStore, onReset: onReset)
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+            }
             .sheet(isPresented: $showConnect) {
                 ConnectView(account: account, contacts: contacts)
             }
-            .sheet(isPresented: $showEditProfile) { EditProfileSheet() }
-            .onAppear { withAnimation(HavenTheme.smooth) { appeared = true } }
+            .sheet(isPresented: $showEditProfile) { EditProfileSheet() }   // has its own toolbar Done
+            .havenFullScreenCover(isPresented: $showStories) {
+                StoryViewer(stories: feed.myStories, index: storyIndex, friendName: "Friend")
+            }
+            .sheet(isPresented: $showIdentity) {
+                NavigationStack { IdentityBackupView(account: account, accountStore: accountStore) }
+            }
+            .onAppear {
+                // Screenshot harness: open the identity switcher for its hero shot.
+                if DemoEnv.scene == .identity {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showIdentity = true }
+                }
+            }
         }
+    }
+
+    /// Compact secondary actions: invite + jump to manage your circle.
+    private var actionsRow: some View {
+        HStack(spacing: 12) {
+            Button { showConnect = true } label: {
+                Label("Invite", systemImage: "person.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(BrandButtonStyle())
+            NavigationLink { CircleView(account: account) } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.2.fill")
+                    Text(contacts.contacts.isEmpty ? "Circle" : "Circle · \(contacts.contacts.count)")
+                        .font(.subheadline.weight(.semibold)).lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// Your own posts, shown right here — this *is* your profile.
+    @ViewBuilder private var postsSection: some View {
+        if feed.myPosts.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "square.stack.3d.up.slash")
+                    .font(.largeTitle).foregroundStyle(.tertiary)
+                Text("Your posts show up here")
+                    .font(.subheadline.weight(.medium))
+                Text("Everything you share lives here — and a copy stays on your device.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 28).havenCard()
+        } else {
+            VStack(spacing: 16) {
+                ForEach(feed.myPosts, id: \.id) { item in
+                    PostCard(
+                        item: item, friendName: "Friend",
+                        onReact: { e in withAnimation(HavenTheme.bouncy) { feed.react(item.id, e) } },
+                        onUnreact: { e in withAnimation(HavenTheme.bouncy) { feed.unreact(item.id, e) } },
+                        onComment: { b, m in withAnimation(HavenTheme.smooth) { feed.comment(item.id, b, m) } },
+                        onEdit: { b in withAnimation(HavenTheme.smooth) { feed.edit(item.id, b) } },
+                        onUnsend: { withAnimation(HavenTheme.smooth) { feed.unsend(item.id) } }
+                    )
+                }
+            }
+        }
+    }
+
+    private var storiesRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your stories").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(Array(feed.myStories.enumerated()), id: \.element.id) { idx, s in
+                        Button { storyIndex = idx; showStories = true } label: {
+                            ZStack {
+                                Circle().fill(LinearGradient(colors: [HavenTheme.violet, HavenTheme.pink, HavenTheme.amber],
+                                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                                    .frame(width: 64, height: 64)
+                                if let img = s.media.first.flatMap({ MediaStore.shared.item($0)?.image }) {
+                                    Image(platformImage: img).resizable().scaledToFill().frame(width: 56, height: 56).clipShape(Circle())
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .havenCard()
     }
 
     private var profileHeader: some View {
@@ -85,53 +155,26 @@ struct YouView: View {
             .buttonStyle(.plain)
             Text(profile.displayName.isEmpty ? "You" : profile.displayName)
                 .font(.title2.bold())
-            Text("This is just for the people you choose.")
-                .font(.footnote).foregroundStyle(.secondary)
+            if !profile.bio.isEmpty {
+                Text(profile.bio)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).padding(.horizontal, 24)
+            }
+            if !profile.link.isEmpty {
+                Button { LinkPresenter.shared.open(profile.link) } label: {
+                    Label(profile.link, systemImage: "link")
+                        .font(.footnote.weight(.medium)).foregroundStyle(HavenTheme.pink)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+            }
+            if profile.bio.isEmpty && profile.link.isEmpty {
+                Text("This is just for the people you choose.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
         }
     }
 
-    private var inviteButton: some View {
-        Button { showConnect = true } label: {
-            Label("Invite a friend", systemImage: "person.badge.plus")
-        }
-        .buttonStyle(BrandButtonStyle())
-    }
-
-    private var circleCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Your circle").font(.headline)
-                Spacer()
-                Label("Manage", systemImage: "chevron.right")
-                    .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(.tertiary)
-            }
-            if contacts.contacts.isEmpty {
-                HStack(spacing: 12) {
-                    Image(systemName: "sparkles")
-                        .font(.title2).foregroundStyle(HavenTheme.pink)
-                    Text("It's just you for now. Invite someone you love to get started.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }
-            } else {
-                ForEach(contacts.contacts) { c in
-                    let connected = feed.isConnected(c.idHex)
-                    HStack(spacing: 12) {
-                        Circle().fill(HavenTheme.brand).frame(width: 34, height: 34)
-                            .overlay(Text(String(c.displayName.prefix(1))).font(.caption.bold()).foregroundStyle(.white))
-                        Text(c.displayName).font(.subheadline.weight(.medium))
-                        Spacer()
-                        HStack(spacing: 5) {
-                            Circle().fill(connected ? Color.green : Color.secondary).frame(width: 6, height: 6)
-                            Text(connected ? "Connected" : "Waiting to connect")
-                                .font(.caption2).foregroundStyle(connected ? .green : .secondary)
-                        }
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .havenCard()
-    }
 
     private var privacyCard: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -176,16 +219,6 @@ struct AdvancedView: View {
                     }
                     .buttonStyle(.plain)
                     .havenCard()
-                    NavigationLink { BlockedPeopleView() } label: {
-                        HStack {
-                            Label("Blocked people", systemImage: "hand.raised.fill")
-                                .font(.subheadline.weight(.medium))
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .havenCard()
                     identityCard
                     Button(role: .destructive) {
                         showResetConfirm = true
@@ -199,7 +232,7 @@ struct AdvancedView: View {
             }
         }
         .navigationTitle("Advanced")
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
         .sensoryFeedback(trigger: runCount) { _, _ in report?.allOk == true ? .success : .error }
         .confirmationDialog("Start over with a brand-new identity?",
                             isPresented: $showResetConfirm, titleVisibility: .visible) {
@@ -308,6 +341,121 @@ struct AdvancedView: View {
         .offset(x: report != nil ? 0 : -16)
         .animation(HavenTheme.bouncy.delay(Double(index) * 0.08), value: runCount)
     }
+}
+
+/// Prominent, first-class identity backup surface (also reachable from Advanced): turn on iCloud
+/// Keychain backup so the identity follows the user to a new Apple device, move it to another
+/// device with a QR code, or restore/swap an identity onto this device.
+struct IdentityBackupView: View {
+    let account: Account
+    @ObservedObject var accountStore: AccountStore
+    @ObservedObject private var profile = ProfileStore.shared
+    @State private var iCloudSync = AccountStore.iCloudSyncEnabled
+    @State private var identities: [AccountStore.IdentitySummary] = []
+    @State private var switchTarget: AccountStore.IdentitySummary?
+    @State private var renameTarget: AccountStore.IdentitySummary?
+    @State private var renameDraft = ""
+
+    var body: some View {
+        ZStack {
+            HavenBackground()
+            Form {
+                // The headline: every identity you've used on this device — tap to switch.
+                Section {
+                    ForEach(identities) { id in
+                        Button {
+                            if !id.isCurrent { switchTarget = id }
+                        } label: {
+                            HStack(spacing: 12) {
+                                if id.isCurrent {
+                                    HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 34)
+                                } else {
+                                    Circle().fill(Color.secondary.opacity(0.25)).frame(width: 34, height: 34)
+                                        .overlay(Text(String(id.name.prefix(1)).uppercased())
+                                            .font(.subheadline.bold()).foregroundStyle(.secondary))
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(id.name).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                                    Text(String(id.nodeHex.prefix(16)) + "…")
+                                        .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if id.isCurrent {
+                                    Text("Current").font(.caption2.weight(.semibold)).foregroundStyle(HavenTheme.pink)
+                                        .padding(.horizontal, 8).padding(.vertical, 3)
+                                        .background(HavenTheme.pink.opacity(0.15), in: Capsule())
+                                } else {
+                                    Image(systemName: "arrow.left.arrow.right.circle").foregroundStyle(.secondary)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button { renameDraft = id.name; renameTarget = id } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                        }
+                    }
+                } header: { Text("Your identities") }
+                footer: { Text("Every identity you've used on this device. Tap one to switch to it — your current identity is kept here so you can switch back anytime. With iCloud backup on, these follow you to your other Apple devices.") }
+
+                Section {
+                    Toggle(isOn: $iCloudSync) {
+                        Label("Back up to iCloud", systemImage: "icloud.fill")
+                    }
+                    .tint(HavenTheme.pink)
+                    .onChange(of: iCloudSync) { _, on in accountStore.setICloudSync(on) }
+                } header: { Text("iCloud backup") }
+                footer: { Text("Securely keep your identities in your iCloud Keychain (end-to-end encrypted by Apple) so they're restored automatically when you sign into iCloud on a new iPhone, iPad, or Mac. Your active keys still never leave the device — only an encrypted recovery copy is backed up.") }
+
+                Section {
+                    NavigationLink { TransferIdentityView(accountStore: accountStore) } label: {
+                        Label("Move to another device", systemImage: "qrcode")
+                    }
+                    NavigationLink { RestoreIdentityView(accountStore: accountStore, onRestored: { reload() }) } label: {
+                        Label("Add / restore an identity here", systemImage: "arrow.down.circle")
+                    }
+                } header: { Text("Transfer & restore") }
+                footer: { Text("Move an identity to a new device by scanning a QR code, or add/restore one onto this device from a transfer code.") }
+            }
+            .scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Identity & backup")
+        .havenInlineNavTitle()
+        .onAppear { accountStore.rememberCurrentLabel(); reload() }
+        .confirmationDialog(switchTarget.map { "Switch to “\($0.name)”?" } ?? "",
+                            isPresented: Binding(get: { switchTarget != nil }, set: { if !$0 { switchTarget = nil } }),
+                            titleVisibility: .visible) {
+            if let t = switchTarget {
+                Button("Switch identity") {
+                    accountStore.switchToIdentity(seedB64: t.seedB64)
+                    switchTarget = nil
+                    reload()
+                }
+            }
+            Button("Cancel", role: .cancel) { switchTarget = nil }
+        } message: {
+            Text("Haven will switch to this identity. Your circles, posts, and DMs for it appear; your current identity stays saved here to switch back to.")
+        }
+        .alert("Rename identity", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
+            TextField("Name", text: $renameDraft)
+            Button("Save") {
+                if let t = renameTarget {
+                    let name = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // The current identity's label IS its profile name; past ones get a stored label.
+                    if t.isCurrent { ProfileStore.shared.displayName = name }
+                    else { AccountStore.setIdentityLabel(name, forNodeHex: t.nodeHex) }
+                }
+                renameTarget = nil; reload()
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        } message: {
+            Text("Give this identity a name so you can tell your identities apart.")
+        }
+    }
+
+    private func reload() { identities = accountStore.roster() }
 }
 
 /// Staggered slide-up entrance for a section.

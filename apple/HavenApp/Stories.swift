@@ -1,6 +1,10 @@
 import SwiftUI
 import AVKit
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// Full-screen story viewer: progress bars, auto-advance, tap left/right to navigate,
 /// captions, and the song the author attached (played while you watch).
@@ -46,7 +50,7 @@ struct StoryViewer: View {
             }
             .offset(y: dragOffset)
         }
-        .statusBarHidden()
+        .havenStatusBarHidden()
         // Swipe down anywhere on the story to dismiss.
         .simultaneousGesture(
             DragGesture(minimumDistance: 24)
@@ -78,22 +82,35 @@ struct StoryViewer: View {
         if waitingMedia != nil {
             downloading
         } else {
-            ZStack {
-                // Blurred fill backdrop so off-ratio media (landscape, etc.) sits in the standard
-                // story frame instead of leaving plain black bands. The still covers photo + video.
-                if let ref = s.media.first, let img = MediaStore.shared.item(ref)?.image {
-                    Image(uiImage: img).resizable().scaledToFill()
-                        .blur(radius: 28).overlay(Color.black.opacity(0.28))
+            GeometryReader { geo in
+                // The author's framing (zoom + reposition) travels in the caption spec.
+                let tf = StoryCaptions.decode(s.body).spec
+                ZStack {
+                    // Blurred fill backdrop so off-ratio media (landscape, etc.) sits in the standard
+                    // story frame instead of leaving plain black bands. The still covers photo + video.
+                    if let ref = s.media.first, let img = MediaStore.shared.item(ref)?.image {
+                        Image(platformImage: img).resizable().scaledToFill()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .blur(radius: 28).overlay(Color.black.opacity(0.28))
+                    }
+                    Group {
+                        if let player {
+                            VideoSurface(player: player)   // fit (letterbox) so the backdrop shows through
+                        } else if let ref = s.media.first, let img = MediaStore.shared.item(ref)?.image {
+                            Image(platformImage: img).resizable().scaledToFit()
+                        } else {
+                            missing
+                        }
+                    }
+                    .scaleEffect(tf.mediaScale)
+                    .offset(x: tf.mediaOffX * geo.size.width, y: tf.mediaOffY * geo.size.height)
+                    // Blur a sensitive received story (local SCA or a circle member's federated flag).
+                    .sensitiveContentGuard(ref: s.media.first ?? "", circleId: FeedStore.shared.activeCircleId,
+                                           scan: !s.isMe, cornerRadius: 0)
                 }
-                if let player {
-                    VideoSurface(player: player)   // fit (letterbox) so the backdrop shows through
-                } else if let ref = s.media.first, let img = MediaStore.shared.item(ref)?.image {
-                    Image(uiImage: img).resizable().scaledToFit()
-                } else {
-                    missing
-                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
             }
-            .clipped()
         }
     }
 

@@ -15,6 +15,12 @@ final class NearbyTransport: NSObject {
 
     private let onInbound: (Data) -> Void
     private let onPeerConnected: () -> Void
+    /// All MCSession reads/writes happen here, never on the main thread. `connectedPeers` and
+    /// `send(_:toPeers:)` both dispatch into MultipeerConnectivity's own serial queue; calling them
+    /// from `@MainActor` (as every `nearbyBroadcast` caller does) means a backed-up send queue — e.g.
+    /// posting a big batch of media, one frame per chunk — blocks the main thread until the 0x8BADF00D
+    /// watchdog kills the app. Serializing here keeps frame order while freeing the main thread.
+    private let sendQueue = DispatchQueue(label: "haven.nearby.send", qos: .utility)
 
     /// `displayName` should be our node id hex (truncated to Multipeer's 63-byte limit);
     /// it's only used to deduplicate who-invites-whom. Identity is still proven by the
@@ -45,10 +51,15 @@ final class NearbyTransport: NSObject {
     }
 
     /// Send a frame to every connected nearby peer (recipients who can't open it ignore it).
+    /// Fire-and-forget on a background queue so a slow/jammed Multipeer link never stalls the main
+    /// thread (see `sendQueue`).
     func broadcast(_ frame: Data) {
-        let peers = session.connectedPeers
-        guard !peers.isEmpty else { return }
-        try? session.send(frame, toPeers: peers, with: .reliable)
+        sendQueue.async { [weak self] in
+            guard let self else { return }
+            let peers = self.session.connectedPeers
+            guard !peers.isEmpty else { return }
+            try? self.session.send(frame, toPeers: peers, with: .reliable)
+        }
     }
 }
 

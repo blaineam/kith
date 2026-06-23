@@ -1,8 +1,11 @@
 # Haven — Apple app (iOS/macOS)
 
-A SwiftUI app built on the real Rust core (`p2pcore`) via a UniFFI XCFramework. This
-first build is the **on-device identity + reach-me link + hybrid-PQ self-test** — the
-first thing you can run on your iPhone. Networking/MLS social features come next.
+A SwiftUI app built on the real Rust core (`p2pcore`) via a UniFFI XCFramework. It runs
+on iPhone and on macOS (today via **Mac Catalyst**; a native AppKit/SwiftUI port is in
+progress — see [`../docs/MACOS-NATIVE-PORT.md`](../docs/MACOS-NATIVE-PORT.md)). Features
+include circles + multi-circle feed, stories, DMs, in-app camera with filters, Apple
+Music on posts, WebRTC 1:1 and group calls (audio+video + screen share), a multi-identity
+switcher, and a blind-APNs notification relay with on-device NSE decrypt.
 
 ## Build & run
 
@@ -16,6 +19,11 @@ xcodegen generate               # creates Haven.xcodeproj
 open Haven.xcodeproj             # Run on a simulator, or set your Team to run on device
 ```
 
+`build-rust-xcframework.sh` builds four slices into `HavenFFI.xcframework`:
+`aarch64-apple-ios` (device), `aarch64-apple-ios-sim` (simulator),
+`aarch64-apple-ios-macabi` (Mac Catalyst), and `aarch64-apple-darwin` (native macOS,
+Apple Silicon — for the in-progress native port). The scheme is `Haven`.
+
 Command-line simulator build/test:
 
 ```sh
@@ -27,21 +35,19 @@ xcodebuild -project Haven.xcodeproj -scheme Haven \
 
 ## What it does
 
-**Identity tab**
-
 - Generates a no-PII identity on-device (hybrid Ed25519+ML-DSA / X25519+ML-KEM-768),
-  persisting only the 32-byte master seed in the Keychain.
-- Shows your `haven://` reach-me link as a QR, your node id, and verification hash.
-- "Run on-device hybrid-PQ self-test" exercises the full pipeline (KEM seal→open,
-  hybrid signature verify, link round-trip) on the device.
+  persisting only the 32-byte master seed in the Keychain; shows your `haven://` reach-me
+  link as a QR, node id, and verification hash. Multiple identities can be kept and
+  switched between, each with its own profile.
+- **Feed** — multi-circle feed: compose posts, react, comment, edit, unsend, stories.
+  Every action is sealed end-to-end to the circle and reopened (seal → open → feed) by
+  `p2pcore::social`, then delivered peer-to-peer over iroh (with a nearby Bluetooth/Wi-Fi
+  mesh fallback).
+- **DMs, calls, media** — direct messages, WebRTC 1:1 and group audio/video calls with
+  screen share, in-app camera with filters, and Apple Music on posts.
 
-**Feed tab** — a live local demo of the social engine: compose posts, react, comment,
-edit, and unsend. Every action is really sealed end-to-end to the group and reopened
-(seal → open → feed) by `p2pcore::social`. (Networking between real devices is next;
-the crypto and feed logic here are the real thing.)
-
-Both flows are covered by `HavenUITests` (on-device self-test + feed post round-trip).
-Launch on the Feed tab with the `HAVEN_TAB=feed` environment variable.
+Core flows are covered by `HavenUITests`. Launch on the Feed tab with the
+`HAVEN_TAB=feed` environment variable.
 
 ## Ship to TestFlight (rocket)
 

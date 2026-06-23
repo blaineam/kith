@@ -38,7 +38,7 @@ struct EditPostSheet: View {
                                     ForEach(media, id: \.self) { ref in
                                         if let img = MediaStore.shared.item(ref)?.image {
                                             ZStack(alignment: .topTrailing) {
-                                                Image(uiImage: img).resizable().scaledToFill()
+                                                Image(platformImage: img).resizable().scaledToFill()
                                                     .frame(width: 84, height: 84).clipShape(RoundedRectangle(cornerRadius: 12))
                                                 Button { media.removeAll { $0 == ref } } label: {
                                                     Image(systemName: "xmark.circle.fill").foregroundStyle(.white)
@@ -81,10 +81,10 @@ struct EditPostSheet: View {
                 }
             }
             .navigationTitle("Edit post")
-            .navigationBarTitleDisplayMode(.inline)
+            .havenInlineNavTitle()
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .havenCancelLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .havenTrailing) {
                     Button("Save") {
                         FeedStore.shared.edit(item.id, text.trimmingCharacters(in: .whitespacesAndNewlines),
                                               media: media, music: track, muteVideo: muteVideo)

@@ -13,9 +13,12 @@ final class AudioRecorder: NSObject, ObservableObject {
     private(set) var url: URL?
 
     func start() {
+        // AVAudioSession is iOS/Catalyst-only; macOS records without a session.
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playAndRecord, mode: .default)
         try? session.setActive(true)
+        #endif
         let u = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".m4a")
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -104,7 +107,9 @@ struct AudioPlayerPill: View {
             player?.pause(); playing = false
         } else {
             if player == nil {
+                #if os(iOS)
                 try? AVAudioSession.sharedInstance().setCategory(.playback)
+                #endif
                 player = try? AVAudioPlayer(contentsOf: url)
                 player?.prepareToPlay()
             }

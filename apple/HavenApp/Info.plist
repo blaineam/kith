@@ -37,6 +37,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.social-networking</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Haven lets you add a song to a post; it plays through your own Apple Music.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
@@ -48,6 +50,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Haven uses the camera so you can capture photos and videos to share with your circle. Nothing is uploaded — media is encrypted on your device first.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Haven uses Face ID to unlock circles you've chosen to lock, so only you can open them.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Haven finds people in your circle who are nearby so it can share posts directly over Wi-Fi and Bluetooth — even with no internet.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -63,6 +67,7 @@
 		<string>fetch</string>
 		<string>processing</string>
 		<string>remote-notification</string>
+		<string>voip</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

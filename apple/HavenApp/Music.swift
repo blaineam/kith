@@ -10,31 +10,46 @@ func trackIds(_ catalogId: String) -> (store: String?, pid: UInt64?) {
     return (store, pid)
 }
 
+#if os(iOS)
 /// The exact library song matching a persistent id, if it exists on this device.
+/// (`MPMediaQuery`/`MPMediaItem` are iOS/Catalyst-only.)
 @MainActor func librarySong(_ pid: UInt64) -> MPMediaItem? {
     let q = MPMediaQuery.songs()
     q.addFilterPredicate(MPMediaPropertyPredicate(value: pid, forProperty: MPMediaItemPropertyPersistentID))
     return q.items?.first
 }
+#else
+/// Native macOS has no `MPMediaQuery`; the on-device library isn't reachable. Catalog tracks
+/// (MusicKit) still play. Returns nil so library-only playback paths fall through.
+@MainActor func librarySong(_ pid: UInt64) -> Never? { nil }
+#endif
 
-/// An in-app song picker that lets you **hear** a song before choosing it, across two
-/// sources you can toggle: **Your Library** (songs on this device) and **Apple Music**
-/// (the full catalog, searched live via MusicKit). Either way we keep only a `TrackRef`
-/// (the ids + title/artist) — never the audio. Each viewer plays it through their own
-/// Apple Music, so Haven shares the *reference*, not the file.
+/// An in-app song picker that lets you choose a song to attach to a post. Each viewer plays
+/// it through their own Apple Music, so Haven shares the *reference*, not the file.
+///
+/// On iOS/Catalyst you can also browse **Your Library** and hear a preview before picking. On
+/// native macOS, `MPMediaQuery`/`MPMusicPlayerController` are unavailable, so the picker is
+/// **Apple Music catalog**-only (search + pick; in-picker preview is an iOS feature).
 struct SongPicker: View {
     var onPick: (TrackRefFfi) -> Void
     @Environment(\.dismiss) private var dismiss
 
     enum Source: String, CaseIterable { case library = "Your Library", catalog = "Apple Music" }
+    #if os(iOS)
     @State private var source: Source = .library
+    #else
+    @State private var source: Source = .catalog
+    #endif
     @State private var query = ""
     @State private var previewing: String?          // unified key: persistentID or catalog id
-    @State private var libraryDenied = false
-    @State private var songs: [MPMediaItem] = []
     @State private var catalog: [MusicKit.Song] = []
     @State private var catalogNote: String?
     @State private var searchTask: Task<Void, Never>?
+
+    #if os(iOS)
+    @State private var libraryDenied = false
+    @State private var songs: [MPMediaItem] = []
+    @State private var hiddenLibraryCount = 0
     private let preview = MPMusicPlayerController.applicationMusicPlayer
 
     private var filteredLibrary: [MPMediaItem] {
@@ -44,12 +59,14 @@ struct SongPicker: View {
             ($0.artist ?? "").localizedCaseInsensitiveContains(query)
         }
     }
+    #endif
 
     var body: some View {
         NavigationStack {
             ZStack {
                 HavenBackground()
                 VStack(spacing: 0) {
+                    #if os(iOS)
                     Picker("", selection: $source) {
                         ForEach(Source.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
@@ -57,13 +74,21 @@ struct SongPicker: View {
                     .padding(.horizontal).padding(.top, 8)
 
                     if source == .library { libraryList } else { catalogList }
+                    #else
+                    catalogList
+                    #endif
                 }
             }
             .navigationTitle("Pick a song")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { stopPreview(); dismiss() } } }
+            #if os(iOS)
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenCancelLeading) { Button("Cancel") { stopPreview(); dismiss() } } }
             .searchable(text: $query, prompt: source == .library ? "Search your music" : "Search Apple Music")
             .onAppear(perform: loadLibrary)
+            #else
+            .toolbar { ToolbarItem { Button("Cancel") { stopPreview(); dismiss() } } }
+            .searchable(text: $query, prompt: "Search Apple Music")
+            #endif
             .onDisappear(perform: stopPreview)
             .onChange(of: source) { _, s in
                 stopPreview()
@@ -73,22 +98,31 @@ struct SongPicker: View {
         }
     }
 
-    // MARK: - Library
+    // MARK: - Library (iOS/Catalyst only)
 
+    #if os(iOS)
     @ViewBuilder private var libraryList: some View {
         if libraryDenied {
             ContentUnavailableView("Music access off", systemImage: "music.note.list",
                                    description: Text("Allow access to your music in Settings to pick a song."))
         } else {
-            List(filteredLibrary, id: \.persistentID) { item in
-                songRow(title: item.title ?? "Unknown song", artist: item.artist ?? "", key: "\(item.persistentID)",
-                        onPreview: { togglePreviewLibrary(item) }, onUse: { chooseLibrary(item) })
+            List {
+                if hiddenLibraryCount > 0 {
+                    Text("\(hiddenLibraryCount) song\(hiddenLibraryCount == 1 ? "" : "s") in your library aren't on Apple Music, so they can't be shared — your circle wouldn't be able to play them.")
+                        .font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
+                }
+                ForEach(filteredLibrary, id: \.persistentID) { item in
+                    songRow(title: item.title ?? "Unknown song", artist: item.artist ?? "", key: "\(item.persistentID)",
+                            artwork: { libraryArtwork(item) },
+                            onPreview: { togglePreviewLibrary(item) }, onUse: { chooseLibrary(item) })
+                }
             }
             .scrollContentBackground(.hidden)
         }
     }
+    #endif
 
-    // MARK: - Apple Music catalog
+    // MARK: - Apple Music catalog (all platforms)
 
     @ViewBuilder private var catalogList: some View {
         if let note = catalogNote {
@@ -99,20 +133,31 @@ struct SongPicker: View {
         } else {
             List(catalog, id: \.id) { song in
                 songRow(title: song.title, artist: song.artistName, key: song.id.rawValue,
+                        artwork: { catalogArtwork(song) },
                         onPreview: { togglePreviewCatalog(song) }, onUse: { chooseCatalog(song) })
             }
             .scrollContentBackground(.hidden)
         }
     }
 
-    private func songRow(title: String, artist: String, key: String,
-                         onPreview: @escaping () -> Void, onUse: @escaping () -> Void) -> some View {
+    private func songRow<A: View>(title: String, artist: String, key: String,
+                                  @ViewBuilder artwork: () -> A,
+                                  onPreview: @escaping () -> Void, onUse: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
-            Button(action: onPreview) {
-                Image(systemName: previewing == key ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.title2).foregroundStyle(HavenTheme.pink)
+            ZStack {
+                artwork()
+                #if os(iOS)
+                // In-picker preview needs MPMusicPlayerController (iOS/Catalyst only). The play/pause
+                // sits on the artwork, Apple-Music-style.
+                Button(action: onPreview) {
+                    Image(systemName: previewing == key ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.title2).foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                }
+                .buttonStyle(.plain)
+                #endif
             }
-            .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline.weight(.medium)).lineLimit(1)
                 Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -124,16 +169,57 @@ struct SongPicker: View {
         .listRowBackground(Color.clear)
     }
 
+    /// Placeholder tile when a song has no artwork.
+    private var artworkPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.secondary.opacity(0.2))
+            .overlay(Image(systemName: "music.note").font(.system(size: 18)).foregroundStyle(.secondary))
+    }
+
+    /// Apple Music catalog artwork via MusicKit's `ArtworkImage`.
+    @ViewBuilder private func catalogArtwork(_ song: MusicKit.Song) -> some View {
+        if let art = song.artwork {
+            ArtworkImage(art, width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        } else {
+            artworkPlaceholder
+        }
+    }
+
+    #if os(iOS)
+    /// Library-song artwork rendered from the `MPMediaItem` (iOS/Catalyst only).
+    @ViewBuilder private func libraryArtwork(_ item: MPMediaItem) -> some View {
+        if let img = item.artwork?.image(at: CGSize(width: 88, height: 88)) {
+            Image(uiImage: img).resizable().scaledToFill()
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        } else {
+            artworkPlaceholder
+        }
+    }
+    #endif
+
     // MARK: - Loading + search
 
+    #if os(iOS)
     private func loadLibrary() {
         MPMediaLibrary.requestAuthorization { status in
             DispatchQueue.main.async {
                 guard status == .authorized else { libraryDenied = true; return }
-                songs = (MPMediaQuery.songs().items ?? []).sorted { ($0.title ?? "") < ($1.title ?? "") }
+                let all = (MPMediaQuery.songs().items ?? []).sorted { ($0.title ?? "") < ($1.title ?? "") }
+                // Only songs that exist in the Apple Music catalog can be shared — everyone
+                // plays the reference through their own Apple Music. Drop library-only items
+                // (imported/ripped tracks with no catalog id) so no one shares an unplayable song.
+                songs = all.filter { Self.isCatalogPlayable($0) }
+                hiddenLibraryCount = all.count - songs.count
             }
         }
     }
+
+    /// Whether a library item is backed by an Apple Music catalog id (so others can play it).
+    static func isCatalogPlayable(_ item: MPMediaItem) -> Bool {
+        let sid = item.playbackStoreID
+        return !sid.isEmpty && sid != "0"
+    }
+    #endif
 
     private func scheduleCatalogSearch() {
         searchTask?.cancel()
@@ -162,6 +248,7 @@ struct SongPicker: View {
 
     // MARK: - Preview + choose
 
+    #if os(iOS)
     private func togglePreviewLibrary(_ item: MPMediaItem) {
         let key = "\(item.persistentID)"
         if previewing == key { stopPreview() }
@@ -176,7 +263,6 @@ struct SongPicker: View {
         if previewing != nil { preview.stop() }
         previewing = nil
     }
-
     private func chooseLibrary(_ item: MPMediaItem) {
         stopPreview()
         onPick(TrackRefFfi(
@@ -188,6 +274,12 @@ struct SongPicker: View {
         ))
         dismiss()
     }
+    #else
+    // No MPMusicPlayerController on native macOS — preview is a no-op.
+    private func togglePreviewCatalog(_ song: MusicKit.Song) {}
+    private func stopPreview() { previewing = nil }
+    #endif
+
     private func chooseCatalog(_ song: MusicKit.Song) {
         stopPreview()
         // Catalog songs have no local persistent id — encode just the store id ("<id>~").

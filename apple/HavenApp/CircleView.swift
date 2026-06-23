@@ -13,6 +13,7 @@ struct CircleView: View {
     @State private var nicknameDraft = ""
 
     private var isDefault: Bool { store.activeCircleId == "default" }
+    private var nonContactMembers: [String] { store.nonContactMembers(in: store.activeCircleId) }
     private var memberIds: Set<String> { Set(store.handshaked(in: store.activeCircleId)) }
     private var membersInCircle: [Contact] {
         isDefault ? contacts.contacts : contacts.contacts.filter { memberIds.contains($0.idHex) }
@@ -37,6 +38,13 @@ struct CircleView: View {
                                 Button { nicknameDraft = c.nickname ?? ""; nicknameTarget = c } label: {
                                     Label("Set nickname", systemImage: "pencil")
                                 }
+                                Button { removeWithoutBlocking(c) } label: {
+                                    Label(isDefault ? "Remove from my circle" : "Remove from this circle",
+                                          systemImage: "person.badge.minus")
+                                }
+                                Button(role: .destructive) { store.blockConnection(c.idHex) } label: {
+                                    Label("Block", systemImage: "hand.raised.fill")
+                                }
                             }
                             .swipeActions(edge: .leading) {
                                 Button { store.forceSync() } label: {
@@ -47,6 +55,9 @@ struct CircleView: View {
                                 Button(role: .destructive) { store.blockConnection(c.idHex) } label: {
                                     Label("Block", systemImage: "hand.raised.fill")
                                 }
+                                Button { removeWithoutBlocking(c) } label: {
+                                    Label("Remove", systemImage: "person.badge.minus")
+                                }.tint(.orange)
                             }
                     }
                     .onDelete { offsets in
@@ -63,6 +74,29 @@ struct CircleView: View {
                     Text(isDefault
                          ? "“Waiting” means the secure handshake hasn't completed yet. Now just one of you needs to scan the other's invite — the other gets a request to approve. Swipe to remove, or swipe left to block."
                          : "Swipe to remove someone from just this circle (they stay in your other circles). Swipe left to block them everywhere.")
+                }
+
+                if !nonContactMembers.isEmpty {
+                    Section {
+                        ForEach(nonContactMembers, id: \.self) { idHex in
+                            HStack(spacing: 12) {
+                                Circle().fill(Color.secondary.opacity(0.5)).frame(width: 34, height: 34)
+                                    .overlay(Image(systemName: "person.fill").font(.caption).foregroundStyle(.white))
+                                Text(String(idHex.prefix(8))).font(.subheadline.monospaced())
+                                Spacer()
+                                Button { store.addMemberToMyCircle(idHex) } label: {
+                                    Label("Add", systemImage: "person.badge.plus")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .buttonStyle(.borderedProminent).tint(HavenTheme.pink).controlSize(.small)
+                            }
+                            .listRowBackground(Color.clear)
+                        }
+                    } header: {
+                        Text("Also in this circle")
+                    } footer: {
+                        Text("People sharing this circle who aren't in your My Circle yet. Add anyone to connect with them directly.")
+                    }
                 }
 
                 if !isDefault {
@@ -91,13 +125,27 @@ struct CircleView: View {
             .scrollContentBackground(.hidden)
         }
         .navigationTitle(isDefault ? "Your circle" : store.activeCircleName)
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .havenTrailing) {
+                let members = store.memberHexes(circleId: store.activeCircleId).filter { $0 != store.myNodeHex }
+                Button {
+                    CallManager.shared.startCall(participants: members, name: store.activeCircleName)
+                } label: { Image(systemName: "phone.fill") }
+                .disabled(members.isEmpty)
+                .accessibilityLabel("Start group call")
+            }
+            ToolbarItem(placement: .havenTrailing) {
                 Button { showInvite = true } label: { Image(systemName: "person.badge.plus") }
             }
+            ToolbarItem(placement: .havenTrailing) {
+                NavigationLink { CircleSettingsView(circleId: store.activeCircleId) } label: {
+                    Image(systemName: "gearshape.fill")
+                }
+                .accessibilityLabel("Circle settings")
+            }
         }
-        .sheet(isPresented: $showInvite) { ConnectView(account: account, contacts: contacts) }
+        .sheet(isPresented: $showInvite) { ConnectView(account: account, contacts: contacts).macSheetClose() }
         .alert("Nickname", isPresented: Binding(get: { nicknameTarget != nil }, set: { if !$0 { nicknameTarget = nil } })) {
             TextField("Nickname", text: $nicknameDraft)
             Button("Save") { if let c = nicknameTarget { ContactsStore.shared.setNickname(idHex: c.idHex, nicknameDraft) }; nicknameTarget = nil }
@@ -106,11 +154,16 @@ struct CircleView: View {
         } message: { Text("How this person shows up for you — long-press anyone in your circle to set it.") }
     }
 
+    /// Remove someone from this circle without blocking them. In the default circle this drops
+    /// them from your contacts (My Circle); in a custom circle it removes them from just that one.
+    private func removeWithoutBlocking(_ c: Contact) {
+        if isDefault { contacts.remove(c) } else { store.removeFromActiveCircle(c.idHex) }
+    }
+
     private func row(_ c: Contact) -> some View {
         let connected = store.isConnected(c.idHex)
         return HStack(spacing: 12) {
-            Circle().fill(HavenTheme.brand).frame(width: 38, height: 38)
-                .overlay(Text(String(c.displayName.prefix(1))).font(.subheadline.bold()).foregroundStyle(.white))
+            PeerAvatar(nodeHex: c.idHex, name: c.displayName, size: 38)
             VStack(alignment: .leading, spacing: 2) {
                 Text(c.displayName).font(.subheadline.weight(.medium))
                 HStack(spacing: 5) {

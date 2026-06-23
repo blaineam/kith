@@ -29,6 +29,7 @@ final class AccountStore: ObservableObject {
                 // it in the recoverable identity history.
                 Self.saveSeed(seed)
                 Self.archive(seed)
+                SharedSeed.write(seed)   // mirror into the shared group for the NSE
             } else {
                 // Seed present but un-deriveable — NEVER overwrite it; use a temp identity.
                 account = Account.generate(); usingTemporaryIdentity = true
@@ -38,6 +39,7 @@ final class AccountStore: ObservableObject {
             let fresh = Account.generate()
             Self.saveSeed(fresh.secretSeed())
             Self.archive(fresh.secretSeed())
+            SharedSeed.write(fresh.secretSeed())
             account = fresh
         case .lockedOrError:
             // Keychain not accessible yet (locked). Generating + saving here would DESTROY the
@@ -53,6 +55,7 @@ final class AccountStore: ObservableObject {
               let restored = try? Account.fromSeed(seed: seed) else { return }
         account = restored
         usingTemporaryIdentity = false
+        SharedSeed.write(seed)
         FeedStore.shared.reconfigure(seed: account.secretSeed())
     }
 
@@ -63,7 +66,9 @@ final class AccountStore: ObservableObject {
         Self.deleteSeed()
         let fresh = Account.generate()
         Self.saveSeed(fresh.secretSeed())
+        SharedSeed.write(fresh.secretSeed())
         account = fresh
+        ProfileStore.shared.reloadForCurrentIdentity()   // a fresh identity starts with its own blank profile
     }
 
     // MARK: - Multi-device: iCloud Keychain sync
@@ -74,12 +79,20 @@ final class AccountStore: ObservableObject {
     /// Used by App Intents so they act as *this* account without spinning up a new one.
     static func storedSeed() -> Data? { loadSeed() }
 
+    /// The node-id hex of the currently stored identity (empty if none/locked). Used to namespace
+    /// per-identity data (the profile) so each identity keeps its own name/photo.
+    static func currentNodeHex() -> String {
+        guard let seed = loadSeed(), let acct = try? Account.fromSeed(seed: seed) else { return "" }
+        return acct.nodeIdHex()
+    }
+
     /// Turn iCloud Keychain identity sync on/off and re-store the seed accordingly.
     func setICloudSync(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: Self.syncDefaultsKey)
         let seed = account.secretSeed()
         Self.deleteSeed()
         Self.saveSeed(seed, synced: on)
+        SharedSeed.write(seed)
     }
 
     // MARK: - Multi-device: transfer code / QR
@@ -100,6 +113,7 @@ final class AccountStore: ObservableObject {
               let restored = try? Account.fromSeed(seed: seed) else { return false }
         Self.deleteSeed()
         Self.saveSeed(seed, synced: Self.iCloudSyncEnabled)
+        SharedSeed.write(seed)
         account = restored
         return true
     }
@@ -209,6 +223,67 @@ final class AccountStore: ObservableObject {
         return arr
     }
 
+    // MARK: - Identity roster (switch between identities you've used)
+
+    /// One entry in the identity switcher: the seed (base64), its node id, a friendly label, and
+    /// whether it's the one currently in use.
+    struct IdentitySummary: Identifiable {
+        let seedB64: String
+        let nodeHex: String
+        let name: String
+        let isCurrent: Bool
+        var id: String { seedB64 }
+    }
+
+    /// Friendly labels for identities, keyed by node-id hex (the seed history only stores raw
+    /// seeds). The current identity's label tracks the profile name; past ones keep what they were
+    /// last called. Stored locally — the seeds themselves sync via iCloud Keychain when enabled.
+    private static let labelsKey = "haven.identity.labels"
+    static func identityLabels() -> [String: String] {
+        (UserDefaults.standard.dictionary(forKey: labelsKey) as? [String: String]) ?? [:]
+    }
+    static func setIdentityLabel(_ name: String, forNodeHex hex: String) {
+        guard !hex.isEmpty, !name.isEmpty else { return }
+        var m = identityLabels(); m[hex] = name
+        UserDefaults.standard.set(m, forKey: labelsKey)
+    }
+
+    /// The full roster: the active identity first, then every past identity (deduped), each labeled.
+    func roster() -> [IdentitySummary] {
+        let labels = Self.identityLabels()
+        func label(_ hex: String) -> String {
+            if let n = labels[hex], !n.isEmpty { return n }
+            return "Identity " + String(hex.prefix(6))
+        }
+        let currentB64 = account.secretSeed().base64EncodedString()
+        let currentHex = account.nodeIdHex()
+        let profileName = ProfileStore.shared.displayName
+        let currentName = profileName.isEmpty ? label(currentHex) : profileName
+        var out = [IdentitySummary(seedB64: currentB64, nodeHex: currentHex, name: currentName, isCurrent: true)]
+        var seen: Set<String> = [currentB64]
+        for b64 in Self.previousIdentities() where !seen.contains(b64) {
+            seen.insert(b64)
+            guard let seed = Data(base64Encoded: b64), seed.count == 32,
+                  let acct = try? Account.fromSeed(seed: seed) else { continue }
+            out.append(IdentitySummary(seedB64: b64, nodeHex: acct.nodeIdHex(),
+                                       name: label(acct.nodeIdHex()), isCurrent: false))
+        }
+        return out
+    }
+
+    /// Remember the active identity's current display name so it stays labeled after switching away.
+    func rememberCurrentLabel() {
+        Self.setIdentityLabel(ProfileStore.shared.displayName, forNodeHex: account.nodeIdHex())
+    }
+
+    /// Switch to a roster identity by its seed. Archives the current one first so it stays in the
+    /// roster to switch back to. Returns false on a bad seed.
+    @discardableResult
+    func switchToIdentity(seedB64: String) -> Bool {
+        rememberCurrentLabel()
+        return restoreIdentity(seedB64)
+    }
+
     /// Roll back to a previous identity from the history (current one is archived first).
     @discardableResult
     func restoreIdentity(_ b64: String) -> Bool {
@@ -216,8 +291,10 @@ final class AccountStore: ObservableObject {
               let restored = try? Account.fromSeed(seed: seed) else { return false }
         Self.archive(account.secretSeed())
         Self.saveSeed(seed)
+        SharedSeed.write(seed)
         account = restored
         FeedStore.shared.reconfigure(seed: account.secretSeed())
+        ProfileStore.shared.reloadForCurrentIdentity()   // load this identity's own name/photo/bio
         return true
     }
 }

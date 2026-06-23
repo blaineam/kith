@@ -1,4 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 import CryptoKit
 import Security
 
@@ -7,20 +12,10 @@ import Security
 /// Crucially: Haven never hosts any API keys or client secrets — S3 keys live in the
 /// Keychain on-device, and drive logins use OAuth 2.0 + PKCE (public clients, no secret).
 enum StorageProvider: String, CaseIterable, Identifiable {
-    case icloud, s3
+    case s3   // iCloud removed: Apple-only + never wired for sharing. Relay (toggle) or S3 only.
     var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .icloud: return "Your iCloud"
-        case .s3: return "Custom S3 bucket"
-        }
-    }
-    var icon: String {
-        switch self {
-        case .icloud: return "icloud.fill"
-        case .s3: return "externaldrive.fill"
-        }
-    }
+    var title: String { "Custom S3 bucket" }
+    var icon: String { "externaldrive.fill" }
 }
 
 @MainActor
@@ -40,7 +35,7 @@ final class StorageStore: ObservableObject {
 
     private let d = UserDefaults.standard
     private init() {
-        provider = StorageProvider(rawValue: d.string(forKey: "haven.storage.provider") ?? "") ?? .icloud
+        provider = .s3
         s3Endpoint = d.string(forKey: "haven.s3.endpoint") ?? ""
         s3Region = d.string(forKey: "haven.s3.region") ?? "us-east-1"
         s3Bucket = d.string(forKey: "haven.s3.bucket") ?? ""
@@ -53,14 +48,82 @@ final class StorageStore: ObservableObject {
 }
 
 struct StorageSettingsView: View {
-    @ObservedObject private var store = StorageStore.shared
+    /// The circle being configured (nil = the active circle, for the global Settings entry).
+    var circleId: String? = nil
     @ObservedObject private var mailbox = SharedMailboxStore.shared
-    @State private var shared = false
+    @ObservedObject private var relay = RelayHost.shared
+    @State private var relayAdopted = false
+    @State private var startAtLogin = false
+    @State private var loginItemError: String?
+
+    private var cid: String { circleId ?? FeedStore.shared.activeCircleId }
 
     var body: some View {
         ZStack {
             HavenBackground()
             Form {
+                // The common path: make this device the circle's mailbox with one toggle.
+                Section {
+                    Toggle(isOn: Binding(get: { relay.enabled }, set: { relay.setEnabled($0) })) {
+                        Label("Be your circle's relay", systemImage: "externaldrive.connected.to.line.below.fill")
+                    }
+                    .tint(HavenTheme.pink)
+                    if relay.serving && !relay.nodeId.isEmpty {
+                        Label("Relaying for your circles · \(String(relay.nodeId.prefix(8)))…", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    } else if relay.enabled {
+                        Label("Starting…", systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+                    }
+                    // Mac-only: keep the relay always-on by relaunching Haven at login. Catalyst
+                    // can't run a true headless/menu-bar agent, so the best achievable is to
+                    // auto-launch at login and keep relaying for the life of the process — leave a
+                    // Haven window open (it can stay in the background) and the relay keeps serving.
+                    if relay.enabled && relay.loginItemSupported {
+                        Toggle(isOn: Binding(get: { startAtLogin }, set: { setStartAtLogin($0) })) {
+                            Label("Start Haven at login (keep the relay running)", systemImage: "power")
+                        }
+                        .tint(HavenTheme.pink)
+                        if let err = loginItemError {
+                            Label(err, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                        Text("With this on, Haven relays invisibly in the background: close the window and it keeps serving your circle with no dock icon (launch Haven again to reopen it). At login it starts hidden — launch it a second time to open the window, like the first time.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Circle relay")
+                } footer: {
+                    Text(relay.isDesktopClass
+                         ? "Turn this Mac into your circles' always-available mailbox — sealed (unreadable) posts and media are stored here and re-served to your circle whenever someone's been offline. Just leave Haven running."
+                         : "Use this device as your circles' mailbox — sealed posts/media live here and re-serve when someone's offline. On iPhone/iPad it serves while Haven is open and the screen's on (keep it on a charger); a Mac or the desktop app is best for always-on. No setup, no cloud.")
+                }
+                // Reuse a mailbox you already set up on another circle — a simple one-tap pick.
+                let others = RelayMailboxStore.shared.circlesWithRelay(excluding: cid)
+                if !others.isEmpty {
+                    Section {
+                        ForEach(others, id: \.self) { other in
+                            if let node = RelayMailboxStore.shared.explicitNode(forCircle: other) {
+                                Button {
+                                    FeedStore.shared.adoptRelayNode(node, circleIds: [cid], setDefault: false)
+                                    relayAdopted = true
+                                } label: {
+                                    HStack {
+                                        Label(FeedStore.shared.circles.first { $0.id == other }?.name ?? "Another circle",
+                                              systemImage: "arrow.triangle.2.circlepath")
+                                        Spacer()
+                                        Text("\(node.prefix(8))…").font(.caption.monospaced()).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        if relayAdopted {
+                            Label("Connected — used as the mailbox", systemImage: "checkmark.circle.fill")
+                                .font(.caption).foregroundStyle(.green)
+                        }
+                    } header: { Text("Use another circle's mailbox") }
+                    footer: { Text("Point this circle at a relay you already connected for a different circle.") }
+                }
+
                 if let cfg = mailbox.config {
                     Section {
                         Label("Connected to your circle's relay", systemImage: "antenna.radiowaves.left.and.right")
@@ -69,36 +132,120 @@ struct StorageSettingsView: View {
                         Button(role: .destructive) { SharedMailboxStore.shared.clear() } label: {
                             Text("Stop using this relay")
                         }
-                    } header: { Text("Circle relay") }
+                    } header: { Text("Active mailbox") }
                     footer: { Text("Your circle shares this bucket so posts arrive even when people are offline. Only sealed, unreadable blobs are stored there.") }
                 }
-                Section {
-                    ForEach(StorageProvider.allCases) { p in
-                        Button { store.provider = p } label: {
-                            HStack {
-                                Label(p.title, systemImage: p.icon).foregroundStyle(.primary)
-                                Spacer()
-                                if store.provider == p { Image(systemName: "checkmark").foregroundStyle(HavenTheme.pink) }
-                            }
-                        }
-                    }
-                } header: { Text("Where your media lives") }
-                footer: { Text("Your media is end-to-end encrypted before it's stored anywhere. Haven never holds your keys or any provider secrets.") }
 
-                if store.provider == .s3 { s3Section }
+                // Power-user options live one tap deeper so the common path stays uncluttered:
+                // connecting an external relay daemon by node id, or bringing your own S3 bucket.
+                Section {
+                    NavigationLink {
+                        AdvancedStorageView(circleId: circleId)
+                    } label: {
+                        Label("Advanced", systemImage: "slider.horizontal.3")
+                    }
+                } footer: {
+                    Text("Connect an external always-on relay (a Mac, Linux box, or spare device running `haven-relay`), or point Haven at your own S3-compatible bucket. Optional — the toggle above is all most people need.")
+                }
             }
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Storage")
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
+        .onAppear { startAtLogin = relay.startsAtLogin }
+    }
+
+    /// Register/unregister Haven as a macOS login item, reflecting the real status back into the
+    /// toggle and surfacing any error (e.g. unsigned dev build) instead of crashing.
+    private func setStartAtLogin(_ on: Bool) {
+        loginItemError = nil
+        do {
+            try relay.setStartAtLogin(on)
+        } catch {
+            loginItemError = "Couldn't \(on ? "enable" : "disable") start-at-login: \(error.localizedDescription)"
+        }
+        // Reflect the OS's actual state (the user may have it disabled in System Settings).
+        startAtLogin = relay.startsAtLogin
+    }
+
+}
+
+/// Power-user storage, one tap below the simple relay toggle on the Storage screen: connect an
+/// external `haven-relay` daemon by node id, or bring your own S3-compatible bucket. Kept off the
+/// main screen so the common path (flip "Be your circle's relay") stays clean — advanced users
+/// drill in when they need it.
+struct AdvancedStorageView: View {
+    var circleId: String? = nil
+    @ObservedObject private var store = StorageStore.shared
+    @State private var relayNodeInput = ""
+    @State private var relayAdopted = false
+    @State private var linkCopied = false
+    @State private var applyToAll = true
+    @State private var shared = false
+
+    private var cid: String { circleId ?? FeedStore.shared.activeCircleId }
+
+    var body: some View {
+        ZStack {
+            HavenBackground()
+            Form {
+                // Connect an external always-on relay daemon (Mac/Linux/an old device running
+                // `haven-relay`): hand it this circle's link, then paste back the node id it prints
+                // so the whole circle adopts it.
+                Section {
+                    Button {
+                        if let link = FeedStore.shared.relayLink() {
+                            PlatformPasteboard.string = link
+                            linkCopied = true
+                        }
+                    } label: {
+                        Label(linkCopied ? "Copied — run: haven-relay run --link …" : "1. Copy this circle's relay link",
+                              systemImage: linkCopied ? "checkmark.circle.fill" : "doc.on.doc")
+                            .foregroundStyle(linkCopied ? Color.green : HavenTheme.pink)
+                    }
+                    TextField("2. Paste the daemon's node id (64 hex)", text: $relayNodeInput)
+                        .autocorrectionDisabled().havenAutocap(.never)
+                        .font(.system(.footnote, design: .monospaced))
+                    Toggle("Use for all my circles (now & future)", isOn: $applyToAll).tint(HavenTheme.pink)
+                    Button {
+                        let id = relayNodeInput.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        guard id.count == 64, id.allSatisfy({ $0.isHexDigit }) else { return }
+                        let targets = applyToAll ? FeedStore.shared.circles.map(\.id) : [cid]
+                        FeedStore.shared.adoptRelayNode(id, circleIds: targets, setDefault: applyToAll)
+                        relayAdopted = true; relayNodeInput = ""
+                    } label: {
+                        Label(applyToAll ? "Connect for all my circles" : "Connect for this circle",
+                              systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .disabled(relayNodeInput.trimmingCharacters(in: .whitespacesAndNewlines).count != 64)
+                    if relayAdopted {
+                        Label("Connected — used as the mailbox", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    }
+                } header: { Text("Connect an external relay") }
+                footer: {
+                    Text("Running `haven-relay` on a Mac, Linux box, or a spare device? Copy the link above and start it with `haven-relay run --link <link>`, then paste back the node id it shows (`haven-relay id`). No cloud, no credentials.")
+                }
+
+                Section {
+                    Text("Bring your own S3-compatible bucket instead: your key stays on this device and the circle gets scoped, expiring **pre-signed URLs**, never the secret.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } header: { Text("Your own S3 bucket") }
+
+                s3Section
+            }
+            .scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Advanced")
+        .havenInlineNavTitle()
     }
 
     @ViewBuilder private var s3Section: some View {
         Section {
-            TextField("Endpoint (e.g. s3.amazonaws.com)", text: $store.s3Endpoint).autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Region", text: $store.s3Region).autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Bucket", text: $store.s3Bucket).autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Access key id", text: $store.s3AccessKey).autocorrectionDisabled().textInputAutocapitalization(.never)
+            TextField("Endpoint (e.g. s3.amazonaws.com)", text: $store.s3Endpoint).autocorrectionDisabled().havenAutocap(.never)
+            TextField("Region", text: $store.s3Region).autocorrectionDisabled().havenAutocap(.never)
+            TextField("Bucket", text: $store.s3Bucket).autocorrectionDisabled().havenAutocap(.never)
+            TextField("Access key id", text: $store.s3AccessKey).autocorrectionDisabled().havenAutocap(.never)
             SecureField("Secret access key", text: $store.s3Secret)
             if store.s3Configured {
                 Label("Saved on this device", systemImage: "checkmark.seal.fill").foregroundStyle(.green).font(.caption)
@@ -123,7 +270,6 @@ struct StorageSettingsView: View {
             footer: { Text("Your bucket becomes the circle's shared mailbox: every post is stored sealed and re-served to anyone who's missing it — so messages and memories arrive even when the sender is offline and you're never online at the same time. Tap “Share as my circle's relay” to send these credentials (sealed, only your circle can open them) so everyone uses the same bucket — rent one from any S3 provider, no server to run. Heads up: members you share with can read (still sealed) and write to the bucket, so only share with a circle you trust, and rotate the key if someone leaves.") }
         }
     }
-
 }
 
 /// OAuth 2.0 PKCE helpers (public client — no secret). Retained for a future

@@ -9,20 +9,37 @@ final class ProfileStore: ObservableObject {
     static let shared = ProfileStore()
 
     @Published var displayName: String { didSet { defaults.set(displayName, forKey: nameKey) } }
-    @Published var emoji: String { didSet { defaults.set(emoji, forKey: emojiKey) } }
+    @Published var emoji: String { didSet { defaults.set(emoji, forKey: emojiKey); FeedStore.shared.rebroadcastProfile() } }
     @Published var onboarded: Bool { didSet { defaults.set(onboarded, forKey: doneKey) } }
-    @Published private(set) var avatar: UIImage?
+    /// A short bio + a link the user chooses to show — a little "business card" shared,
+    /// signed and end-to-end, with the people they connect to.
+    @Published var bio: String { didSet { defaults.set(bio, forKey: bioKey) } }
+    @Published var link: String { didSet { defaults.set(link, forKey: linkKey) } }
+    @Published private(set) var avatar: PlatformImage?
 
     private let defaults = UserDefaults.standard
-    private let nameKey = "haven.displayName"
-    private let emojiKey = "haven.emoji"
+    /// Profile fields are namespaced per identity (by node-id hex) so each identity keeps its own
+    /// name/photo/emoji/bio/link, and switching identities loads the right one. `onboarded` stays
+    /// global — it's about the app, not an identity.
+    private var ns: String = AccountStore.currentNodeHex()
+    private func key(_ base: String) -> String { ns.isEmpty ? base : "\(base).\(ns)" }
+    private var nameKey: String { key("haven.displayName") }
+    private var emojiKey: String { key("haven.emoji") }
     private let doneKey = "haven.onboarded"
+    private var bioKey: String { key("haven.bio") }
+    private var linkKey: String { key("haven.link") }
 
     private init() {
-        displayName = defaults.string(forKey: nameKey) ?? ""
-        emoji = defaults.string(forKey: emojiKey) ?? "🌿"
-        onboarded = defaults.bool(forKey: doneKey)
-        avatar = Self.loadAvatar()
+        let d = UserDefaults.standard
+        let ns0 = AccountStore.currentNodeHex()
+        Self.migrateLegacyIfNeeded(ns: ns0, d: d)
+        func k(_ base: String) -> String { ns0.isEmpty ? base : "\(base).\(ns0)" }
+        displayName = d.string(forKey: k("haven.displayName")) ?? ""
+        emoji = d.string(forKey: k("haven.emoji")) ?? "🌿"
+        onboarded = d.bool(forKey: "haven.onboarded")
+        bio = d.string(forKey: k("haven.bio")) ?? ""
+        link = d.string(forKey: k("haven.link")) ?? ""
+        avatar = Self.loadAvatar(ns: ns0)
 
         if ProcessInfo.processInfo.environment["HAVEN_SKIP_ONBOARDING"] == "1" {
             if displayName.isEmpty { displayName = "You" }
@@ -30,23 +47,72 @@ final class ProfileStore: ObservableObject {
         }
     }
 
-    /// Set or clear the custom profile photo (emoji remains the fallback).
-    func setAvatar(_ image: UIImage?) {
-        avatar = image
-        if let image, let data = image.jpegData(compressionQuality: 0.85) {
-            try? data.write(to: Self.avatarURL)
-        } else {
-            try? FileManager.default.removeItem(at: Self.avatarURL)
+    /// Re-read all profile fields for the now-current identity (call right after an identity switch
+    /// / reset). Republishes to the UI; the emoji didSet re-broadcasts this identity's card.
+    func reloadForCurrentIdentity() {
+        ns = AccountStore.currentNodeHex()
+        Self.migrateLegacyIfNeeded(ns: ns, d: defaults)
+        displayName = defaults.string(forKey: nameKey) ?? ""
+        bio = defaults.string(forKey: bioKey) ?? ""
+        link = defaults.string(forKey: linkKey) ?? ""
+        emoji = defaults.string(forKey: emojiKey) ?? "🌿"
+        avatar = Self.loadAvatar(ns: ns)
+        avatarB64Cache = nil
+    }
+
+    /// One-time: copy the pre-namespacing (global) profile into the CURRENT identity's namespace so
+    /// existing users keep their name/photo on the identity they're already using. Identities created
+    /// afterward start blank (the flag stops legacy values leaking into every new identity).
+    private static func migrateLegacyIfNeeded(ns: String, d: UserDefaults) {
+        guard !ns.isEmpty, !d.bool(forKey: "haven.profile.migrated") else { return }
+        d.set(true, forKey: "haven.profile.migrated")
+        for base in ["haven.displayName", "haven.emoji", "haven.bio", "haven.link"] {
+            if let v = d.string(forKey: base) { d.set(v, forKey: "\(base).\(ns)") }
+        }
+        let legacy = avatarURL(ns: "")
+        let target = avatarURL(ns: ns)
+        if FileManager.default.fileExists(atPath: legacy.path),
+           !FileManager.default.fileExists(atPath: target.path) {
+            try? FileManager.default.copyItem(at: legacy, to: target)
         }
     }
 
-    private static var avatarURL: URL {
+    /// A small (≤192px) JPEG of the avatar, base64-encoded — light enough to ride the signed
+    /// profile card so circle members see your real photo. Empty when there's no photo.
+    /// Cached: re-rendering the JPEG on every handshake reply was heavy enough to hitch the main
+    /// thread under a burst of handshakes — invalidated whenever the photo changes (`setAvatar`).
+    private var avatarB64Cache: String?
+    var avatarBase64: String {
+        if let c = avatarB64Cache { return c }
+        guard let avatar else { avatarB64Cache = ""; return "" }
+        // Cross-platform downscale (Platform.swift) — was UIGraphicsImageRenderer (iOS-only).
+        let small = avatar.downscaled(maxDimension: 192)
+        let b64 = small.jpegData(compressionQuality: 0.7)?.base64EncodedString() ?? ""
+        avatarB64Cache = b64
+        return b64
+    }
+
+    /// Set or clear the custom profile photo (emoji remains the fallback).
+    func setAvatar(_ image: PlatformImage?) {
+        avatar = image
+        avatarB64Cache = nil   // re-encode lazily next time the card is built
+        let url = Self.avatarURL(ns: ns)
+        if let image, let data = image.jpegData(compressionQuality: 0.85) {
+            try? data.write(to: url)
+        } else {
+            try? FileManager.default.removeItem(at: url)
+        }
+        FeedStore.shared.rebroadcastProfile()   // push my new photo to people I'm connected to
+    }
+
+    /// Per-identity avatar file (`ns` empty = the legacy global file, used for migration).
+    private static func avatarURL(ns: String) -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("haven-avatar.jpg")
+        return dir.appendingPathComponent(ns.isEmpty ? "haven-avatar.jpg" : "haven-avatar-\(ns).jpg")
     }
-    private static func loadAvatar() -> UIImage? {
-        (try? Data(contentsOf: avatarURL)).flatMap(UIImage.init)
+    private static func loadAvatar(ns: String) -> PlatformImage? {
+        (try? Data(contentsOf: avatarURL(ns: ns))).flatMap { PlatformImage(data: $0) }
     }
 
     static let avatarChoices = ["🌿", "🌸", "🔥", "⭐️", "🦊", "🐢", "🌊", "🍯", "🎈", "🪴", "🦋", "🌙"]
@@ -54,7 +120,7 @@ final class ProfileStore: ObservableObject {
 
 /// A profile avatar: the custom photo if set, otherwise the emoji on a brand circle.
 struct HavenAvatar: View {
-    var image: UIImage?
+    var image: PlatformImage?
     var emoji: String
     var size: CGFloat
     var gradient: LinearGradient = HavenTheme.brand
@@ -62,7 +128,7 @@ struct HavenAvatar: View {
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                Image(platformImage: image).resizable().scaledToFill()
             } else {
                 gradient.overlay(Text(emoji).font(.system(size: size * 0.5)))
             }
@@ -72,9 +138,52 @@ struct HavenAvatar: View {
     }
 }
 
-/// Single-image picker (Photos library) returning a `UIImage`.
+/// Another person's avatar — their synced photo, else their synced emoji, else an initialed
+/// gradient. Resolved from the signed profile card we stored on the contact.
+struct PeerAvatar: View {
+    let nodeHex: String
+    let name: String
+    var size: CGFloat = 34
+    @ObservedObject private var contacts = ContactsStore.shared
+
+    var body: some View {
+        if let img = contacts.avatarImage(forNodePrefix: nodeHex) {
+            HavenAvatar(image: img, emoji: "", size: size)
+        } else if let e = contacts.emoji(forNodePrefix: nodeHex), !e.isEmpty {
+            HavenAvatar(image: nil, emoji: e, size: size)
+        } else {
+            Circle()
+                .fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
+                .frame(width: size, height: size)
+                .overlay(Text(String(name.prefix(1))).font(.system(size: size * 0.4, weight: .bold)).foregroundStyle(.white))
+        }
+    }
+}
+
+#if os(macOS)
+/// Native macOS single-image picker via `NSOpenPanel` (no PHPicker presentation on Mac).
+/// Renders nothing; opens the panel on appear and returns the chosen image.
+struct SingleImagePicker: View {
+    var onPicked: (PlatformImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Color.clear.onAppear {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.image]
+            panel.allowsMultipleSelection = false
+            panel.canChooseDirectories = false
+            if panel.runModal() == .OK, let url = panel.url, let img = NSImage(contentsOf: url) {
+                onPicked(img)
+            }
+            dismiss()
+        }
+    }
+}
+#else
+/// Single-image picker (Photos library) returning a `PlatformImage`.
 struct SingleImagePicker: UIViewControllerRepresentable {
-    var onPicked: (UIImage) -> Void
+    var onPicked: (PlatformImage) -> Void
     @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
@@ -93,15 +202,16 @@ struct SingleImagePicker: UIViewControllerRepresentable {
         init(_ parent: SingleImagePicker) { self.parent = parent }
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             defer { parent.dismiss() }
-            guard let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: UIImage.self) else { return }
-            provider.loadObject(ofClass: UIImage.self) { object, _ in
-                if let img = object as? UIImage {
+            guard let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: PlatformImage.self) else { return }
+            provider.loadObject(ofClass: PlatformImage.self) { object, _ in
+                if let img = object as? PlatformImage {
                     Task { @MainActor in self.parent.onPicked(img) }
                 }
             }
         }
     }
 }
+#endif
 
 /// Edit your name, emoji, and profile photo.
 struct EditProfileSheet: View {
@@ -115,6 +225,8 @@ struct EditProfileSheet: View {
                 HavenBackground()
                 ScrollView {
                     VStack(spacing: 22) {
+                        Color.clear.frame(height: 0)
+                            .onDisappear { FeedStore.shared.rebroadcastProfile() }   // sync edits to contacts
                         HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 110)
                             .shadow(color: HavenTheme.pink.opacity(0.3), radius: 14, y: 8)
 
@@ -134,6 +246,24 @@ struct EditProfileSheet: View {
                             .padding(.vertical, 12).background(.background, in: Capsule())
                             .overlay(Capsule().strokeBorder(Color.white.opacity(0.1))).padding(.horizontal, 30)
 
+                        VStack(spacing: 10) {
+                            TextField("Add a short bio", text: $profile.bio, axis: .vertical)
+                                .lineLimit(1...3)
+                                .havenAutocap(.sentences)
+                                .padding(12).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.1)))
+                            TextField("Add a link (e.g. yoursite.com)", text: $profile.link)
+                                .havenAutocap(.never)
+                                .autocorrectionDisabled()
+                                .havenURLKeyboard()
+                                .padding(12).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.1)))
+                        }
+                        .font(.subheadline).padding(.horizontal, 24)
+                        Text("Your bio and link show on your profile for the people in your circle.")
+                            .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            .padding(.horizontal, 30)
+
                         Text(profile.avatar == nil ? "Pick an emoji" : "Emoji (used if you remove your photo)")
                             .font(.footnote).foregroundStyle(.secondary)
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
@@ -149,8 +279,8 @@ struct EditProfileSheet: View {
                 }
             }
             .navigationTitle("Edit profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenConfirmTrailing) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showPhotoPicker) {
                 SingleImagePicker { profile.setAvatar($0) }
             }

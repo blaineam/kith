@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// "Secret" DM messages: concealed until tapped, screenshot-protected, and auto-conceal
 /// after a few seconds. The secret flag rides in the message body behind a control char,
@@ -47,9 +51,12 @@ struct SecretBubble: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { reveal() }
+        #if canImport(UIKit)
+        // iOS notifies when a screenshot is taken; re-conceal. No macOS equivalent.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
             withAnimation(.easeOut(duration: 0.2)) { revealed = false }
         }
+        #endif
         .onDisappear { concealTask?.cancel() }
     }
 
@@ -67,6 +74,15 @@ struct SecretBubble: View {
     }
 }
 
+#if os(macOS)
+/// Native macOS has no UITextField secure-entry screenshot exclusion; render content directly.
+/// (Screenshot *detection* re-conceal also doesn't exist on macOS — secret bubbles still work
+/// via tap-to-reveal + auto-conceal.)
+struct ScreenshotProtected<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View { content }
+}
+#else
 /// Hosts a SwiftUI view inside a secure-text-entry layer, which iOS excludes from
 /// screenshots and screen recordings.
 struct ScreenshotProtected<Content: View>: UIViewRepresentable {
@@ -100,3 +116,4 @@ struct ScreenshotProtected<Content: View>: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator { var host: UIHostingController<Content>? }
 }
+#endif

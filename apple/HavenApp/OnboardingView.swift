@@ -8,7 +8,7 @@ struct OnboardingView: View {
     @State private var step = 0
     @State private var name = ""
     @State private var emoji = "🌿"
-    @State private var pickedImage: UIImage?
+    @State private var pickedImage: PlatformImage?
     @State private var showPhotoPicker = false
     @State private var showRestore = false
 

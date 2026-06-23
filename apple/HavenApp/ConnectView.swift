@@ -41,8 +41,8 @@ struct ConnectView: View {
                 }
             }
             .navigationTitle("Connect")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenConfirmTrailing) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showScanner) { scannerSheet }
             .onAppear {
                 guard let link = incomingLink, !link.isEmpty else { return }
@@ -74,8 +74,8 @@ struct ConnectView: View {
                 }
             }
             .navigationTitle("Scan QR")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { showScanner = false } } }
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenCancelTrailing) { Button("Cancel") { showScanner = false } } }
         }
     }
 
@@ -90,7 +90,7 @@ struct ConnectView: View {
                 .multilineTextAlignment(.center)
 
             if let qr = QRCode.image(from: account.havenLink(domain: HavenSite.inviteDomain)) {
-                Image(uiImage: qr)
+                Image(platformImage: qr)
                     .interpolation(.none).resizable().scaledToFit()
                     .frame(width: 210, height: 210)
                     .padding(12)

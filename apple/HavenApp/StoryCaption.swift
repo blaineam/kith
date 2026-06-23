@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Instagram-style story captions: pick a color, tap through typography styles, and
-/// toggle between "text color (with glow)" and "color as a highlight behind the text".
-/// The choice is encoded into the story body so the viewer renders it identically.
+/// Instagram-style story captions: pick a color, cycle typography, and cycle a "style" —
+/// plain, glow, shadow, neon, or a per-line highlight. The choice is encoded into the story
+/// body so every viewer renders it identically.
 enum StoryCaptions {
     static let colors: [Color] = [
         .white, .black, HavenTheme.pink, HavenTheme.violet, HavenTheme.amber,
@@ -15,21 +15,59 @@ enum StoryCaptions {
     static let minSize = 0.6
     static let maxSize = 1.9
 
+    /// The "highlight" styles the user toggles through (like the font cycle).
+    enum Style: Int, CaseIterable {
+        case plain      // colored text, subtle shadow for legibility
+        case glow       // colored text with a soft glow in its own color
+        case shadow     // colored text with a strong drop shadow
+        case neon       // bright text with a double colored glow
+        case highlight  // color block behind the text, hugging each line
+
+        var label: String {
+            switch self {
+            case .plain: return "Plain"
+            case .glow: return "Glow"
+            case .shadow: return "Shadow"
+            case .neon: return "Neon"
+            case .highlight: return "Highlight"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .plain: return "textformat"
+            case .glow: return "sun.max"
+            case .shadow: return "shadow"
+            case .neon: return "sparkles"
+            case .highlight: return "highlighter"
+            }
+        }
+    }
+
     struct Spec: Equatable {
         var color = 0
         var font = 0
-        var highlight = false
+        var styleRaw = Style.glow.rawValue
         /// Normalized caption position (0…1) so the viewer renders it where the author
         /// dragged it. Defaults to centred.
         var x = 0.5
         var y = 0.5
         /// Caption size scale the author sets while composing (base 28pt × size).
         var size = 1.0
+        /// How the author framed the media in the story: a zoom scale and a normalized
+        /// translation (fraction of the canvas). Travels so viewers see the same framing
+        /// without re-encoding the photo/video.
+        var mediaScale = 1.0
+        var mediaOffX = 0.0
+        var mediaOffY = 0.0
+
+        var style: Style { Style(rawValue: styleRaw) ?? .glow }
+        var hasMediaTransform: Bool { mediaScale != 1.0 || mediaOffX != 0 || mediaOffY != 0 }
         mutating func cycleFont() { font = (font + 1) % fontStyles.count }
+        mutating func cycleStyle() { styleRaw = (styleRaw + 1) % Style.allCases.count }
     }
 
-    static func textColor(_ s: Spec) -> Color { s.highlight ? contrast(s.color) : colors[idx(s.color)] }
-    static func bgColor(_ s: Spec) -> Color? { s.highlight ? colors[idx(s.color)] : nil }
+    static func textColor(_ s: Spec) -> Color { s.style == .highlight ? contrast(s.color) : colors[idx(s.color)] }
+    static func bgColor(_ s: Spec) -> Color? { s.style == .highlight ? colors[idx(s.color)] : nil }
     static func font(_ s: Spec) -> Font {
         let style = fontStyles[min(max(0, s.font), fontStyles.count - 1)]
         return .system(size: 28 * s.size, weight: style.weight, design: style.design)
@@ -43,19 +81,27 @@ enum StoryCaptions {
 
     static func encode(_ caption: String, _ s: Spec) -> String {
         let t = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return "" }
-        let extra = String(format: "%.3f,%.3f,%.3f", s.x, s.y, s.size)
-        return "\u{1}\(s.color),\(s.font),\(s.highlight ? 1 : 0),\(extra)\u{1}\(t)"
+        // Encode even with no caption when the author reframed the media (so the zoom travels).
+        guard !t.isEmpty || s.hasMediaTransform else { return "" }
+        // color,font,style,x,y,size,mediaScale,mediaOffX,mediaOffY
+        let extra = String(format: "%.3f,%.3f,%.3f,%.3f,%.4f,%.4f",
+                           s.x, s.y, s.size, s.mediaScale, s.mediaOffX, s.mediaOffY)
+        return "\u{1}\(s.color),\(s.font),\(s.styleRaw),\(extra)\u{1}\(t)"
     }
     static func decode(_ body: String) -> (text: String, spec: Spec) {
         if body.hasPrefix("\u{1}") {
             let parts = body.dropFirst().split(separator: "\u{1}", maxSplits: 1, omittingEmptySubsequences: false)
             if parts.count == 2 {
                 let n = parts[0].split(separator: ",")
-                if n.count >= 3, let c = Int(n[0]), let f = Int(n[1]), let h = Int(n[2]) {
-                    var spec = Spec(color: c, font: f, highlight: h == 1)
+                if n.count >= 3, let c = Int(n[0]), let f = Int(n[1]), let st = Int(n[2]) {
+                    // Back-compat: older stories stored a 0/1 highlight bit here (exactly 6 fields).
+                    let styleRaw = (st == 0 || st == 1) && n.count == 6 ? (st == 1 ? Style.highlight.rawValue : Style.glow.rawValue) : st
+                    var spec = Spec(color: c, font: f, styleRaw: styleRaw)
                     if n.count >= 5, let x = Double(n[3]), let y = Double(n[4]) { spec.x = x; spec.y = y }
                     if n.count >= 6, let sz = Double(n[5]) { spec.size = sz }
+                    if n.count >= 9, let ms = Double(n[6]), let mx = Double(n[7]), let my = Double(n[8]) {
+                        spec.mediaScale = ms; spec.mediaOffX = mx; spec.mediaOffY = my
+                    }
                     return (String(parts[1]), spec)
                 }
             }
@@ -64,20 +110,57 @@ enum StoryCaptions {
     }
 }
 
-/// Renders a caption in its chosen style.
+/// Renders a caption in its chosen style. For the highlight style each line gets its own
+/// background hugging that line's text (not a single block spanning the full width).
 struct StyledCaption: View {
     let text: String
     let spec: StoryCaptions.Spec
+
     var body: some View {
-        let bg = StoryCaptions.bgColor(spec)
-        Text(text.isEmpty ? " " : text)
-            .font(StoryCaptions.font(spec))
-            .foregroundStyle(StoryCaptions.textColor(spec))
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, bg == nil ? 0 : 14)
-            .padding(.vertical, bg == nil ? 0 : 8)
-            .background { if let bg { RoundedRectangle(cornerRadius: 10, style: .continuous).fill(bg) } }
-            .shadow(color: bg == nil ? .black.opacity(0.55) : .clear, radius: 8)   // glow on plain text
+        Group {
+            if spec.style == .highlight {
+                highlighted
+            } else {
+                styledText(Text(text.isEmpty ? " " : text))
+            }
+        }
+        .font(StoryCaptions.font(spec))
+        .multilineTextAlignment(.center)
+    }
+
+    /// Per-line highlight: split on line breaks and give each line its own hugging pill.
+    private var highlighted: some View {
+        let lines = (text.isEmpty ? " " : text).components(separatedBy: "\n")
+        let bg = StoryCaptions.bgColor(spec) ?? .clear
+        return VStack(spacing: 3) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text(line.isEmpty ? " " : line)
+                    .foregroundStyle(StoryCaptions.textColor(spec))
+                    .fixedSize(horizontal: true, vertical: false)   // hug the line's text width
+                    .padding(.horizontal, 10).padding(.vertical, 3)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(bg))
+            }
+        }
+    }
+
+    /// Apply the non-highlight styling (color + glow/shadow) to the text.
+    @ViewBuilder private func styledText(_ t: Text) -> some View {
+        let color = StoryCaptions.textColor(spec)
+        switch spec.style {
+        case .plain:
+            t.foregroundStyle(color).shadow(color: .black.opacity(0.5), radius: 4)
+        case .glow:
+            t.foregroundStyle(color).shadow(color: color.opacity(0.9), radius: 8)
+                .shadow(color: .black.opacity(0.35), radius: 3)
+        case .shadow:
+            t.foregroundStyle(color).shadow(color: .black.opacity(0.85), radius: 2, x: 1.5, y: 2)
+        case .neon:
+            t.foregroundStyle(color)
+                .shadow(color: color, radius: 6).shadow(color: color, radius: 14)
+                .shadow(color: .black.opacity(0.3), radius: 2)
+        case .highlight:
+            t.foregroundStyle(color)   // handled by `highlighted`, but keep total
+        }
     }
 }
 
@@ -97,6 +180,27 @@ struct CaptionColorRow: View {
                 }
             }
             .padding(.horizontal, 16)
+        }
+    }
+}
+
+/// The glow/shadow/neon look for a caption, as a reusable modifier so the live editor preview and
+/// the final `StyledCaption` render identically (#88). Mirrors `StyledCaption.styledText`'s shadows.
+struct CaptionStyleEffect: ViewModifier {
+    let spec: StoryCaptions.Spec
+    func body(content: Content) -> some View {
+        let color = StoryCaptions.textColor(spec)
+        switch spec.style {
+        case .plain:
+            content.shadow(color: .black.opacity(0.5), radius: 4)
+        case .glow:
+            content.shadow(color: color.opacity(0.9), radius: 8).shadow(color: .black.opacity(0.35), radius: 3)
+        case .shadow:
+            content.shadow(color: .black.opacity(0.85), radius: 2, x: 1.5, y: 2)
+        case .neon:
+            content.shadow(color: color, radius: 6).shadow(color: color, radius: 14)
+        case .highlight:
+            content   // highlight uses per-line background pills, no text shadow
         }
     }
 }

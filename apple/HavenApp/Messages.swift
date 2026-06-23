@@ -32,9 +32,9 @@ struct MessagesView: View {
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Messages")
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .havenTrailing) {
                 Button { showPicker = true } label: { Image(systemName: "square.and.pencil") }
             }
         }
@@ -45,13 +45,20 @@ struct MessagesView: View {
         .sheet(isPresented: $showPicker, onDismiss: { if let id = newDM { newDM = nil; pushedDM = id } }) {
             DMContactPicker { id in newDM = id; showPicker = false }
         }
+        .onAppear {
+            // Screenshot harness: open the first DM thread for its hero shot.
+            if DemoEnv.scene == .thread {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    if pushedDM == nil, let id = store.dmCircles.first?.id { pushedDM = id }
+                }
+            }
+        }
     }
 
     private func rowLabel(_ circleId: String) -> some View {
         let name = store.dmPartnerName(circleId)
         return HStack(spacing: 12) {
-            Circle().fill(HavenTheme.brand).frame(width: 40, height: 40)
-                .overlay(Text(String(name.prefix(1))).font(.headline).foregroundStyle(.white))
+            PeerAvatar(nodeHex: store.dmPartnerHex(circleId) ?? "", name: name, size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.subheadline.weight(.medium))
                 if let last = store.messages(in: circleId).last {
@@ -78,11 +85,7 @@ struct DMContactPicker: View {
                 List(contacts.contacts) { c in
                     Button { onPick(store.startDM(with: c.idHex, name: c.displayName)) } label: {
                         HStack(spacing: 12) {
-                            Circle()
-                                .fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
-                                .frame(width: 40, height: 40)
-                                .overlay(Text(String(c.displayName.prefix(1)).uppercased())
-                                    .font(.headline).foregroundStyle(.white))
+                            PeerAvatar(nodeHex: c.idHex, name: c.displayName, size: 40)
                             Text(c.displayName).font(.body).foregroundStyle(.primary)
                             Spacer()
                         }
@@ -93,8 +96,8 @@ struct DMContactPicker: View {
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("New message")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } } }
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenCancelLeading) { Button("Cancel") { dismiss() } } }
         }
     }
 }
@@ -113,6 +116,9 @@ struct DMThreadView: View {
     @State private var showSongs = false
     @State private var showAudio = false
     @State private var zoom: ZoomTarget?
+    @State private var reactTarget: ReactTarget?
+
+    struct ReactTarget: Identifiable { let id: String }
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -136,7 +142,7 @@ struct DMThreadView: View {
                 composer
             }
         }
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
         .toolbar {
             ToolbarItem(placement: .principal) {
                 let p = store.dmPresence(circleId)
@@ -147,7 +153,7 @@ struct DMThreadView: View {
                         .font(.caption2).foregroundStyle(p.online ? Color.green : Color.secondary)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .havenTrailing) {
                 Button {
                     if let hex = store.dmPartnerHex(circleId) {
                         CallManager.shared.startCall(peerHex: hex, name: store.dmPartnerName(circleId))
@@ -157,7 +163,11 @@ struct DMThreadView: View {
             }
         }
         .onAppear { store.forceSync() }
-        .fullScreenCover(item: $zoom) { t in MediaZoomViewer(refs: t.refs, index: t.index) }
+        .onDisappear { MusicPlayback.shared.stop() }   // leaving the thread silences any DM song
+        .havenFullScreenCover(item: $zoom) { t in MediaZoomViewer(refs: t.refs, index: t.index) }
+        .sheet(item: $reactTarget) { t in
+            ReactionPicker { e in store.reactMessage(in: circleId, t.id, e) }
+        }
     }
 
     @ViewBuilder private func dmMedia(_ m: FeedItemFfi) -> some View {
@@ -167,29 +177,31 @@ struct DMThreadView: View {
             ForEach(audio, id: \.self) { ref in
                 if let url = MediaStore.shared.storagePath(for: ref) { AudioPlayerPill(url: url) }
             }
-            if !visual.isEmpty { dmVisualMedia(visual) }
+            if !visual.isEmpty { dmVisualMedia(visual, isMe: m.isMe) }
         }
     }
 
-    @ViewBuilder private func dmVisualMedia(_ refs: [String]) -> some View {
+    @ViewBuilder private func dmVisualMedia(_ refs: [String], isMe: Bool) -> some View {
         if refs.count == 1, let ref = refs.first, let img = MediaStore.shared.item(ref)?.image {
-            Image(uiImage: img).resizable().scaledToFill()
+            Image(platformImage: img).resizable().scaledToFill()
                 .frame(maxWidth: 220, maxHeight: 280).clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay(alignment: .center) {
                     if MediaStore.shared.item(ref)?.kind == .video {
                         Image(systemName: "play.circle.fill").font(.largeTitle).foregroundStyle(.white)
                     }
                 }
+                .sensitiveContentGuard(ref: ref, circleId: circleId, scan: !isMe, cornerRadius: 14)
                 .onTapGesture { zoom = ZoomTarget(refs: refs, index: 0) }
         } else if !refs.isEmpty {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible())], spacing: 4) {
                 ForEach(Array(refs.enumerated()), id: \.offset) { i, ref in
                     if let img = MediaStore.shared.item(ref)?.image {
-                        Image(uiImage: img).resizable().scaledToFill().frame(width: 104, height: 104)
+                        Image(platformImage: img).resizable().scaledToFill().frame(width: 104, height: 104)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .overlay(alignment: .center) {
                                 if MediaStore.shared.item(ref)?.kind == .video { Image(systemName: "play.circle.fill").foregroundStyle(.white) }
                             }
+                            .sensitiveContentGuard(ref: ref, circleId: circleId, scan: !isMe)
                             .onTapGesture { zoom = ZoomTarget(refs: refs, index: i) }
                     }
                 }
@@ -241,10 +253,15 @@ struct DMThreadView: View {
             }
             .contextMenu {
                 if !m.unsent {
+                    // Your most-used emoji as a single horizontal palette row (4 fits without
+                    // wrapping to a second stacked row), then the full picker.
                     ControlGroup {
-                        ForEach(["❤️", "👍", "😂", "😮", "😢", "🔥"], id: \.self) { e in
-                            Button(e) { store.reactMessage(in: circleId, m.id, e) }
+                        ForEach(EmojiStore.shared.frequent(4), id: \.self) { e in
+                            Button(e) { EmojiStore.shared.record(e); store.reactMessage(in: circleId, m.id, e) }
                         }
+                    }
+                    Button { reactTarget = ReactTarget(id: m.id) } label: {
+                        Label("More reactions…", systemImage: "face.smiling")
                     }
                 }
                 if m.isMe && !m.unsent {
@@ -297,7 +314,7 @@ struct DMThreadView: View {
                                 .background(HavenTheme.pink.opacity(0.18), in: Capsule())
                             } else if let img = MediaStore.shared.item(ref)?.image {
                                 ZStack(alignment: .topTrailing) {
-                                    Image(uiImage: img).resizable().scaledToFill().frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10))
+                                    Image(platformImage: img).resizable().scaledToFill().frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10))
                                     Button { attachedMedia.removeAll { $0 == ref } } label: {
                                         Image(systemName: "xmark.circle.fill").foregroundStyle(.white).background(Circle().fill(.black.opacity(0.5)))
                                     }.padding(2)
@@ -335,8 +352,9 @@ struct DMThreadView: View {
                 TextField(secret ? "Secret message…" : "Message…", text: $text, axis: .vertical)
                     .focused($focused)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(.background, in: Capsule())
-                    .overlay(Capsule().strokeBorder(secret ? HavenTheme.pink.opacity(0.6) : Color.white.opacity(0.08)))
+                    // Fixed-radius rounded rect — a Capsule clips into multi-line text.
+                    .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(secret ? HavenTheme.pink.opacity(0.6) : Color.white.opacity(0.08)))
                 Button { send() } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(HavenTheme.pink)
                 }

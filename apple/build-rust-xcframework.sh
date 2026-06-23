@@ -11,13 +11,16 @@ CORE="$HERE/../core"
 CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"
 RUSTUP="${RUSTUP:-$HOME/.cargo/bin/rustup}"
 
-echo "▸ Ensuring Apple targets (iOS device + sim + Mac Catalyst)…"
-"$RUSTUP" target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-ios-macabi >/dev/null
+echo "▸ Ensuring Apple targets (iOS device + sim + Mac Catalyst + native macOS)…"
+# aarch64-apple-darwin = native macOS (Apple Silicon). Used by the native-macOS port (see
+# docs/MACOS-NATIVE-PORT.md); harmless for the Catalyst build.
+"$RUSTUP" target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-ios-macabi aarch64-apple-darwin >/dev/null
 
-echo "▸ Building static libs (device + simulator + Mac Catalyst)…"
+echo "▸ Building static libs (device + simulator + Mac Catalyst + native macOS)…"
 ( cd "$CORE" && "$CARGO" build -p haven_ffi --lib --release --target aarch64-apple-ios )
 ( cd "$CORE" && "$CARGO" build -p haven_ffi --lib --release --target aarch64-apple-ios-sim )
 ( cd "$CORE" && "$CARGO" build -p haven_ffi --lib --release --target aarch64-apple-ios-macabi )
+( cd "$CORE" && "$CARGO" build -p haven_ffi --lib --release --target aarch64-apple-darwin )
 
 echo "▸ Generating Swift bindings…"
 ( cd "$CORE" && "$CARGO" build -q -p haven_ffi --lib )   # host dylib for the generator
@@ -34,6 +37,7 @@ xcodebuild -create-xcframework \
   -library "$CORE/target/aarch64-apple-ios/release/libhaven_ffi.a" -headers "$HERE/build/headers" \
   -library "$CORE/target/aarch64-apple-ios-sim/release/libhaven_ffi.a" -headers "$HERE/build/headers" \
   -library "$CORE/target/aarch64-apple-ios-macabi/release/libhaven_ffi.a" -headers "$HERE/build/headers" \
+  -library "$CORE/target/aarch64-apple-darwin/release/libhaven_ffi.a" -headers "$HERE/build/headers" \
   -output "$HERE/HavenFFI.xcframework" >/dev/null
 
 echo "✓ Done. Next:  cd apple && xcodegen generate && open Haven.xcodeproj"

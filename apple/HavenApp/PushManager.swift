@@ -1,5 +1,13 @@
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UserNotifications
+// PushKit (VoIP pushes) is iOS/Catalyst-only — there's no PushKit on native macOS.
+#if os(iOS)
+import PushKit
+#endif
 
 /// Talks to the self-hosted Haven push relay (a blind Cloudflare Worker). Registers this
 /// device's APNs token under our pseudonymous node id, and asks the relay to wake circle
@@ -17,21 +25,76 @@ final class PushManager: NSObject, ObservableObject {
     func start() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             guard granted else { return }
-            DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
+            DispatchQueue.main.async { PlatformApp.registerForRemoteNotifications() }
         }
+    }
+
+    private var lastToken = ""
+    #if os(iOS)
+    private var voipRegistry: PKPushRegistry?
+    #endif
+
+    /// Register for PushKit VoIP pushes so calls ring even from a fully-killed/locked device.
+    /// The VoIP push is a blind doorbell: it carries only the caller's name SEALED to us; the
+    /// worker can't read it, and isn't in the call (signaling = sealed iroh, media = P2P).
+    /// No PushKit on native macOS — no-op there.
+    func startVoip() {
+        #if os(iOS)
+        guard voipRegistry == nil else { return }
+        let r = PKPushRegistry(queue: .main)
+        r.delegate = self
+        r.desiredPushTypes = [.voIP]
+        voipRegistry = r
+        #endif
+    }
+
+    func registerVoip(_ tokenHex: String) {
+        guard let nodeId = myNodeId() else { return }
+        post("/register-voip", ["nodeId": nodeId, "token": tokenHex, "sandbox": isSandbox])
+    }
+
+    /// Wake a peer for an incoming call (VoIP push). `ciphertext` = caller name sealed to them.
+    func callPush(to nodeId: String, ciphertext: String?) {
+        guard !nodeId.isEmpty else { return }
+        post("/call", ["nodeId": nodeId, "ciphertext": ciphertext ?? "_"])
     }
 
     /// APNs handed us a device token → register it with the relay under our node id.
     func registered(deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        lastToken = hex
         guard let nodeId = myNodeId() else { return }
         post("/register", ["nodeId": nodeId, "token": hex, "sandbox": isSandbox])
     }
 
-    /// Ask the relay to wake a (possibly offline) peer. Generic alert for now.
-    func wake(_ nodeId: String) {
+    /// Register as an S3-bucket owner so the worker's cron can send a silent push to re-mint
+    /// pre-signed URLs before they expire. (No-op if push isn't set up — the app re-mints on
+    /// launch + a local reminder covers it.)
+    func registerStorageOwner() {
+        guard !lastToken.isEmpty, let nodeId = myNodeId() else { return }
+        post("/register-owner", ["nodeId": nodeId, "token": lastToken, "sandbox": isSandbox])
+    }
+
+    /// Ask the relay to wake a (possibly offline) peer. `ciphertext` is the base64 of a blob
+    /// sealed to *that* peer (so only they can read it); the relay forwards it blind and the
+    /// peer's Notification Service Extension decrypts it into the real banner. Pass `nil` when
+    /// we can't seal — the relay then shows a generic "New activity" alert.
+    /// `event` is the base64 of the sealed circle event itself; when present (and small enough)
+    /// the relay inlines it in the push so the recipient's NSE stashes it and the app ingests it
+    /// with no mailbox round-trip (push-inline sync).
+    func wake(_ nodeId: String, ciphertext: String? = nil, event: String? = nil) {
         guard !nodeId.isEmpty else { return }
-        post("/notify", ["nodeId": nodeId, "ciphertext": "_"])
+        var body: [String: Any] = ["nodeId": nodeId, "ciphertext": ciphertext ?? "_"]
+        if let event { body["event"] = event }
+        post("/notify", body)
+    }
+
+    /// Multi-device: sync an event we authored to our OWN other devices (linked to this
+    /// identity). A `silent` push (no banner) so we don't self-notify; the other devices stash
+    /// the inline event and ingest it — no mailbox needed.
+    func syncSelf(event: String) {
+        guard let nodeId = myNodeId() else { return }
+        post("/notify", ["nodeId": nodeId, "event": event, "silent": true])
     }
 
     private var isSandbox: Bool {
@@ -56,3 +119,33 @@ final class PushManager: NSObject, ObservableObject {
         URLSession.shared.dataTask(with: req).resume()
     }
 }
+
+#if os(iOS)
+extension PushManager: PKPushRegistryDelegate {
+    nonisolated func pushRegistry(_ registry: PKPushRegistry, didUpdate credentials: PKPushCredentials, for type: PKPushType) {
+        let hex = credentials.token.map { String(format: "%02x", $0) }.joined()
+        Task { @MainActor in self.registerVoip(hex) }
+    }
+    nonisolated func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {}
+
+    /// A VoIP push arrived — we MUST report a new incoming call synchronously (iOS kills the app
+    /// otherwise). The registry runs on the main queue, so we're already main-isolated here.
+    nonisolated func pushRegistry(_ registry: PKPushRegistry,
+                                  didReceiveIncomingPushWith payload: PKPushPayload,
+                                  for type: PKPushType,
+                                  completion: @escaping () -> Void) {
+        MainActor.assumeIsolated {
+            var name = "Someone", peerHex = ""
+            if let e = payload.dictionaryPayload["e"] as? String, e != "_",
+               let sealed = Data(base64Encoded: e), let seed = SharedSeed.read(),
+               let plain = openSealedWithSeed(seed: seed, sealed: sealed),
+               let obj = try? JSONSerialization.jsonObject(with: plain) as? [String: String] {
+                name = obj["t"] ?? name
+                peerHex = obj["h"] ?? ""
+            }
+            CallManager.shared.reportIncomingFromPush(name: name, peerHex: peerHex)
+            completion()
+        }
+    }
+}
+#endif

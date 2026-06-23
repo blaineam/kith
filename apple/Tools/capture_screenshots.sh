@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#
+# Haven — App Store / portfolio screenshots.
+#
+# Captures a RICH, PII-FREE set for iPhone + iPad (and, opt-in, Mac Catalyst) from the
+# app's gated demo mode. Every scene is driven by launch-environment flags — NO real
+# contacts, circles, posts, stories, or DMs are ever read or written:
+#
+#   HAVEN_DEMO=1            seed the synthetic dataset (DemoSeeder — fictional people,
+#                          generated gradient "photos", deterministic throwaway keys)
+#   HAVEN_SKIP_ONBOARDING=1 jump straight into the app
+#   HAVEN_NO_NET=1          never bring the live P2P node online (offline + deterministic,
+#                          and it suppresses the notification-permission prompt)
+#   HAVEN_TAB=<circle|messages|you>   selected tab
+#   HAVEN_SCENE=<scene>     auto-present a hero scene (story|thread|identity|call)
+#
+# IMPORTANT: these are read via ProcessInfo.processInfo.environment, so they MUST be
+# passed as ENVIRONMENT variables (SIMCTL_CHILD_… for `simctl launch`), never as `-key
+# value` launch arguments.
+#
+# Scenes (App Store display order) → screenshots/<rawKey>/NN-name.png at the sim's
+# native size. Framing + (optional) upload happen in the shared update-screenshots.sh
+# pipeline (.local-screenshots.conf + docs/appstore-screenshots/Haven-*.monkr).
+#
+# Usage: ./Tools/capture_screenshots.sh [all|iphone|ipad|mac]
+#   (no arg == all == iphone + ipad; `mac` is opt-in — it needs an UNLOCKED + AWAKE
+#    display with Screen Recording permission for the controlling terminal.)
+#
+# Build rules (hard-won across these repos): the Apple project is XcodeGen-generated
+# and the checkout is FileProvider-tagged (it re-injects xattrs + spawns duplicate
+# "Haven N.xcodeproj" copies), so we regenerate a fresh Haven.xcodeproj up front, build
+# every leg synchronously into /tmp derived data, and pin the project path explicitly.
+
+set -uo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # → apple/
+cd "$PROJECT_ROOT"
+
+# shellcheck disable=SC1091
+source "$PROJECT_ROOT/../../_shared/screenshots/capture-lib.sh"
+
+PROJECT="$PROJECT_ROOT/Haven.xcodeproj"
+SCHEME="Haven"
+BUNDLE_ID="com.blaineam.kith"
+
+IPHONE="iPhone 17 Pro Max"
+APPLETV=""   # (none)
+OUT="$PROJECT_ROOT/screenshots"
+ONLY="${1:-all}"
+
+# Scene table: "tab|scene|file". An empty scene just shows the tab.
+SCENES=(
+  "circle||01-feed.png"        # the private circle feed (stories + posts)
+  "circle|story|02-story.png"  # full-screen stories
+  "messages|thread|03-thread.png"  # a private DM thread (E2E)
+  "circle|call|04-call.png"    # an in-progress group call
+  "you||05-you.png"            # your profile (your posts live here)
+  "you|identity|06-identity.png"   # your identity, on your devices
+  "messages||07-messages.png"  # the DM list
+)
+
+# ── Audio: simulators play app audio aloud. Mute the Mac for the capture window only
+#    and restore the user's exact previous state (even on abnormal exit).
+SAVED_MUTED=""
+mute_on() {
+  [ -n "$SAVED_MUTED" ] && return 0
+  SAVED_MUTED="$(osascript -e 'output muted of (get volume settings)' 2>/dev/null || true)"
+  [ -n "$SAVED_MUTED" ] || SAVED_MUTED="false"
+  osascript -e 'set volume output muted true' >/dev/null 2>&1 || true
+}
+mute_off() {
+  [ -z "$SAVED_MUTED" ] && return 0
+  osascript -e "set volume output muted $SAVED_MUTED" >/dev/null 2>&1 || true
+  SAVED_MUTED=""
+}
+trap mute_off EXIT
+
+# Resolve the first available device name from a candidate list (echoes the first that
+# simctl already knows about; falls through to $1, which cap_resolve_udid will create).
+resolve_device_name() {
+  for cand in "$@"; do
+    if xcrun simctl list devices available | grep -q "$cand ("; then echo "$cand"; return 0; fi
+  done
+  echo "$1"
+}
+
+# capture_sim <deviceName> <rawKey>
+capture_sim() {
+  local devName="$1" key="$2"
+  echo "==> $devName ($key)"
+  local udid; udid="$(cap_resolve_udid "$devName")"
+  [ -n "$udid" ] || { echo "!! no simulator for $devName" >&2; return 1; }
+  echo "  UDID: $udid"
+
+  local derived="/tmp/haven-shots-dd-$key"
+  mkdir -p "$derived"
+  echo "  Building $SCHEME…"
+  if ! xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+      -destination "platform=iOS Simulator,id=$udid" -configuration Debug \
+      -derivedDataPath "$derived" CODE_SIGNING_ALLOWED=NO build \
+      >"$derived/build.log" 2>&1; then
+    echo "  build failed; tail of log:" >&2
+    tail -40 "$derived/build.log" >&2
+    return 1
+  fi
+  local app
+  app="$(find "$derived/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name "*.app" | head -1)"
+  [ -n "$app" ] || { echo "  no .app produced" >&2; return 1; }
+
+  rm -rf "${OUT:?}/$key"; mkdir -p "$OUT/$key"
+  mute_on
+  cap_boot "$udid"
+  xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
+  xcrun simctl uninstall "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true   # clean state → fresh seed
+  xcrun simctl install "$udid" "$app"
+  cap_clean_statusbar "$udid"
+
+  # Warm-up launch primes the demo seed + JPEG decode so the first real scene renders fast.
+  env SIMCTL_CHILD_HAVEN_DEMO=1 SIMCTL_CHILD_HAVEN_SKIP_ONBOARDING=1 SIMCTL_CHILD_HAVEN_NO_NET=1 \
+      SIMCTL_CHILD_HAVEN_TAB=circle \
+      xcrun simctl launch "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
+  sleep 6
+  xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
+
+  for entry in "${SCENES[@]}"; do
+    local tab="${entry%%|*}" rest="${entry#*|}"
+    local scene="${rest%%|*}" file="${rest#*|}"
+    xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
+    sleep 0.6
+    env SIMCTL_CHILD_HAVEN_DEMO=1 SIMCTL_CHILD_HAVEN_SKIP_ONBOARDING=1 SIMCTL_CHILD_HAVEN_NO_NET=1 \
+        SIMCTL_CHILD_HAVEN_TAB="$tab" SIMCTL_CHILD_HAVEN_SCENE="$scene" \
+        xcrun simctl launch "$udid" "$BUNDLE_ID" >/dev/null 2>&1
+    # Scenes that auto-present a sheet/overlay/full-screen cover settle a touch longer so we
+    # never capture a spinner or a mid-animation frame.
+    sleep 8
+    xcrun simctl io "$udid" screenshot "$OUT/$key/$file" >/dev/null 2>&1 && echo "  $key/$file"
+  done
+
+  cap_clear_statusbar "$udid"
+  xcrun simctl terminate "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
+  mute_off
+}
+
+# ── Mac Catalyst leg (opt-in) ───────────────────────────────────────────────────────
+# Haven on macOS ships via Mac Catalyst — a normal windowed app. We build the Catalyst
+# destination, launch each scene with the same HAVEN_* env, resolve the app's window via
+# the shared mac-window-id.swift, and `screencapture -l<id>` it frameless. Requires an
+# UNLOCKED + AWAKE display + Screen Recording permission for the controlling terminal.
+capture_mac() {
+  local key="mac"
+  echo "==> Mac Catalyst ($key)"
+  local SHARED="$PROJECT_ROOT/../../_shared/screenshots"
+  [ -f "$SHARED/mac-window-id.swift" ] || { echo "  !! $SHARED/mac-window-id.swift missing" >&2; return 1; }
+
+  local LOCKED
+  LOCKED=$(swift - <<'SWIFT' 2>/dev/null
+import CoreGraphics; import Foundation
+if let d = CGSessionCopyCurrentDictionary() as? [String:Any] { print(d["CGSSessionScreenIsLocked"] as? Int ?? 0) } else { print(0) }
+SWIFT
+)
+  if [ "$LOCKED" = "1" ]; then
+    echo "  !! display is LOCKED — unlock + keep awake, then re-run \`./Tools/capture_screenshots.sh mac\`." >&2
+    return 1
+  fi
+
+  local derived="/tmp/haven-shots-dd-mac"
+  mkdir -p "$derived"
+  echo "  Building $SCHEME (Mac Catalyst)…"
+  if ! xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+      -destination "platform=macOS,variant=Mac Catalyst" -configuration Debug \
+      -derivedDataPath "$derived" CODE_SIGNING_ALLOWED=NO build \
+      >"$derived/mac-build.log" 2>&1; then
+    echo "  mac build failed; tail of log:" >&2
+    tail -40 "$derived/mac-build.log" >&2
+    return 1
+  fi
+  local APP
+  APP="$(find "$derived/Build/Products" -maxdepth 2 -name "Haven.app" | head -1)"
+  [ -n "$APP" ] || { echo "  no Catalyst .app produced" >&2; return 1; }
+
+  rm -rf "${OUT:?}/$key"; mkdir -p "$OUT/$key"
+  mute_on
+  caffeinate -d -i -u -t 600 >/dev/null 2>&1 &  local caff=$!
+  for entry in "${SCENES[@]}"; do
+    local tab="${entry%%|*}" rest="${entry#*|}"
+    local scene="${rest%%|*}" file="${rest#*|}"
+    pkill -f "Haven.app/Contents/MacOS/Haven" 2>/dev/null; sleep 1
+    HAVEN_DEMO=1 HAVEN_SKIP_ONBOARDING=1 HAVEN_NO_NET=1 HAVEN_TAB="$tab" HAVEN_SCENE="$scene" \
+      open -n "$APP" >/dev/null 2>&1
+    sleep 7
+    local wid; wid="$(swift "$SHARED/mac-window-id.swift" "Haven" 2>/dev/null)"
+    if [ -n "$wid" ]; then
+      screencapture -o -x -l"$wid" "$OUT/$key/$file" 2>/dev/null && echo "  $key/$file (window $wid)"
+    else
+      echo "  !! no window for scene $scene" >&2
+    fi
+  done
+  pkill -f "Haven.app/Contents/MacOS/Haven" 2>/dev/null
+  kill "$caff" 2>/dev/null
+  mute_off
+}
+
+# ── Dispatch ────────────────────────────────────────────────────────────────────────
+RC=0
+if [ "$ONLY" = "all" ] || [ "$ONLY" = "iphone" ]; then
+  capture_sim "$IPHONE" "iphone-6.9" || RC=1
+fi
+if [ "$ONLY" = "all" ] || [ "$ONLY" = "ipad" ]; then
+  IPAD="$(resolve_device_name "iPad Pro 13-inch (M5)" "iPad Pro 13-inch (M4)" "iPad Pro (12.9-inch) (6th generation)")"
+  capture_sim "$IPAD" "ipad-13" || RC=1
+fi
+if [ "$ONLY" = "mac" ]; then
+  capture_mac || echo "  (mac leg skipped — see message above)"
+fi
+
+echo ""
+echo "==> Done. Raw screenshots under: $OUT"
+ls -d "$OUT"/*/ 2>/dev/null || true
+exit "$RC"

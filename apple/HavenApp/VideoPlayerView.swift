@@ -1,13 +1,35 @@
 import SwiftUI
 import AVKit
 
+#if !os(macOS)
 /// AVPlayerLayer-backed surface with no system chrome. `.resizeAspect` letterboxes — the whole
 /// frame is always visible, never cropped.
 final class PlayerLayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
+#else
+/// AVPlayerLayer-backed surface with no system chrome (native macOS / AppKit). Layer-backed
+/// `NSView` hosting an `AVPlayerLayer`. Mirrors the iOS class's public API (`playerLayer`).
+/// `.resizeAspect` letterboxes — the whole frame is always visible, never cropped.
+final class PlayerLayerView: NSView {
+    private let _playerLayer = AVPlayerLayer()
+    var playerLayer: AVPlayerLayer { _playerLayer }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer = _playerLayer
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layer = _playerLayer
+    }
+}
+#endif
+
+#if !os(macOS)
 struct VideoSurface: UIViewRepresentable {
     let player: AVPlayer
     func makeUIView(context: Context) -> PlayerLayerView {
@@ -20,6 +42,20 @@ struct VideoSurface: UIViewRepresentable {
         if v.playerLayer.player !== player { v.playerLayer.player = player }
     }
 }
+#else
+struct VideoSurface: NSViewRepresentable {
+    let player: AVPlayer
+    func makeNSView(context: Context) -> PlayerLayerView {
+        let v = PlayerLayerView()
+        v.playerLayer.player = player
+        v.playerLayer.videoGravity = .resizeAspect
+        return v
+    }
+    func updateNSView(_ v: PlayerLayerView, context: Context) {
+        if v.playerLayer.player !== player { v.playerLayer.player = player }
+    }
+}
+#endif
 
 /// Inline video with custom, chrome-free controls. This view OWNS every gesture on the
 /// video so nothing upstream (the parent post's tap/zoom/contextMenu) can steal them:

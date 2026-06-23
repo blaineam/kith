@@ -86,11 +86,34 @@ final class FeedStore: ObservableObject {
         guard social == nil else { return }
         social = try? HavenSocial(accountSeed: seed)
         loadPersisted()
+        loadLastHeard()   // so "last seen" survives an app restart
         refreshCircles()     // also purges any contaminated DM membership (see refreshCircles)
         refresh()
+        seedDemoIfNeeded()   // HAVEN_DEMO=1 only — PII-free synthetic dataset for screenshots
         guard ProcessInfo.processInfo.environment["HAVEN_NO_NET"] != "1" else { return }
         bringOnline(seed: seed)
         startMailboxPolling()
+        ingestPushInbox()   // drain any events delivered inline by push while we were away
+        RelayHost.shared.startIfEnabled()   // resume serving as the circle's relay if toggled on
+        PresignStore.shared.remintAllOwned()   // refresh any S3 pre-signed pools I own
+        backfillMailbox(circleIds: circles.map(\.id))   // ensure already-posted content is in the mailbox
+        Task { await BackgroundUploader.shared.flush() }   // retry any posts that didn't reach the mailbox
+    }
+
+    // MARK: - Demo seeding (HAVEN_DEMO=1 only — PII-free synthetic content for screenshots)
+
+    /// The engine handle, exposed so `DemoSeeder` can drive the real seal→open→feed pipeline
+    /// with synthetic friend identities. Returns nil until `configure` has run.
+    var demoEngine: HavenSocial? { social }
+    /// Save the seeded state (private `persist` wrapper for `DemoSeeder`).
+    func demoPersist() { persist() }
+    private func seedDemoIfNeeded() {
+        guard DemoEnv.isDemo, social != nil else { return }
+        DemoSeeder.seed(feed: self)
+        // Present the offline demo as a healthy, connected circle for the hero shots.
+        online = true
+        internetActive = true
+        relayReachable = true
     }
 
     private func startMailboxPolling() {
@@ -162,6 +185,48 @@ final class FeedStore: ObservableObject {
         persist(); refreshCircles(); refresh()
     }
 
+    /// Rename a circle (the default "My Circle" can be renamed too). Re-syncs so the new name
+    /// propagates to members on their next handshake.
+    func renameCircle(_ circleId: String, to name: String) {
+        guard let social else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        social.renameCircle(id: circleId, name: trimmed)
+        persist(); refreshCircles()
+        syncWithContacts()
+    }
+
+    /// Node ids that are members of a circle but NOT in your own contacts — people you can
+    /// see in a shared circle and choose to add to your My Circle.
+    func nonContactMembers(in circleId: String) -> [String] {
+        guard let social else { return [] }
+        let mine = Set(ContactsStore.shared.contacts.map { $0.idHex })
+        let myHex = social.myNodeHex()
+        return social.contactNodeIds(circleId: circleId).filter { $0 != myHex && !mine.contains($0) }
+    }
+
+    /// Add a member you can already see in some circle to your own My Circle (default), and
+    /// record them as a contact — without needing a fresh invite.
+    func addMemberToMyCircle(_ idHex: String) {
+        guard let social else { return }
+        try? social.addExistingToCircle(circleId: "default", nodeHex: idHex)
+        if !ContactsStore.shared.contacts.contains(where: { $0.idHex == idHex }) {
+            ContactsStore.shared.add(name: String(idHex.prefix(6)), idHex: idHex)
+        }
+        persist(); refreshCircles(); syncWithContacts()
+    }
+
+    /// Switch to a circle that isn't biometric-locked (used when an unlock is cancelled/fails,
+    /// so the user lands somewhere they can actually see instead of being stuck on the lock
+    /// screen). No-op if every circle requires biometrics.
+    func switchToUnlockedCircle(excluding: String) {
+        let cs = CircleSettingsStore.shared
+        guard cs.biometricRequired(activeCircleId) else { return }   // already on an open circle
+        if let open = circles.first(where: { !cs.biometricRequired($0.id) }) {
+            setActiveCircle(open.id)
+        }
+    }
+
     /// Leave the active circle (you always keep the default one).
     func leaveActiveCircle() {
         guard activeCircleId != "default", let social else { return }
@@ -231,7 +296,7 @@ final class FeedStore: ObservableObject {
         social.createCircle(id: "default", name: "Your circle")
         _ = try? social.addContactBundle(circleId: "default", bundle: req.bundle)
         ContactsStore.shared.setAuthoritativeName(idHex: req.idHex, req.name)
-        lastHeard[req.idHex] = Date()
+        recordHeard(req.idHex)
         if !shareHistory { ConnectionsStore.shared.setNoHistory(req.idHex) }
         persist(); refreshCircles()
         if let hello = helloPayload(circleId: "default", circleName: "Your circle") {
@@ -261,7 +326,7 @@ final class FeedStore: ObservableObject {
 
     /// Messages of a circle (for a DM thread) without disturbing the main feed.
     func messages(in circleId: String) -> [FeedItemFfi] {
-        social?.feed(circleId: circleId, nowMs: now(), viewerRetentionSecs: SettingsStore.shared.retentionSecs) ?? []
+        social?.feed(circleId: circleId, nowMs: now(), viewerRetentionSecs: CircleSettingsStore.shared.retentionSecs(circleId)) ?? []
     }
 
     /// Send a text message into a DM circle + broadcast it.
@@ -311,11 +376,15 @@ final class FeedStore: ObservableObject {
         return dir.appendingPathComponent("haven-feed.json")
     }
     private func loadPersisted() {
+        // Demo mode reseeds a fresh deterministic dataset on every launch, so it must NOT load
+        // (or, below, persist) engine state — otherwise the synthetic posts/DMs/contacts compound
+        // across the many per-scene launches the screenshot harness makes.
+        guard !DemoEnv.isDemo else { return }
         guard let social, let data = try? Data(contentsOf: stateURL) else { return }
         social.importState(data: data)
     }
     private func persist() {
-        guard let social else { return }
+        guard !DemoEnv.isDemo, let social else { return }
         try? social.exportState().write(to: stateURL, options: .atomic)
     }
 
@@ -371,7 +440,20 @@ final class FeedStore: ObservableObject {
         guard let t = lastHeard[idHex] else { return false }
         return Date().timeIntervalSince(t) < 120
     }
-    func forceSync() { syncWithContacts(); pollMailboxNow() }
+
+    private let lastHeardKey = "haven.lastHeard"
+    /// Note that we just heard from a peer (drives both "online" and "last seen"), persisting
+    /// it so the last-seen time survives an app restart.
+    func recordHeard(_ idHex: String) {
+        guard !idHex.isEmpty else { return }
+        lastHeard[idHex] = Date()
+        UserDefaults.standard.set(lastHeard.mapValues { $0.timeIntervalSince1970 }, forKey: lastHeardKey)
+    }
+    private func loadLastHeard() {
+        guard let raw = UserDefaults.standard.dictionary(forKey: lastHeardKey) as? [String: Double] else { return }
+        lastHeard = raw.mapValues { Date(timeIntervalSince1970: $0) }
+    }
+    func forceSync() { ingestPushInbox(); syncWithContacts(); pollMailboxNow() }
 
     private func startSyncTimer() {
         syncTimer?.invalidate()
@@ -382,8 +464,33 @@ final class FeedStore: ObservableObject {
 
     private func now() -> UInt64 { UInt64(Date().timeIntervalSince1970 * 1000) }
     func refresh() {
-        items = social?.feed(circleId: activeCircleId, nowMs: now(), viewerRetentionSecs: SettingsStore.shared.retentionSecs) ?? []
+        items = social?.feed(circleId: activeCircleId, nowMs: now(), viewerRetentionSecs: CircleSettingsStore.shared.retentionSecs(activeCircleId)) ?? []
+        sensitiveCache.removeAll()   // a refresh may have ingested new SensitiveFlag events
         SpotlightIndex.reindexAll()   // no-op unless the user enabled Spotlight indexing
+    }
+
+    // MARK: - Sensitive content (federated SCA flags)
+
+    /// Cache of sensitive media refs per circle (from the shared event log). Cleared on each refresh.
+    private var sensitiveCache: [String: Set<String>] = [:]
+
+    /// Media refs flagged sensitive in a circle by ANY member — so a viewer with no Sensitive
+    /// Content Analysis (Android/desktop) is still protected once one member with SCA flags it.
+    func sensitiveRefs(circleId: String) -> Set<String> {
+        if let c = sensitiveCache[circleId] { return c }
+        let refs = Set(social?.sensitiveRefs(circleId: circleId) ?? [])
+        sensitiveCache[circleId] = refs
+        return refs
+    }
+
+    /// Flag a media ref as sensitive for the whole circle (called when on-device SCA flags it, or
+    /// the sender confirms a flagged send). Deduped, then broadcast like any event so it traverses.
+    func flagSensitive(circleId: String, ref: String) {
+        guard let social, !sensitiveRefs(circleId: circleId).contains(ref) else { return }
+        guard let env = try? social.flagSensitive(circleId: circleId, target: ref, createdAt: now()) else { return }
+        sensitiveCache[circleId, default: []].insert(ref)   // optimistic local
+        broadcastEvent(circleId, env)
+        objectWillChange.send()
     }
 
     /// The current user's own posts — their personal archive.
@@ -397,6 +504,12 @@ final class FeedStore: ObservableObject {
         broadcastEvent(activeCircleId, env); postTick += 1; refresh()
         let circle = activeCircleId
         for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) } }
+    }
+
+    /// Post text to a specific circle (used by App Intents with a circle filter).
+    func post(_ body: String, toCircle circleId: String) {
+        guard let social, let env = try? social.post(circleId: circleId, body: body, media: [], music: nil, retentionSecs: nil, story: false, muteVideo: false, createdAt: now()) else { return }
+        broadcastEvent(circleId, env); postTick += 1; refresh()
     }
 
     /// Post a full-screen story to the active circle — auto-expires after 24h (retention).
@@ -431,14 +544,29 @@ final class FeedStore: ObservableObject {
         guard let social, let env = try? social.react(circleId: activeCircleId, target: id, emoji: emoji, createdAt: now()) else { return }
         broadcastEvent(activeCircleId, env); reactionTick += 1; refresh()
     }
+    /// Remove my own reaction (emoji) from a post/comment in the active circle.
+    func unreact(_ id: String, _ emoji: String) {
+        guard let social, let env = try? social.unreact(circleId: activeCircleId, target: id, emoji: emoji, createdAt: now()) else { return }
+        broadcastEvent(activeCircleId, env); reactionTick += 1; refresh()
+    }
     /// React to a message in a specific (DM) circle.
     func reactMessage(in circleId: String, _ id: String, _ emoji: String) {
         guard let social, let env = try? social.react(circleId: circleId, target: id, emoji: emoji, createdAt: now()) else { return }
         broadcastEvent(circleId, env); reactionTick += 1; refresh()
     }
-    /// Auto-save freshly-received media to Photos when the user enabled "Save to Photos".
+    /// Remove my own reaction from a message in a specific (DM) circle.
+    func unreactMessage(in circleId: String, _ id: String, _ emoji: String) {
+        guard let social, let env = try? social.unreact(circleId: circleId, target: id, emoji: emoji, createdAt: now()) else { return }
+        broadcastEvent(circleId, env); reactionTick += 1; refresh()
+    }
+    /// Comment on a post in a specific circle (used by the deep-link post viewer).
+    func commentMessage(in circleId: String, _ id: String, _ body: String, _ media: [String] = []) {
+        guard let social, let env = try? social.comment(circleId: circleId, target: id, body: body, media: media, createdAt: now()) else { return }
+        broadcastEvent(circleId, env); refresh()
+    }
+    /// Auto-save freshly-received media to Photos (Haven ▸ Received) when "Save to Photos" is on.
     func autoSaveReceived(_ ref: String) {
-        if let item = MediaStore.shared.item(ref) { PhotoSaver.saveIfEnabled(item) }
+        if let item = MediaStore.shared.item(ref) { PhotoSaver.saveIfEnabled(item, to: .received, circleId: activeCircleId) }
     }
 
     /// Whether a DM's partner is currently reachable, and when we last heard from them.
@@ -516,8 +644,21 @@ final class FeedStore: ObservableObject {
         lpAppend(&p, Data(circleId.utf8))
         lpAppend(&p, Data(circleName.utf8))
         lpAppend(&p, social.myBundle())
-        p.append(social.mySignedProfile(name: myName))   // rest = profile
+        // rest = signed business card (name + bio + link)
+        p.append(social.mySignedProfile(name: myName, bio: ProfileStore.shared.bio, link: ProfileStore.shared.link,
+                                        avatar: ProfileStore.shared.avatarBase64, emoji: ProfileStore.shared.emoji))
         return p
+    }
+
+    /// Re-send my handshake (which carries my signed profile card) to everyone I'm connected to,
+    /// so a profile change — new photo, emoji, name, bio, or link — reaches them without waiting
+    /// for a fresh handshake. Call this whenever the user edits their profile.
+    func rebroadcastProfile() {
+        guard let social else { return }
+        for circle in circles {
+            guard let hello = helloPayload(circleId: circle.id, circleName: circle.name) else { continue }
+            for hex in social.contactNodeIds(circleId: circle.id) { sendIroh(0, hello, to: hex) }
+        }
     }
 
     private func eventPayload(_ circleId: String, _ env: Data) -> Data {
@@ -527,21 +668,36 @@ final class FeedStore: ObservableObject {
     private func broadcastEvent(_ circleId: String, _ env: Data) {
         let payload = eventPayload(circleId, env)
         let members = social?.contactNodeIds(circleId: circleId) ?? []
+        // Build the push banner once: title = my name, body keyed to the circle. We seal it
+        // *per recipient* below so the relay only ever forwards ciphertext.
+        let myName = ProfileStore.shared.displayName.isEmpty ? "Someone" : ProfileStore.shared.displayName
+        let isDM = circleId.hasPrefix("dm:")
+        let circleName = circles.first(where: { $0.id == circleId })?.name ?? "your circle"
+        let body = isDM ? "Sent you a message" : "Posted in \(circleName)"
+        // `c` lets the recipient's NSE redact the banner if *they've* locked this circle.
+        let notifJSON = (try? JSONSerialization.data(withJSONObject: ["t": myName, "b": body, "c": circleId])) ?? Data()
+        let eventB64 = env.base64EncodedString()   // the sealed circle event, for push-inline sync
+        PushManager.shared.syncSelf(event: eventB64)   // multi-device: deliver to my own other devices
         for nodeHex in members {
             sendIroh(1, payload, to: nodeHex)
-            PushManager.shared.wake(nodeHex)   // push-wake offline members so notifications land
+            // Seal the banner to this recipient; the relay forwards it blind, their NSE decrypts.
+            let sealed = notifJSON.isEmpty ? nil : try? social?.sealMedia(recipientNodeHex: nodeHex, data: notifJSON)
+            PushManager.shared.wake(nodeHex, ciphertext: sealed?.base64EncodedString(), event: eventB64)
         }
         if !circleId.hasPrefix("dm:") { nearbyBroadcast(1, payload) }   // never broadcast DMs to nearby
         originateRelay(dests: members, inner: frame(1, payload))   // reach members behind a relay
-        Task { await SharedStore.uploadEvent(circleId: circleId, env: env) }   // store-and-forward mailbox
+        // Store-and-forward mailbox upload, queued so it finishes in the background if the user
+        // leaves the app before it lands (and is retried on next launch).
+        BackgroundUploader.shared.enqueue(circleId: circleId, env: env)
         persist()   // we just authored something — save it
     }
 
     /// Poll the shared mailbox and ingest any envelopes uploaded while we (or the sender)
     /// were offline. This is what delivers posts without both ends being online at once.
     func pollMailboxNow() {
-        guard SharedStore.isVolunteering, let social else { return }
+        guard let social else { return }
         let ids = circles.map { $0.id }
+        guard ids.contains(where: { SharedStore.hasMailbox($0) }) else { return }   // relay or S3
         Task { @MainActor in
             let msgs = await SharedStore.pollMailbox(circleIds: ids)
             var changed = false
@@ -554,6 +710,23 @@ final class FeedStore: ObservableObject {
             }
             if changed { persist(); refresh(); requestMissingMedia() }
         }
+    }
+
+    /// Drain events that arrived inline in a push (stashed by the NSE) and ingest them — silent
+    /// sync with no mailbox round-trip. We don't carry the circle id in cleartext, so we try each
+    /// circle until one opens the envelope (a wrong circle just ignores it).
+    func ingestPushInbox() {
+        guard let social else { return }
+        let envs = SharedInbox.drain()
+        guard !envs.isEmpty else { return }
+        let ids = circles.map { $0.id }
+        var changed = false
+        for env in envs {
+            for cid in ids where (try? social.receive(circleId: cid, envelope: env)) == true {
+                changed = true; notifyNewest(in: cid); bumpUnseen(cid); break
+            }
+        }
+        if changed { persist(); refresh(); requestMissingMedia() }
     }
 
     // Length-prefixed field helpers ([u16 LE len][bytes]).
@@ -579,7 +752,10 @@ final class FeedStore: ObservableObject {
         guard let node else { return }
         let f = frame(type, payload)
         Task { [weak self] in
-            do { try await node.sendToNode(nodeIdHex: nodeHex, payload: f) }
+            do {
+                try await node.sendToNode(nodeIdHex: nodeHex, payload: f)
+                await MainActor.run { self?.lastSendError = nil }   // a success clears a stale error
+            }
             catch { await MainActor.run { self?.lastSendError = error.localizedDescription } }
         }
     }
@@ -592,7 +768,7 @@ final class FeedStore: ObservableObject {
         if viaNearby { nearbyActive = true } else { internetActive = true }
         let payload = Data(data.dropFirst())
         // Frames that lead with a 64-char sender id (media req + calls): drop if blocked.
-        if [3, 10, 11, 12, 13].contains(type) {
+        if [3, 10, 11, 12, 13, 15, 16, 17, 18, 21].contains(type) {
             let head = String(data: payload.prefix(64), encoding: .utf8) ?? ""
             if head.count == 64, ConnectionsStore.shared.isBlocked(head) { return }
         }
@@ -608,25 +784,27 @@ final class FeedStore: ObservableObject {
         case 13: CallManager.shared.handleAudio(payload)
         case 14: handleBucketConfig(payload)
         case 15: CallManager.shared.handleVideo(payload)
+        case 16: CallManager.shared.handleOffer(payload)    // WebRTC SDP offer
+        case 17: CallManager.shared.handleAnswer(payload)   // WebRTC SDP answer
+        case 18: CallManager.shared.handleIce(payload)      // WebRTC ICE candidate
+        case 19: handleRelayNode(payload)                   // circle relay/mailbox node id
+        case 20: handlePresignBootstrap(payload)            // pre-signed S3 pool bootstrap url
+        case 21: CallManager.shared.handleGroupInvite(payload)  // WebRTC mesh group-call invite
         default: break
         }
     }
 
-    /// Share my S3 bucket as the circle's shared relay: seal the config to the circle and
-    /// broadcast it. Members adopt it as the shared mailbox. (No Haven server sees it.)
+    /// Share my S3 bucket as the active circle's mailbox — WITHOUT sending the credentials.
+    /// Instead, mint a pool of pre-signed URLs the circle uses; the access key/secret never
+    /// leave this device. I keep the creds locally (StorageStore) and use them directly.
     func shareBucketWithCircle() {
-        guard let social, StorageStore.shared.s3Configured else { return }
-        let cfg = S3Config(endpoint: StorageStore.shared.s3Endpoint, region: StorageStore.shared.s3Region,
-                           bucket: StorageStore.shared.s3Bucket, accessKey: StorageStore.shared.s3AccessKey,
-                           secret: StorageStore.shared.s3Secret)
-        SharedMailboxStore.shared.set(cfg)   // I use it as the relay too
-        guard let data = try? JSONEncoder().encode(cfg),
-              let sealed = try? social.sealCircleMedia(circleId: activeCircleId, data: data) else { return }
-        var p = Data(); lpAppend(&p, Data(activeCircleId.utf8)); p.append(sealed)
-        let members = social.contactNodeIds(circleId: activeCircleId)
-        for nodeHex in members { sendIroh(14, p, to: nodeHex) }
-        nearbyBroadcast(14, p)
-        originateRelay(dests: members, inner: frame(14, p))
+        guard let social, let s3 = SharedStore.ownerS3() else { return }
+        let cid = activeCircleId
+        // Remember I own this circle's bucket so it gets re-minted on launch / silent push.
+        var owned = PresignStore.shared.ownedCircles; owned.append(cid); PresignStore.shared.ownedCircles = owned
+        PushManager.shared.registerStorageOwner()
+        let members = social.contactNodeIds(circleId: cid)
+        Task { await PresignStore.shared.mintAndPublish(circleId: cid, members: members, s3: s3) }
     }
 
     private func handleBucketConfig(_ payload: Data) {
@@ -642,9 +820,118 @@ final class FeedStore: ObservableObject {
         pollMailboxNow()   // immediately pull from the newly-shared bucket
     }
 
+    /// Tell every circle to use a Haven relay (this device, or another that turned on the relay
+    /// toggle) as their mailbox. The relay node id is sealed to each circle and broadcast.
+    /// The relay link to hand an external `haven-relay` daemon for a circle (circle tag + the
+    /// circle's member node ids — all public routing data, no keys). Defaults to the active circle.
+    func relayLink(forCircle cid: String? = nil) -> String? {
+        guard let social else { return nil }
+        let circle = cid ?? activeCircleId
+        var members = social.contactNodeIds(circleId: circle)
+        members.append(myNodeHex)
+        return makeRelayLink(circle: circle, members: members)
+    }
+
+    /// Adopt a relay node as the mailbox for specific circles (and optionally make it the default
+    /// every present + future circle inherits). Each circle's members are told over frame 19.
+    func adoptRelayNode(_ nodeHex: String, circleIds: [String], setDefault: Bool) {
+        guard let social, let data = nodeHex.data(using: .utf8) else { return }
+        if setDefault { RelayMailboxStore.shared.defaultNodeHex = nodeHex }
+        for cid in circleIds {
+            RelayMailboxStore.shared.set(circleId: cid, nodeHex: nodeHex)   // I use it too
+            guard let sealed = try? social.sealCircleMedia(circleId: cid, data: data) else { continue }
+            var p = Data(); lpAppend(&p, Data(cid.utf8)); p.append(sealed)
+            let members = social.contactNodeIds(circleId: cid)
+            for m in members { sendIroh(19, p, to: m) }
+            nearbyBroadcast(19, p)
+            originateRelay(dests: members, inner: frame(19, p))
+        }
+        // A mailbox just came online → backfill EVERYTHING I already posted in these circles (so a
+        // member who was offline when I posted can still fetch it), push up anything still pending,
+        // and pull anything waiting for us.
+        backfillMailbox(circleIds: circleIds)
+        Task { await BackgroundUploader.shared.flush() }
+        pollMailboxNow()
+    }
+
+    /// Re-upload every post I've ALREADY authored in these circles to their mailbox. Fixes the
+    /// case where you set up a relay/bucket *after* posting — those posts never reached the
+    /// mailbox, so offline members couldn't get them. Idempotent (content-addressed keys).
+    func backfillMailbox(circleIds: [String]) {
+        guard let social else { return }
+        for cid in circleIds where SharedStore.hasMailbox(cid) {
+            let envs = social.exportMyEnvelopes(circleId: cid)
+            guard !envs.isEmpty else { continue }
+            Task { for env in envs { await SharedStore.uploadEvent(circleId: cid, env: env) } }
+        }
+    }
+
+    /// Apply a relay to every circle + make it the default (used by the in-app RelayHost).
+    func broadcastRelayNode(_ nodeHex: String) {
+        adoptRelayNode(nodeHex, circleIds: circles.map(\.id), setDefault: true)
+    }
+
+    private func handleRelayNode(_ payload: Data) {
+        guard let social else { return }
+        var off = 0
+        guard let cidData = lpRead(payload, &off) else { return }
+        let circleId = String(data: cidData, encoding: .utf8) ?? ""
+        let sealed = payload.subdata(in: (payload.startIndex + off)..<payload.endIndex)
+        guard !circleId.isEmpty, !sealed.isEmpty,
+              let data = social.openCircleMedia(circleId: circleId, sealed: sealed),
+              let nodeHex = String(data: data, encoding: .utf8), nodeHex.count == 64 else { return }
+        RelayMailboxStore.shared.set(circleId: circleId, nodeHex: nodeHex)
+        Task { await BackgroundUploader.shared.flush() }   // deliver posts we couldn't send before
+        pollMailboxNow()
+    }
+
+    // MARK: - Pre-signed S3 pool (advanced mailbox without sharing credentials)
+
+    func memberHexes(circleId: String) -> [String] { social?.contactNodeIds(circleId: circleId) ?? [] }
+    func sealCirclePresign(circleId: String, data: Data) -> Data? { try? social?.sealCircleMedia(circleId: circleId, data: data) }
+    func openCirclePresign(circleId: String, sealed: Data) -> Data? { social?.openCircleMedia(circleId: circleId, sealed: sealed) }
+
+    /// Broadcast the bootstrap GET URL for a circle's pre-signed-URL pool (sealed to the circle).
+    func broadcastPresignBootstrap(circleId: String, getURL: String) {
+        guard let social, let data = getURL.data(using: .utf8),
+              let sealed = try? social.sealCircleMedia(circleId: circleId, data: data) else { return }
+        var p = Data(); lpAppend(&p, Data(circleId.utf8)); p.append(sealed)
+        let members = social.contactNodeIds(circleId: circleId)
+        for m in members { sendIroh(20, p, to: m) }
+        nearbyBroadcast(20, p)
+        originateRelay(dests: members, inner: frame(20, p))
+    }
+
+    private func handlePresignBootstrap(_ payload: Data) {
+        guard let social else { return }
+        var off = 0
+        guard let cidData = lpRead(payload, &off) else { return }
+        let circleId = String(data: cidData, encoding: .utf8) ?? ""
+        let sealed = payload.subdata(in: (payload.startIndex + off)..<payload.endIndex)
+        guard !circleId.isEmpty, !sealed.isEmpty,
+              let data = social.openCircleMedia(circleId: circleId, sealed: sealed),
+              let url = String(data: data, encoding: .utf8), url.hasPrefix("http") else { return }
+        PresignStore.shared.setBootstrap(circleId: circleId, getURL: url)
+        backfillMailbox(circleIds: [circleId])             // re-upload my past posts to the pool
+        Task { await BackgroundUploader.shared.flush() }   // deliver posts we couldn't send before
+        pollMailboxNow()
+    }
+
     /// Send a call signaling/audio frame to a peer (direct, over the internet transport).
     func sendCallFrame(_ type: UInt8, _ payload: Data, to nodeHex: String) {
         sendIroh(type, payload, to: nodeHex)
+    }
+
+    /// Notify a callee via push that a call is coming in (so they're alerted even if the app
+    /// isn't foregrounded). A sealed "Incoming call" banner the NSE decrypts. (True ring-from-
+    /// killed needs a VoIP push — a follow-on.)
+    func pushCallInvite(to nodeHex: String, callerName: String) {
+        guard let social else { return }
+        // Seal {caller name, caller node id} to the callee. Their PushKit handler decrypts it and
+        // shows the system incoming-call screen via CallKit (ring-from-killed). Worker stays blind.
+        let json = (try? JSONSerialization.data(withJSONObject: ["t": callerName, "h": myNodeHex])) ?? Data()
+        let sealed = try? social.sealMedia(recipientNodeHex: nodeHex, data: json)
+        PushManager.shared.callPush(to: nodeHex, ciphertext: sealed?.base64EncodedString())
     }
 
     // MARK: - Mesh relay  [9] payload = [msgId(16)][ttl(1)][destCount(1)][dest×32…][inner frame]
@@ -711,7 +998,10 @@ final class FeedStore: ObservableObject {
     private func sendRaw(_ framed: Data, to nodeHex: String) {
         guard let node else { return }
         Task { [weak self] in
-            do { try await node.sendToNode(nodeIdHex: nodeHex, payload: framed) }
+            do {
+                try await node.sendToNode(nodeIdHex: nodeHex, payload: framed)
+                await MainActor.run { self?.lastSendError = nil }
+            }
             catch { await MainActor.run { self?.lastSendError = error.localizedDescription } }
         }
     }
@@ -761,8 +1051,8 @@ final class FeedStore: ObservableObject {
             payload.append(Data(ref.utf8))
             for contact in ContactsStore.shared.contacts { sendIroh(3, payload, to: contact.idHex) }
             nearbyBroadcast(3, payload)
-            // Also try restoring it from a shared store (my own bucket), if I run one.
-            if SharedStore.isVolunteering {
+            // Also try restoring it from the circle's mailbox (relay or S3), if there is one.
+            if circleIds.contains(where: { SharedStore.hasMailbox($0) }) {
                 Task { @MainActor in
                     if let data = await SharedStore.restore(ref: ref, circleIds: circleIds, social: social) {
                         MediaStore.shared.store(ref, data); autoSaveReceived(ref); refresh()
@@ -919,15 +1209,24 @@ final class FeedStore: ObservableObject {
                                               dedupeKey: "circle-\(circleId)")
         }
         guard (try? social.addContactBundle(circleId: circleId, bundle: bundle)) != nil else { return }
-        lastHeard[idHex] = Date()
+        recordHeard(idHex)
         persist(); refreshCircles()
         if !profileBlob.isEmpty,
-           let authName = social.verifyProfile(bundle: bundle, blob: profileBlob), !authName.isEmpty {
-            ContactsStore.shared.setAuthoritativeName(idHex: idHex, authName)
+           let card = social.verifyProfileCard(bundle: bundle, blob: profileBlob), !card.name.isEmpty {
+            ContactsStore.shared.setCard(idHex: idHex, name: card.name, bio: card.bio, link: card.link,
+                                         avatar: card.avatar, emoji: card.emoji)
         }
-        // Reply so the circle is mutual + back-fill its posts to them. Direct-send to the
-        // sender always; only the open default circle's handshake fans out to nearby (a
-        // broadcast reply for a custom/DM circle is what contaminated their membership).
+        // Reply so the circle is mutual + back-fill its posts to them — but at most once per peer
+        // per cooldown window. A hello reply is itself a hello, so a peer that echoes ours back
+        // (e.g. a different client that doesn't suppress its own reply) would otherwise trigger an
+        // INFINITE handshake ping-pong, each round re-verifying signatures + re-rendering our
+        // avatar + re-sending every post — which pins the main thread and freezes the app.
+        let replyKey = "\(idHex)|\(circleId)"
+        let now = Date()
+        if let last = lastHelloReply[replyKey], now.timeIntervalSince(last) < 20 {
+            refresh(); return   // already handshaked this peer/circle very recently — don't echo back
+        }
+        lastHelloReply[replyKey] = now
         let isDM = circleId.hasPrefix("dm:")
         if let hello = helloPayload(circleId: circleId, circleName: circleName) {
             sendIroh(0, hello, to: idHex)
@@ -939,6 +1238,8 @@ final class FeedStore: ObservableObject {
         }
         refresh()
     }
+    /// Cooldown to break handshake ping-pong (see handleHello). Keyed by "<peerHex>|<circleId>".
+    private var lastHelloReply: [String: Date] = [:]
 
     private func handleEvent(_ payload: Data) {
         guard let social else { return }
@@ -949,6 +1250,8 @@ final class FeedStore: ObservableObject {
         let envelope = payload.subdata(in: (payload.startIndex + off)..<payload.endIndex)
         guard !circleId.isEmpty, !envelope.isEmpty else { return }
         if (try? social.receive(circleId: circleId, envelope: envelope)) == true {
+            // Hearing a message is proof of life — refresh "last seen" for a DM's partner.
+            if circleId.hasPrefix("dm:"), let partner = dmPartnerHex(circleId) { recordHeard(partner) }
             persist()
             refresh()
             requestMissingMedia()   // pull any photos/videos it references
@@ -982,13 +1285,18 @@ final class FeedStore: ObservableObject {
 struct FeedView: View {
     @ObservedObject private var store = FeedStore.shared
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var gate = BiometricGate.shared
+    let account: Account
     let friendName: String
     let seed: Data
+    @State private var showCircle = false
 
     @State private var compose = ""
     @State private var attachedMedia: [String] = []
     @State private var attachedTrack: TrackRefFfi?
     @State private var muteVideo = false   // author's audio choice for attached video(s)
+    @State private var pendingSensitive: [String]?   // attachments SCA flagged, awaiting send-anyway
+    @State private var showLocation = false   // opt-in: tag the post with a photo's reverse-geocoded place
     @State private var showMediaPicker = false
     @State private var showCamera = false
     @State private var showSongPicker = false
@@ -1006,7 +1314,8 @@ struct FeedView: View {
 
     struct TrimTarget: Identifiable { let id = UUID(); let ref: String }
 
-    init(seed: Data, friendName: String) {
+    init(account: Account, seed: Data, friendName: String) {
+        self.account = account
         self.seed = seed
         self.friendName = friendName
     }
@@ -1030,6 +1339,7 @@ struct FeedView: View {
                             PostCard(
                                 item: item, friendName: friendName,
                                 onReact: { e in withAnimation(HavenTheme.bouncy) { store.react(item.id, e) } },
+                                onUnreact: { e in withAnimation(HavenTheme.bouncy) { store.unreact(item.id, e) } },
                                 onComment: { b, m in
                                     withAnimation(HavenTheme.smooth) { store.comment(item.id, b, m) }
                                     // Reveal the freshly added reply (it lands at the post's bottom).
@@ -1056,15 +1366,22 @@ struct FeedView: View {
                 .scrollDismissesKeyboard(.immediately)
                 .onPreferenceChange(PostCenterKey.self) { centers in
                     // The post nearest the vertical center of the screen becomes active.
-                    let target = UIScreen.main.bounds.midY
+                    let target = PlatformScreen.bounds.midY
                     let nearest = centers.min { abs($0.value - target) < abs($1.value - target) }
                     AudioCoordinator.shared.center(nearest?.key)
                 }
                 }   // ScrollViewReader
                 composerBar
             }
+            .overlay {
+                // Biometric-locked circle: cover its feed until Face ID unlocks it. The toolbar
+                // circle-switcher stays usable so you can navigate away without unlocking.
+                if gate.isLocked(store.activeCircleId) {
+                    CircleLockView(circleName: store.activeCircleName, circleId: store.activeCircleId)
+                }
+            }
             .navigationTitle(store.activeCircleName)
-            .navigationBarTitleDisplayMode(.inline)
+            .havenInlineNavTitle()
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Menu {
@@ -1085,33 +1402,54 @@ struct FeedView: View {
                         .foregroundStyle(.primary)
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { settings.silent.toggle() } label: {
-                        Image(systemName: settings.silent ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    }
-                    .tint(settings.silent ? .secondary : HavenTheme.pink)
-                    .accessibilityLabel(settings.silent ? "Unmute app" : "Mute app")
+                // Manage this circle (members, invite, settings) — lives on the circle, not You.
+                ToolbarItem(placement: .havenTrailing) {
+                    Button { showCircle = true } label: { Image(systemName: "person.2.fill") }
+                        .accessibilityLabel("Manage circle")
                 }
             }
-            .sheet(isPresented: $showNewCircle) {
-                NewCircleView { name, members in store.createCircle(name: name, memberIds: members) }
+            .sheet(isPresented: $showCircle) {
+                NavigationStack { CircleView(account: account) }.macSheetClose()
             }
-            .onAppear { store.configure(seed: seed) }
+            .sheet(isPresented: $showNewCircle) {
+                NewCircleView { name, members in store.createCircle(name: name, memberIds: members) }.macSheetClose()
+            }
+            .onAppear {
+                store.configure(seed: seed)
+                // Screenshot harness: open the full-screen story viewer for its hero shot.
+                if DemoEnv.scene == .story {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        guard !store.groupedStoriesFlat.isEmpty else { return }
+                        storyIndex = 0; showStories = true
+                    }
+                }
+            }
             .sensoryFeedback(.success, trigger: store.postTick)
             .sensoryFeedback(.impact(weight: .light), trigger: store.reactionTick)
             .sheet(isPresented: $showMediaPicker) {
-                MediaPicker { refs in attachedMedia.append(contentsOf: refs) }
+                MediaPicker { refs in attachedMedia.append(contentsOf: refs) }.macSheetClose()
             }
             .sheet(isPresented: $showLocationPicker) {
-                LocationPicker { ref in attachedMedia.append(ref) }
+                LocationPicker { ref in attachedMedia.append(ref) }.macSheetClose()
             }
-            .fullScreenCover(isPresented: $showCamera) {
+            .havenFullScreenCover(isPresented: $showCamera) {
                 CameraView { refs in attachedMedia.append(contentsOf: refs) }.ignoresSafeArea()
             }
             .sheet(isPresented: $showSongPicker) {
-                SongPicker { track in attachedTrack = track }
+                SongPicker { track in attachedTrack = track }.macSheetClose()
             }
-            .fullScreenCover(isPresented: $showStoryCamera) {
+            .confirmationDialog("This media may be sensitive",
+                                isPresented: Binding(get: { pendingSensitive != nil },
+                                                     set: { if !$0 { pendingSensitive = nil } }),
+                                titleVisibility: .visible) {
+                Button("Send anyway", role: .destructive) {
+                    let f = pendingSensitive ?? []; pendingSensitive = nil; doSend(flagged: f)
+                }
+                Button("Cancel", role: .cancel) { pendingSensitive = nil }
+            } message: {
+                Text("On-device analysis flagged one or more attachments as sensitive. If you send, they'll be blurred for everyone in the circle until each person taps to reveal.")
+            }
+            .havenFullScreenCover(isPresented: $showStoryCamera) {
                 StoryCameraView { ref, caption, track in
                     Task { @MainActor in
                         // A long video becomes up to 5 consecutive story slides.
@@ -1120,11 +1458,11 @@ struct FeedView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showRequests) { ConnectionRequestsView() }
-            .fullScreenCover(isPresented: $showStories) {
+            .sheet(isPresented: $showRequests) { ConnectionRequestsView().macSheetClose() }
+            .havenFullScreenCover(isPresented: $showStories) {
                 StoryViewer(stories: store.groupedStoriesFlat, index: storyIndex, friendName: friendName)
             }
-            .fullScreenCover(item: $trimmingRef) { target in
+            .havenFullScreenCover(item: $trimmingRef) { target in
                 if let url = MediaStore.shared.storagePath(for: target.ref) {
                     VideoTrimmer(path: url.path) { trimmed in
                         replaceAttached(target.ref, with: MediaStore.shared.importTrimmed(trimmed))
@@ -1203,7 +1541,7 @@ struct FeedView: View {
                                          startPoint: .topLeading, endPoint: .bottomTrailing))
                 .frame(width: 64, height: 64)
             if let img {
-                Image(uiImage: img).resizable().scaledToFill().frame(width: 56, height: 56).clipShape(Circle())
+                Image(platformImage: img).resizable().scaledToFill().frame(width: 56, height: 56).clipShape(Circle())
             } else {
                 Circle().fill(Color(.secondarySystemBackground)).frame(width: 56, height: 56)
                     .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
@@ -1234,6 +1572,14 @@ struct FeedView: View {
         VStack { Spacer()
             VStack(spacing: 8) {
                 if !attachedMedia.isEmpty || attachedTrack != nil || composeRetention != nil { attachmentTray }
+                // Opt-in location tag — only when a photo/video with GPS is attached. Default off.
+                if MediaStore.shared.anyLocated(attachedMedia) {
+                    Toggle(isOn: $showLocation) {
+                        Label("Show location", systemImage: "mappin.and.ellipse").font(.caption.weight(.medium))
+                    }
+                    .tint(HavenTheme.pink)
+                    .padding(.horizontal, 4)
+                }
                 HStack(spacing: 10) {
                     Menu {
                         Button { showMediaPicker = true } label: { Label("Photo or Video", systemImage: "photo.on.rectangle") }
@@ -1256,8 +1602,10 @@ struct FeedView: View {
                         .accessibilityIdentifier("composeField")
                         .focused($composeFocused)
                         .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(.background, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.08)))
+                        // A fixed-radius rounded rect — a Capsule's radius grows with height and
+                        // clips into the text once the field wraps to multiple lines.
+                        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.white.opacity(0.08)))
 
                     Button { send() } label: {
                         Image(systemName: "paperplane.fill").foregroundStyle(.white)
@@ -1279,7 +1627,7 @@ struct FeedView: View {
                 ForEach(attachedMedia, id: \.self) { ref in
                     if let m = MediaStore.shared.item(ref), let img = m.image {
                         ZStack(alignment: .topTrailing) {
-                            Image(uiImage: img).resizable().scaledToFill()
+                            Image(platformImage: img).resizable().scaledToFill()
                                 .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 10))
                                 .overlay(alignment: .bottomLeading) {
                                     if m.kind == .video { videoEditMenu(ref) }
@@ -1377,23 +1725,58 @@ struct FeedView: View {
     private func send() {
         let text = compose.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachedMedia.isEmpty || attachedTrack != nil else { return }
-        store.post(text, media: attachedMedia, music: attachedTrack, retentionSecs: composeRetention, muteVideo: muteVideo)
+        // Sender-side check: if on-device Sensitive Content Analysis flags an attachment, ask before
+        // sending. (Only when the user has SCA on; otherwise post straight away.)
+        let media = attachedMedia
+        guard SensitiveContentScanner.shared.isEnabled, !media.isEmpty else { doSend(flagged: []); return }
+        Task { @MainActor in
+            var flagged: [String] = []
+            for ref in media where await SensitiveContentScanner.shared.isSensitive(ref: ref) { flagged.append(ref) }
+            if flagged.isEmpty { doSend(flagged: []) } else { pendingSensitive = flagged }
+        }
+    }
+
+    /// Actually post, then federate a flag for any attachment confirmed sensitive so recipients
+    /// without SCA (Android/desktop) blur it too. If "Show location" is on, a photo's GPS is
+    /// reverse-geocoded into a tappable map pin attached to the post.
+    private func doSend(flagged: [String]) {
+        let text = compose.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Snapshot compose state, then clear the UI immediately (the geocode is async).
+        let base = attachedMedia, track = attachedTrack, retention = composeRetention, mute = muteVideo
+        let wantLocation = showLocation
+        let cid = store.activeCircleId
         compose = ""; attachedMedia = []; attachedTrack = nil; composeRetention = nil; muteVideo = false
-        composeFocused = false
+        showLocation = false; composeFocused = false
+        Task { @MainActor in
+            var media = base
+            if wantLocation,
+               let located = base.first(where: { MediaStore.shared.location(for: $0) != nil }),
+               let coord = MediaStore.shared.location(for: located) {
+                let name = await SharedLocation.placeName(coord)
+                media.insert(SharedLocation.ref(lat: coord.latitude, lon: coord.longitude, label: name), at: 0)
+            }
+            store.post(text, media: media, music: track, retentionSecs: retention, muteVideo: mute)
+            for ref in flagged { store.flagSensitive(circleId: cid, ref: ref) }
+        }
     }
 }
 
-private struct PostCard: View {
+struct PostCard: View {
     let item: FeedItemFfi
     let friendName: String
     let onReact: (String) -> Void
+    var onUnreact: (String) -> Void = { _ in }
     let onComment: (String, [String]) -> Void
     let onEdit: (String) -> Void
     let onUnsend: () -> Void
+    /// When true (the "show all comments" sheet) every comment is shown; otherwise the inline
+    /// list is capped at 3 with a "show all" control.
+    var expandAllComments = false
 
     @ObservedObject private var audio = AudioCoordinator.shared
     @ObservedObject private var profile = ProfileStore.shared
     @ObservedObject private var feed = FeedStore.shared
+    @State private var showAllComments = false
     @State private var commentText = ""
     @State private var commentMedia: [String] = []
     @State private var showCommentMediaPicker = false
@@ -1405,6 +1788,9 @@ private struct PostCard: View {
     @State private var editCommentId: String?
     @State private var editCommentText = ""
     @State private var editCommentMedia: [String] = []
+    @State private var commentReactTarget: CommentReactTarget?
+
+    struct CommentReactTarget: Identifiable { let id: String }
     @State private var currentPage = 0
     @State private var showHeart = false
     @State private var showReactionDetail = false
@@ -1444,13 +1830,19 @@ private struct PostCard: View {
 
     /// Single-tap a post's media to mute/unmute its sound (video audio or its song).
     private func togglePostMute() {
-        if item.media.contains(where: isVideo) {
-            if audio.activePostId != item.id {
-                audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer, muteVideo: item.muteVideo)
-            }
+        let hasVideo = item.media.contains(where: isVideo)
+        // Make sure this post is the active audio source first, so the toggle acts on it.
+        if (hasVideo || item.music != nil), audio.activePostId != item.id {
+            audio.start(postId: item.id, track: item.music, video: primaryVideoPlayer, muteVideo: item.muteVideo)
+        }
+        if hasVideo {
+            // Tapping a video toggles *its own* sound (same as the speaker button) — overriding
+            // the author's mute and any global silence so a tap always brings the audio up.
+            if SettingsStore.shared.silent { SettingsStore.shared.silent = false }
             audio.toggleVideoAudio()
-        } else if item.music != nil {
-            audio.toggleMusic(postId: item.id, track: item.music)
+        } else {
+            // A photo / song-only post: a tap still toggles the app's global mute.
+            SettingsStore.shared.silent.toggle()
         }
     }
 
@@ -1469,7 +1861,7 @@ private struct PostCard: View {
                 Label("Message unsent", systemImage: "minus.circle")
                     .font(.subheadline).italic().foregroundStyle(.secondary)
             } else {
-                if !item.body.isEmpty { Text(item.body).font(.body) }
+                if !item.body.isEmpty { LinkedText(text: item.body) }
                 if !item.media.isEmpty {
                     // For a single-video post the GestureVideoPlayer owns tap/double-tap/hold/
                     // scrub itself (so its hold-to-pause and drag-to-scrub aren't stolen). For
@@ -1496,7 +1888,7 @@ private struct PostCard: View {
         .onChange(of: audio.centeredPostId) { syncPlayback() }
         .onChange(of: currentPage) { if isActive { playVisibleVideo() } }
         .sheet(isPresented: $showEdit) { EditPostSheet(item: item) }
-        .fullScreenCover(item: $zoomTarget) { t in MediaZoomViewer(refs: t.refs, index: t.index) }
+        .havenFullScreenCover(item: $zoomTarget) { t in MediaZoomViewer(refs: t.refs, index: t.index) }
         .alert("Edit comment", isPresented: Binding(get: { editCommentId != nil }, set: { if !$0 { editCommentId = nil } })) {
             TextField("Comment", text: $editCommentText)
             Button("Save") { if let id = editCommentId { feed.edit(id, editCommentText, media: editCommentMedia) }; editCommentId = nil }
@@ -1551,7 +1943,7 @@ private struct PostCard: View {
         if let m = MediaStore.shared.item(ref), let img = m.image {
             // Aspect width for the fixed row height, clamped so a panorama/portrait stays sane.
             let aspect = min(2.4, max(0.6, img.size.width / max(img.size.height, 1)))
-            Image(uiImage: img).resizable().scaledToFill()
+            Image(platformImage: img).resizable().scaledToFill()
                 .frame(width: height * aspect, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(alignment: .center) {
@@ -1560,9 +1952,19 @@ private struct PostCard: View {
                             .foregroundStyle(.white.opacity(0.9)).shadow(radius: 4)
                     }
                 }
+                // Blur media flagged sensitive — by this device's SCA or any circle member's
+                // federated flag (protects viewers whose platform has no SCA).
+                .sensitiveContentGuard(ref: ref, circleId: FeedStore.shared.activeCircleId, scan: !item.isMe)
                 .onTapGesture {
                     if let idx = item.media.firstIndex(of: ref) { zoomTarget = ZoomTarget(refs: item.media, index: idx) }
                 }
+        } else {
+            // Not downloaded yet — a compact loading tile keeps the gallery layout intact.
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemFill))
+                ProgressView()
+            }
+            .frame(width: height * 1.2, height: height)
         }
     }
 
@@ -1597,9 +1999,28 @@ private struct PostCard: View {
                                    onTap: { togglePostMute() },
                                    onDoubleTap: { heartIt() })
             } else if let img = m.image {
-                Image(uiImage: img).resizable().scaledToFit()      // show the whole image (no crop)
+                Image(platformImage: img).resizable().scaledToFit()      // show the whole image (no crop)
+            } else {
+                mediaLoadingPlaceholder(ref)
+            }
+        } else {
+            // Referenced but not here yet — it's still coming from the sender / mailbox.
+            mediaLoadingPlaceholder(ref)
+        }
+    }
+
+    /// Shown for a media reference whose bytes haven't arrived yet, so the post doesn't look
+    /// broken while it's still downloading from the sender, a relay, or the shared mailbox.
+    @ViewBuilder private func mediaLoadingPlaceholder(_ ref: String) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(.secondarySystemFill))
+            VStack(spacing: 8) {
+                ProgressView()
+                Text(isVideo(ref) ? "Video still loading…" : "Media still loading…")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 160)
     }
 
     /// The single-media tile's aspect ratio, taken from the image (or a video's thumbnail).
@@ -1689,10 +2110,7 @@ private struct PostCard: View {
         if item.isMe {
             HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 34)
         } else {
-            Circle()
-                .fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
-                .frame(width: 34, height: 34)
-                .overlay(Text(String(authorName.prefix(1))).font(.caption2.bold()).foregroundStyle(.white))
+            PeerAvatar(nodeHex: item.authorShort, name: authorName, size: 34)
         }
     }
 
@@ -1727,10 +2145,15 @@ private struct PostCard: View {
                     .help(feed.relayReachable ? "Backed up to your circle's store" : "Waiting to sync")
             }
             Spacer()
-            if item.isMe && !item.unsent {
+            if !item.unsent {
                 Menu {
-                    Button { showEdit = true } label: { Label("Edit", systemImage: "pencil") }
-                    Button(role: .destructive) { onUnsend() } label: { Label("Unsend", systemImage: "arrow.uturn.backward") }
+                    if let url = DeepLink.postURL(circleId: feed.activeCircleId, postId: item.id) {
+                        ShareLink(item: url) { Label("Share post", systemImage: "square.and.arrow.up") }
+                    }
+                    if item.isMe {
+                        Button { showEdit = true } label: { Label("Edit", systemImage: "pencil") }
+                        Button(role: .destructive) { onUnsend() } label: { Label("Unsend", systemImage: "arrow.uturn.backward") }
+                    }
                 } label: { Image(systemName: "ellipsis").foregroundStyle(.secondary).padding(6) }
             }
         }
@@ -1739,15 +2162,16 @@ private struct PostCard: View {
     private var reactionsRow: some View {
         HStack(spacing: 8) {
             ForEach(item.reactions, id: \.emoji) { r in
-                Button { showReactionDetail = true } label: {
-                    Text("\(r.emoji) \(r.count)")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(r.mine ? AnyShapeStyle(HavenTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Capsule())
-                        .overlay(Capsule().strokeBorder(r.mine ? HavenTheme.pink.opacity(0.5) : .clear))
-                }
-                .buttonStyle(.plain)
-                .transition(.scale.combined(with: .opacity))
+                // Tap a chip to toggle your own reaction; press-and-hold to see who reacted.
+                Text("\(r.emoji) \(r.count)")
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(r.mine ? AnyShapeStyle(HavenTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Capsule())
+                    .overlay(Capsule().strokeBorder(r.mine ? HavenTheme.pink.opacity(0.5) : .clear))
+                    .contentShape(Capsule())
+                    .onTapGesture { if r.mine { onUnreact(r.emoji) } else { react(r.emoji) } }
+                    .onLongPressGesture(minimumDuration: 0.3) { showReactionDetail = true }
+                    .transition(.scale.combined(with: .opacity))
             }
             Spacer()
             ForEach(EmojiStore.shared.frequent(4), id: \.self) { e in
@@ -1763,58 +2187,104 @@ private struct PostCard: View {
             ReactionPicker { e in onReact(e) }
         }
         .sheet(isPresented: $showReactionDetail) {
-            ReactionDetailView(reactions: item.reactions)
+            ReactionDetailView(reactions: item.reactions, onUnreact: { e in onUnreact(e) })
         }
     }
 
     private var commentsList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(item.comments, id: \.id) { c in
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(alignment: .top, spacing: 6) {
-                        Text(commentAuthorName(c)).font(.caption.weight(.semibold))
-                            .foregroundStyle(c.isMe ? HavenTheme.pink : .secondary)
-                        Text(relativeTimeShort(c.createdAt)).font(.caption2).foregroundStyle(.tertiary)
-                        if c.unsent {
-                            Text("unsent").font(.caption).italic().foregroundStyle(.secondary)
-                        } else if !c.body.isEmpty {
-                            Text(c.body).font(.caption)
-                            if c.edited { Text("(edited)").font(.caption2).foregroundStyle(.secondary) }
-                        }
-                        Spacer()
-                    }
-                    if !c.unsent && !c.media.isEmpty { commentMediaRow(c.media) }
-                    if !c.reactions.isEmpty {
-                        HStack(spacing: 4) {
-                            ForEach(c.reactions, id: \.emoji) { r in
-                                Text("\(r.emoji)\(r.count > 1 ? " \(r.count)" : "")")
-                                    .font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(Color(.tertiarySystemFill), in: Capsule())
-                            }
-                        }
-                    }
+        // Inline we show at most 3; the "show all" sheet shows every comment.
+        let shown = expandAllComments ? item.comments : Array(item.comments.prefix(3))
+        return VStack(alignment: .leading, spacing: 10) {
+            ForEach(shown, id: \.id) { c in commentRow(c) }
+            if !expandAllComments && item.comments.count > 3 {
+                Button { showAllComments = true } label: {
+                    Text("Show all \(item.comments.count) comments")
+                        .font(.caption.weight(.semibold)).foregroundStyle(HavenTheme.pink)
                 }
-                .contextMenu {
-                    if !c.unsent {
-                        ControlGroup {
-                            ForEach(["❤️", "👍", "😂", "😮", "😢", "🔥"], id: \.self) { e in
-                                Button(e) { feed.react(c.id, e) }
-                            }
-                        }
-                        if c.isMe {
-                            if !c.body.isEmpty {
-                                Button { editCommentId = c.id; editCommentText = c.body; editCommentMedia = c.media } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }
-                            }
-                            Button(role: .destructive) { feed.unsend(c.id) } label: { Label("Delete", systemImage: "trash") }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .sheet(isPresented: $showAllComments) {
+            PostCommentsSheet(item: item, friendName: friendName,
+                              onReact: onReact, onUnreact: onUnreact, onComment: onComment, onEdit: onEdit, onUnsend: onUnsend)
+        }
+        .sheet(item: $commentReactTarget) { t in
+            ReactionPicker { e in feed.react(t.id, e) }
+        }
+    }
+
+    /// One comment: tappable avatar + name (→ profile), time, body, media, reactions.
+    @ViewBuilder private func commentRow(_ c: FeedCommentFfi) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            commentAuthorLink(c) { commentAvatar(c) }
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    commentAuthorLink(c) {
+                        Text(commentAuthorName(c)).font(.caption.weight(.semibold))
+                            .foregroundStyle(c.isMe ? HavenTheme.pink : .primary)
+                    }
+                    Text(relativeTimeShort(c.createdAt)).font(.caption2).foregroundStyle(.tertiary)
+                    if c.edited && !c.unsent { Text("(edited)").font(.caption2).foregroundStyle(.secondary) }
+                    Spacer()
+                }
+                if c.unsent {
+                    Text("unsent").font(.caption).italic().foregroundStyle(.secondary)
+                } else if !c.body.isEmpty {
+                    LinkedText(text: c.body, font: .caption)
+                }
+                if !c.unsent && !c.media.isEmpty { commentMediaRow(c.media) }
+                if !c.reactions.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(c.reactions, id: \.emoji) { r in
+                            Text("\(r.emoji)\(r.count > 1 ? " \(r.count)" : "")")
+                                .font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color(.tertiarySystemFill), in: Capsule())
                         }
                     }
                 }
             }
         }
-        .padding(10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contextMenu {
+            if !c.unsent {
+                ControlGroup {
+                    ForEach(EmojiStore.shared.frequent(4), id: \.self) { e in
+                        Button(e) { EmojiStore.shared.record(e); feed.react(c.id, e) }
+                    }
+                }
+                Button { commentReactTarget = CommentReactTarget(id: c.id) } label: { Label("More reactions…", systemImage: "face.smiling") }
+                if c.isMe {
+                    if !c.body.isEmpty {
+                        Button { editCommentId = c.id; editCommentText = c.body; editCommentMedia = c.media } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                    }
+                    Button(role: .destructive) { feed.unsend(c.id) } label: { Label("Delete", systemImage: "trash") }
+                }
+            }
+        }
+    }
+
+    /// A commenter's avatar — mine is my real photo/emoji; others use their synced photo/emoji.
+    @ViewBuilder private func commentAvatar(_ c: FeedCommentFfi) -> some View {
+        if c.isMe {
+            HavenAvatar(image: profile.avatar, emoji: profile.emoji, size: 24)
+        } else {
+            PeerAvatar(nodeHex: c.authorShort, name: commentAuthorName(c), size: 24)
+        }
+    }
+
+    /// Wrap a commenter's avatar/name so tapping opens their profile (no link for yourself).
+    @ViewBuilder private func commentAuthorLink<Content: View>(_ c: FeedCommentFfi, @ViewBuilder _ content: () -> Content) -> some View {
+        if c.isMe {
+            content()
+        } else {
+            NavigationLink {
+                UserProfileView(authorHex: c.authorShort, name: commentAuthorName(c))
+            } label: { content() }
+            .buttonStyle(.plain)
+        }
     }
 
     @ViewBuilder private func commentMediaRow(_ refs: [String]) -> some View {
@@ -1835,8 +2305,8 @@ private struct PostCard: View {
             }
         }
     }
-    private func thumb(_ img: UIImage) -> some View {
-        Image(uiImage: img).resizable().scaledToFill()
+    private func thumb(_ img: PlatformImage) -> some View {
+        Image(platformImage: img).resizable().scaledToFill()
             .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -1852,9 +2322,10 @@ private struct PostCard: View {
                     Button { showCommentMediaPicker = true } label: { Label("Photo or Video", systemImage: "photo") }
                     Button { showAudioRecorder = true } label: { Label("Audio reply", systemImage: "mic") }
                 } label: { Image(systemName: "paperclip").foregroundStyle(.secondary) }
-                TextField("Add a reply…", text: $commentText)
+                TextField("Add a reply…", text: $commentText, axis: .vertical)
+                    .lineLimit(1...5)
                     .font(.caption).padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color(.tertiarySystemFill), in: Capsule())
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 Button { sendComment() } label: {
                     Image(systemName: "arrow.up.circle.fill").imageScale(.large).foregroundStyle(HavenTheme.pink)
                 }
@@ -1869,7 +2340,7 @@ private struct PostCard: View {
         let m = MediaStore.shared.item(ref)
         return ZStack(alignment: .topTrailing) {
             Group {
-                if let img = m?.image { Image(uiImage: img).resizable().scaledToFill() }
+                if let img = m?.image { Image(platformImage: img).resizable().scaledToFill() }
                 else { Image(systemName: "waveform").frame(maxWidth: .infinity, maxHeight: .infinity).background(HavenTheme.brandHorizontal.opacity(0.25)) }
             }
             .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1890,6 +2361,40 @@ private struct PostCard: View {
 /// Your profile / archive: every post you've shared, kept as a copy on your device.
 /// Another person's profile — their posts + a stories ring row. Opened by tapping a
 /// name or avatar anywhere.
+/// A focused sheet for a single post with ALL its comments expanded, so you can read and
+/// interact with just that post and its commenters (shown when a post has more than 3 comments).
+struct PostCommentsSheet: View {
+    let item: FeedItemFfi
+    let friendName: String
+    let onReact: (String) -> Void
+    var onUnreact: (String) -> Void = { _ in }
+    let onComment: (String, [String]) -> Void
+    let onEdit: (String) -> Void
+    let onUnsend: () -> Void
+    @ObservedObject private var feed = FeedStore.shared
+    @Environment(\.dismiss) private var dismiss
+
+    /// The live post, so comments you add in the sheet appear immediately.
+    private var live: FeedItemFfi { feed.feedItems.first { $0.id == item.id } ?? item }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                HavenBackground()
+                ScrollView {
+                    PostCard(item: live, friendName: friendName,
+                             onReact: onReact, onUnreact: onUnreact, onComment: onComment, onEdit: onEdit, onUnsend: onUnsend,
+                             expandAllComments: true)
+                        .padding(16)
+                }
+            }
+            .navigationTitle("Comments")
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenConfirmLeading) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
 struct UserProfileView: View {
     let authorHex: String
     let name: String
@@ -1926,6 +2431,19 @@ struct UserProfileView: View {
                             }
                         }
                         Text("\(posts.count) post\(posts.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                        if let card = contacts.card(forNodePrefix: authorHex) {
+                            if let bio = card.bio, !bio.isEmpty {
+                                Text(bio).font(.subheadline).foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center).padding(.horizontal, 24)
+                            }
+                            if let link = card.link, !link.isEmpty {
+                                Button { LinkPresenter.shared.open(link) } label: {
+                                    Label(link, systemImage: "link")
+                                        .font(.footnote.weight(.medium)).foregroundStyle(HavenTheme.pink).lineLimit(1)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
                     .padding(.bottom, 4)
                     if !userStories.isEmpty {
@@ -1934,7 +2452,7 @@ struct UserProfileView: View {
                                 ZStack {
                                     Circle().fill(LinearGradient(colors: [HavenTheme.violet, HavenTheme.pink, HavenTheme.amber], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 58, height: 58)
                                     if let img = userStories.last?.media.first.flatMap({ MediaStore.shared.item($0)?.image }) {
-                                        Image(uiImage: img).resizable().scaledToFill().frame(width: 50, height: 50).clipShape(Circle())
+                                        Image(platformImage: img).resizable().scaledToFill().frame(width: 50, height: 50).clipShape(Circle())
                                     }
                                 }
                                 Text("\(userStories.count) active stor\(userStories.count == 1 ? "y" : "ies")").font(.subheadline).foregroundStyle(.secondary)
@@ -1953,6 +2471,7 @@ struct UserProfileView: View {
                             PostCard(
                                 item: item, friendName: name,
                                 onReact: { e in withAnimation(HavenTheme.bouncy) { store.react(item.id, e) } },
+                                onUnreact: { e in withAnimation(HavenTheme.bouncy) { store.unreact(item.id, e) } },
                                 onComment: { b, m in withAnimation(HavenTheme.smooth) { store.comment(item.id, b, m) } },
                                 onEdit: { _ in },
                                 onUnsend: { }
@@ -1964,8 +2483,15 @@ struct UserProfileView: View {
             }
         }
         .navigationTitle(resolvedName)
-        .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(isPresented: $showStories) {
+        .havenInlineNavTitle()
+        .toolbar {
+            if let url = DeepLink.profileURL(authorHex) {
+                ToolbarItem(placement: .havenTrailing) {
+                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+                }
+            }
+        }
+        .havenFullScreenCover(isPresented: $showStories) {
             StoryViewer(stories: userStories, index: 0, friendName: resolvedName)
         }
         .alert("Nickname", isPresented: $showNickname) {
@@ -2016,10 +2542,10 @@ struct NewCircleView: View {
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("New circle")
-            .navigationBarTitleDisplayMode(.inline)
+            .havenInlineNavTitle()
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .havenCancelLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .havenTrailing) {
                     Button("Create") {
                         onCreate(name.trimmingCharacters(in: .whitespaces), Array(selected))
                         dismiss()
@@ -2058,6 +2584,7 @@ struct ProfileView: View {
                             PostCard(
                                 item: item, friendName: friendName,
                                 onReact: { e in withAnimation(HavenTheme.bouncy) { store.react(item.id, e) } },
+                                onUnreact: { e in withAnimation(HavenTheme.bouncy) { store.unreact(item.id, e) } },
                                 onComment: { b, m in withAnimation(HavenTheme.smooth) { store.comment(item.id, b, m) } },
                                 onEdit: { b in withAnimation(HavenTheme.smooth) { store.edit(item.id, b) } },
                                 onUnsend: { withAnimation(HavenTheme.smooth) { store.unsend(item.id) } }
@@ -2069,8 +2596,8 @@ struct ProfileView: View {
             }
         }
         .navigationTitle("Your posts")
-        .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(isPresented: $showStories) {
+        .havenInlineNavTitle()
+        .havenFullScreenCover(isPresented: $showStories) {
             StoryViewer(stories: store.myStories, index: storyIndex, friendName: friendName)
         }
     }
@@ -2088,7 +2615,7 @@ struct ProfileView: View {
                                                              startPoint: .topLeading, endPoint: .bottomTrailing))
                                     .frame(width: 64, height: 64)
                                 if let img = s.media.first.flatMap({ MediaStore.shared.item($0)?.image }) {
-                                    Image(uiImage: img).resizable().scaledToFill().frame(width: 56, height: 56).clipShape(Circle())
+                                    Image(platformImage: img).resizable().scaledToFill().frame(width: 56, height: 56).clipShape(Circle())
                                 }
                             }
                         }

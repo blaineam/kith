@@ -29,7 +29,7 @@ struct MediaZoomViewer: View {
                     ZoomablePage(ref: ref, zoomed: $zoomed).tag(i)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: refs.count > 1 ? .automatic : .never))
+            .havenPagedTabViewStyle(showsIndex: refs.count > 1)
             .offset(y: dismissOffset)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 15)
@@ -57,7 +57,7 @@ struct MediaZoomViewer: View {
                 Spacer()
             }
         }
-        .statusBarHidden()
+        .havenStatusBarHidden()
     }
 }
 
@@ -79,7 +79,7 @@ private struct ZoomablePage: View {
                 } else if let img = m.image {
                     // Photo — or a video whose file hasn't downloaded yet: show its still
                     // (with a play badge) instead of a blank page.
-                    Image(uiImage: img).resizable().scaledToFit()
+                    Image(platformImage: img).resizable().scaledToFit()
                         .scaleEffect(scale).offset(offset)
                         .overlay {
                             if m.kind == .video {

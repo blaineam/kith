@@ -1,6 +1,13 @@
 import SwiftUI
 import AVFoundation
+import CoreImage
+import CoreLocation
+import ImageIO
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import Photos
 
 /// Save a post's media (photo or video) into the user's Photos library.
@@ -27,7 +34,16 @@ enum MediaSaver {
     }
 }
 
-#if targetEnvironment(macCatalyst)
+#if os(macOS)
+/// Native macOS has no UIVideoEditorController; trim isn't offered (canTrim → false). This stub
+/// just dismisses itself if ever presented.
+struct VideoTrimmer: View {
+    let path: String
+    var onTrimmed: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View { Color.clear.onAppear { dismiss() } }
+}
+#elseif targetEnvironment(macCatalyst)
 /// Mac Catalyst has no UIVideoEditorController; trim isn't offered there (canTrim → false).
 struct VideoTrimmer: UIViewControllerRepresentable {
     let path: String
@@ -96,7 +112,7 @@ enum MediaKind: String {
 struct MediaItem: Identifiable {
     let id: String
     let kind: MediaKind
-    let image: UIImage?   // the photo, or a video's poster frame
+    let image: PlatformImage?   // the photo, or a video's poster frame
     let videoURL: URL?
 }
 
@@ -107,6 +123,30 @@ struct MediaItem: Identifiable {
 final class MediaStore: ObservableObject {
     static let shared = MediaStore()
     private var cache: [String: MediaItem] = [:]
+
+    // MARK: - Captured location (opt-in)
+
+    /// GPS coords extracted from a picked photo/video at import, kept on-device only. The raw
+    /// metadata is stripped from the shared bytes; this coordinate is shared ONLY if the author
+    /// flips the per-post "Show location" toggle (then it's reverse-geocoded into a `geo:` pin).
+    private var locations: [String: CLLocationCoordinate2D] = [:]
+    func setLocation(_ c: CLLocationCoordinate2D, for ref: String) { locations[ref] = c }
+    func location(for ref: String) -> CLLocationCoordinate2D? { locations[ref] }
+    /// Whether any of these refs carries a captured location (drives the compose toggle's visibility).
+    func anyLocated(_ refs: [String]) -> Bool { refs.contains { locations[$0] != nil } }
+
+    /// Pull a GPS coordinate out of raw image bytes (EXIF GPS dictionary), or nil if absent.
+    static func gpsCoordinate(fromImageData data: Data) -> CLLocationCoordinate2D? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any],
+              let lat = gps[kCGImagePropertyGPSLatitude] as? Double,
+              let lon = gps[kCGImagePropertyGPSLongitude] as? Double else { return nil }
+        let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String ?? "N"
+        let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String ?? "E"
+        return CLLocationCoordinate2D(latitude: latRef == "S" ? -lat : lat,
+                                      longitude: lonRef == "W" ? -lon : lon)
+    }
 
     private var dir: URL {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -120,11 +160,11 @@ final class MediaStore: ObservableObject {
     }
 
     @discardableResult
-    func addImage(_ image: UIImage) -> String {
+    func addImage(_ image: PlatformImage) -> String {
         let ref = "img_\(UUID().uuidString)"
         // Optimize: downscale very large photos + compress, so they're light to send —
         // but keep it high-res (longest edge up to 2560, well above 1080p).
-        let optimize = SettingsStore.shared.autoOptimize
+        let optimize = CircleSettingsStore.shared.autoOptimize(FeedStore.shared.activeCircleId)
         let img = optimize ? Self.downscale(image, maxDimension: 2560) : image
         let quality: CGFloat = optimize ? 0.88 : 0.95
         if let data = img.jpegData(compressionQuality: quality), let url = fileURL(ref) {
@@ -142,14 +182,34 @@ final class MediaStore: ObservableObject {
         guard let dst = fileURL(ref) else { return ref }
         try? FileManager.default.removeItem(at: dst)
         var ok = false
-        if SettingsStore.shared.autoOptimize {
-            ok = await Self.optimizeVideo(src, to: dst)
+        if CircleSettingsStore.shared.autoOptimize(FeedStore.shared.activeCircleId) {
+            ok = await Self.optimizeVideo(src, to: dst)   // re-encode also drops metadata
+        }
+        // Strip metadata (GPS/location, creation device, etc.) before it ever leaves the device —
+        // a fast pass-through remux, no re-encode. Falls back to a raw copy only if that fails.
+        if !ok {
+            ok = await Self.stripVideoMetadata(src, to: dst)
         }
         if !ok {
             try? FileManager.default.copyItem(at: src, to: dst)
         }
         cache[ref] = MediaItem(id: ref, kind: .video, image: Self.poster(for: dst), videoURL: dst)
         return ref
+    }
+
+    /// Remux a video to drop its metadata (location, device, timestamps) without re-encoding.
+    static func stripVideoMetadata(_ src: URL, to dst: URL) async -> Bool {
+        let asset = AVURLAsset(url: src)
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+            return false
+        }
+        export.outputURL = dst
+        export.outputFileType = .mov
+        export.metadata = []   // no location/maker metadata travels with shared media
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            export.exportAsynchronously { cont.resume() }
+        }
+        return export.status == .completed
     }
 
     static let storySlideMax: Double = 15.0   // max seconds per story slide
@@ -225,17 +285,81 @@ final class MediaStore: ObservableObject {
         return ref
     }
 
-    /// Downscale so the longest side is at most `maxDimension` (keeps aspect ratio).
-    static func downscale(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
-        let m = max(image.size.width, image.size.height)
-        guard m > maxDimension else { return image }
-        let scale = maxDimension / m
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let fmt = UIGraphicsImageRendererFormat.default()
-        fmt.scale = 1
-        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
+    // MARK: - Filters
+
+    /// Apply a `HavenFilter` to an existing media ref and return the ref of the filtered media
+    /// to send. `.original` is a no-op (returns the same ref). For images the bytes are
+    /// re-written in place under the same ref; for videos a new filtered ref is produced via a
+    /// Core Image video composition export (the original ref is left untouched). All color math
+    /// lives in `FilterEngine` — this only orchestrates storage. Returns the original ref on any
+    /// failure so capture never breaks.
+    @discardableResult
+    func applyFilter(_ filter: HavenFilter, to ref: String) async -> String {
+        guard filter != .original, let item = item(ref) else { return ref }
+        switch item.kind {
+        case .image:
+            guard let img = item.image else { return ref }
+            let filtered = FilterEngine.apply(filter, to: img)
+            return replaceImage(ref: ref, with: filtered) ? ref : ref
+        case .video:
+            return await filteredVideo(ref, filter: filter) ?? ref
+        case .audio:
+            return ref
         }
+    }
+
+    /// Overwrite an image ref's bytes + cache with a new image (same ref). Returns whether it
+    /// stuck.
+    @discardableResult
+    private func replaceImage(ref: String, with image: PlatformImage) -> Bool {
+        guard MediaKind(ref: ref) == .image, let url = fileURL(ref) else { return false }
+        let optimize = CircleSettingsStore.shared.autoOptimize(FeedStore.shared.activeCircleId)
+        let img = optimize ? Self.downscale(image, maxDimension: 2560) : image
+        let quality: CGFloat = optimize ? 0.88 : 0.95
+        guard let data = img.jpegData(compressionQuality: quality) else { return false }
+        do { try data.write(to: url) } catch { return false }
+        cache[ref] = MediaItem(id: ref, kind: .image, image: img, videoURL: nil)
+        return true
+    }
+
+    /// Export a new video ref with `filter` baked into every frame via
+    /// `AVMutableVideoComposition(asset:applyingCIFiltersWithHandler:)`. Returns the new ref, or
+    /// nil on failure (caller falls back to the unfiltered ref).
+    private func filteredVideo(_ ref: String, filter: HavenFilter) async -> String? {
+        guard let src = storagePath(for: ref) else { return nil }
+        let spec = filter.spec
+        let asset = AVURLAsset(url: src)
+        // Per-frame CI pipeline reusing the exact same FilterEngine math as stills.
+        let composition = AVMutableVideoComposition(asset: asset) { request in
+            let source = request.sourceImage.clampedToExtent()
+            let output = FilterEngine.apply(spec, to: source).cropped(to: request.sourceImage.extent)
+            request.finish(with: output, context: nil)
+        }
+        let newRef = "vid_\(UUID().uuidString)"
+        guard let dst = fileURL(newRef),
+              let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1920x1080) else {
+            return nil
+        }
+        try? FileManager.default.removeItem(at: dst)
+        export.outputURL = dst
+        export.outputFileType = .mp4
+        export.shouldOptimizeForNetworkUse = true
+        export.videoComposition = composition
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            export.exportAsynchronously { c.resume() }
+        }
+        guard export.status == .completed else {
+            try? FileManager.default.removeItem(at: dst)
+            return nil
+        }
+        cache[newRef] = MediaItem(id: newRef, kind: .video, image: Self.poster(for: dst), videoURL: dst)
+        return newRef
+    }
+
+    /// Downscale so the longest side is at most `maxDimension` (keeps aspect ratio).
+    /// Cross-platform via `PlatformImage.downscaled` (Platform.swift).
+    static func downscale(_ image: PlatformImage, maxDimension: CGFloat) -> PlatformImage {
+        image.downscaled(maxDimension: maxDimension)
     }
 
     /// Transcode a video to a network-friendly 1080p H.264 MP4 (full HD, just
@@ -284,7 +408,7 @@ final class MediaStore: ObservableObject {
         guard let kind = MediaKind(ref: ref), let url = fileURL(ref) else { return }
         try? bytes.write(to: url)
         switch kind {
-        case .image: cache[ref] = MediaItem(id: ref, kind: .image, image: UIImage(data: bytes), videoURL: nil)
+        case .image: cache[ref] = MediaItem(id: ref, kind: .image, image: PlatformImage(data: bytes), videoURL: nil)
         case .video: cache[ref] = MediaItem(id: ref, kind: .video, image: Self.poster(for: url), videoURL: url)
         case .audio: cache[ref] = MediaItem(id: ref, kind: .audio, image: nil, videoURL: url)
         }
@@ -306,7 +430,7 @@ final class MediaStore: ObservableObject {
         try? FileManager.default.removeItem(at: dst)
         do { try FileManager.default.moveItem(at: temp, to: dst) } catch { return }
         switch kind {
-        case .image: cache[ref] = MediaItem(id: ref, kind: .image, image: UIImage(contentsOfFile: dst.path), videoURL: nil)
+        case .image: cache[ref] = MediaItem(id: ref, kind: .image, image: PlatformImage(contentsOfFile: dst.path), videoURL: nil)
         case .video: cache[ref] = MediaItem(id: ref, kind: .video, image: Self.poster(for: dst), videoURL: dst)
         case .audio: cache[ref] = MediaItem(id: ref, kind: .audio, image: nil, videoURL: dst)
         }
@@ -318,7 +442,7 @@ final class MediaStore: ObservableObject {
               FileManager.default.fileExists(atPath: url.path) else { return nil }
         let item: MediaItem
         switch kind {
-        case .image: item = MediaItem(id: ref, kind: .image, image: UIImage(contentsOfFile: url.path), videoURL: nil)
+        case .image: item = MediaItem(id: ref, kind: .image, image: PlatformImage(contentsOfFile: url.path), videoURL: nil)
         case .video: item = MediaItem(id: ref, kind: .video, image: Self.poster(for: url), videoURL: url)
         case .audio: item = MediaItem(id: ref, kind: .audio, image: nil, videoURL: url)
         }
@@ -328,7 +452,7 @@ final class MediaStore: ObservableObject {
 
     /// Can this video be trimmed by the system editor? (Not on Mac Catalyst.)
     func canTrim(_ ref: String) -> Bool {
-        #if targetEnvironment(macCatalyst)
+        #if targetEnvironment(macCatalyst) || os(macOS)
         return false
         #else
         guard let url = storagePath(for: ref) else { return false }
@@ -337,13 +461,13 @@ final class MediaStore: ObservableObject {
     }
 
     /// Extract a poster frame so videos show something before playback.
-    static func poster(for url: URL) -> UIImage? {
+    static func poster(for url: URL) -> PlatformImage? {
         let asset = AVURLAsset(url: url)
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1080, height: 1080)
         guard let cg = try? gen.copyCGImage(at: CMTime(seconds: 0.1, preferredTimescale: 600), actualTime: nil)
         else { return nil }
-        return UIImage(cgImage: cg)
+        return PlatformImage(cgImage: cg)
     }
 }

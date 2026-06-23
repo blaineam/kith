@@ -19,6 +19,17 @@ enum SharedLocation {
         guard parts.count >= 2, let lat = Double(parts[0]), let lon = Double(parts[1]) else { return nil }
         return (lat, lon, parts.count > 2 ? parts[2] : "")
     }
+
+    /// Reverse-geocode a coordinate into a short, friendly place name (city / POI), for tagging a
+    /// post from a photo's GPS. Falls back to a generic label if geocoding is unavailable.
+    static func placeName(_ coord: CLLocationCoordinate2D) async -> String {
+        let loc = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        if let pm = try? await CLGeocoder().reverseGeocodeLocation(loc).first {
+            return pm.areasOfInterest?.first ?? pm.locality ?? pm.name
+                ?? pm.administrativeArea ?? "Pinned location"
+        }
+        return "Pinned location"
+    }
 }
 
 /// Renders a `geo:` ref as a static map with a pin; tap "Open in Maps" to launch Apple Maps.
@@ -99,10 +110,10 @@ struct LocationPicker: View {
                 .padding()
             }
             .navigationTitle("Pin a location")
-            .navigationBarTitleDisplayMode(.inline)
+            .havenInlineNavTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .havenTrailing) {
                     Button { position = .userLocation(fallback: .automatic) } label: {
                         Image(systemName: "location.fill")
                     }

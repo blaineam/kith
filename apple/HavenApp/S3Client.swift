@@ -126,6 +126,59 @@ struct S3Client {
         return req
     }
 
+    // MARK: - Pre-signed URLs (query-string SigV4)
+    //
+    // Lets the bucket owner mint scoped, expiring, single-object URLs and hand THOSE to the
+    // circle — so members conduct mailbox ops without ever seeing the access key/secret.
+
+    /// A pre-signed URL for `method` ("GET"/"PUT") on `key`, valid `expires` seconds (≤7 days).
+    func presignedURL(method: String, key: String, expires: Int = 604_800, listPrefix: String? = nil) -> URL? {
+        let host = endpoint
+        let now = Date()
+        let amzDate = Self.iso8601.string(from: now)
+        let dateStamp = String(amzDate.prefix(8))
+        let scope = "\(dateStamp)/\(region)/s3/aws4_request"
+        let path = listPrefix != nil ? "/\(bucket)" : "/\(bucket)/\(encodePath(key))"
+
+        var query: [(String, String)] = [
+            ("X-Amz-Algorithm", "AWS4-HMAC-SHA256"),
+            ("X-Amz-Credential", "\(accessKey)/\(scope)"),
+            ("X-Amz-Date", amzDate),
+            ("X-Amz-Expires", "\(min(max(expires, 1), 604_800))"),
+            ("X-Amz-SignedHeaders", "host"),
+        ]
+        if let p = listPrefix { query.append(("list-type", "2")); query.append(("prefix", p)); query.append(("max-keys", "1000")) }
+
+        let canonicalQuery = query
+            .map { (encodeStrict($0.0), encodeStrict($0.1)) }
+            .sorted { $0.0 < $1.0 }
+            .map { "\($0.0)=\($0.1)" }
+            .joined(separator: "&")
+        let canonicalHeaders = "host:\(host)\n"
+        let signedHeaders = "host"
+        let payloadHash = "UNSIGNED-PAYLOAD"
+        let canonicalRequest = [method, path, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].joined(separator: "\n")
+        let stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(Data(canonicalRequest.utf8))].joined(separator: "\n")
+        let signature = hmac(hmacChain(dateStamp: dateStamp), Data(stringToSign.utf8)).map { String(format: "%02x", $0) }.joined()
+        return URL(string: "https://\(host)\(path)?\(canonicalQuery)&X-Amz-Signature=\(signature)")
+    }
+
+    /// Plain HTTPS GET of a pre-signed URL (members fetching the mailbox).
+    static func getURL(_ url: URL) async -> Data? {
+        guard let (data, resp) = try? await URLSession.shared.data(from: url),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+        return data
+    }
+    /// Plain HTTPS PUT to a pre-signed URL (members writing to the mailbox).
+    static func putURL(_ url: URL, data: Data) async -> Bool {
+        var req = URLRequest(url: url); req.httpMethod = "PUT"; req.httpBody = data
+        guard let (_, resp) = try? await URLSession.shared.upload(for: req, from: data),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return false }
+        return true
+    }
+    /// Parse keys from a pre-signed LIST response (same XML scrape as listKeys).
+    static func parseListKeys(_ data: Data) -> [String] { parseKeys(data) }
+
     private func hmacChain(dateStamp: String) -> SymmetricKey {
         let kDate = hmac(SymmetricKey(data: Data("AWS4\(secret)".utf8)), Data(dateStamp.utf8))
         let kRegion = hmac(SymmetricKey(data: kDate), Data(region.utf8))

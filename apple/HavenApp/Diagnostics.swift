@@ -23,7 +23,7 @@ struct ConnectionView: View {
             }
         }
         .navigationTitle("Connection")
-        .navigationBarTitleDisplayMode(.inline)
+        .havenInlineNavTitle()
     }
 
     private var statusCard: some View {

@@ -1,7 +1,12 @@
 import AVFoundation
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
+#if !os(macOS)
 /// A live camera QR scanner. Calls `onFound` once with the decoded string, then the
 /// caller dismisses. Reads both `https://…/#…` and `haven://invite#…` invite links.
 struct QRScannerView: UIViewControllerRepresentable {
@@ -86,3 +91,30 @@ final class ScannerVC: UIViewController, AVCaptureMetadataOutputObjectsDelegate 
         onFound?(value)
     }
 }
+#endif
+
+#if os(macOS)
+/// macOS placeholder. The live camera QR scanner is Phase-2 native work; this stub
+/// keeps the public surface identical to the iOS version but renders a notice instead
+/// of scanning. It never invokes `onFound`.
+struct QRScannerView: View {
+    var onFound: (String) -> Void
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black)
+            VStack(spacing: 16) {
+                Image(systemName: "qrcode.viewfinder")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.white)
+                Text("Scanning isn't available on Mac yet")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+        }
+    }
+}
+#endif

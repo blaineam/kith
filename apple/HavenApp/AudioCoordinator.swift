@@ -118,6 +118,22 @@ final class AudioCoordinator: ObservableObject {
     }
 }
 
+#if os(macOS)
+/// Native macOS stub: `MPMusicPlayerController` is iOS/Catalyst-only. Real catalog playback on
+/// macOS needs MusicKit's `ApplicationMusicPlayer` (Phase 2). We still track `current` so the
+/// now-playing UI reflects the shared song reference; playback itself is a no-op for now.
+@MainActor
+final class MusicPlayback {
+    static let shared = MusicPlayback()
+    private(set) var current: TrackRefFfi?
+    var isPlaying: Bool { false }
+    func play(_ track: TrackRefFfi) { current = track }
+    func duck() {}
+    func unduck() {}
+    func resume() {}
+    func stop() { current = nil }
+}
+#else
 /// Real Apple Music playback via the system music player. A shared song carries only
 /// its catalog id; we queue that id so it plays through the viewer's own Apple Music
 /// subscription — Haven never moves audio. When the viewer unmutes a post's video the
@@ -171,3 +187,4 @@ final class MusicPlayback {
         if player.playbackState == .playing { player.pause() }
     }
 }
+#endif

@@ -44,9 +44,14 @@ struct NowPlayingPill: View {
 /// Four little bars that bob up and down while audio plays.
 struct EqualizerBars: View {
     var animating: Bool
-    @State private var on = false
+    /// Drives the perpetual bob. Toggled whenever `animating` changes — keying the
+    /// `repeatForever` animation on this (not a one-shot onAppear flag) is what makes the
+    /// bars animate when playback starts *after* the view already exists, e.g. tapping play
+    /// on a DM song chip.
+    @State private var bouncing = false
 
     private let durations: [Double] = [0.42, 0.55, 0.36, 0.48]
+    private let lows: [CGFloat] = [0.35, 0.5, 0.3, 0.45]
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 2.5) {
@@ -54,22 +59,17 @@ struct EqualizerBars: View {
                 Capsule()
                     .fill(HavenTheme.brandHorizontal)
                     .frame(width: 3, height: 15)
-                    .scaleEffect(y: scale(i), anchor: .bottom)
+                    .scaleEffect(y: (animating && bouncing) ? 1.0 : lows[i], anchor: .bottom)
                     .animation(
                         animating
                             ? .easeInOut(duration: durations[i]).repeatForever(autoreverses: true)
-                            : .default,
-                        value: on
+                            : .easeOut(duration: 0.2),
+                        value: bouncing
                     )
             }
         }
         .frame(width: 22, height: 16, alignment: .bottom)
-        .onAppear { on = true }
-    }
-
-    private func scale(_ i: Int) -> CGFloat {
-        guard animating else { return 0.4 }
-        let lows: [CGFloat] = [0.35, 0.5, 0.3, 0.45]
-        return on ? 1.0 : lows[i]
+        .onAppear { if animating { bouncing = true } }
+        .onChange(of: animating) { _, now in bouncing = now }
     }
 }

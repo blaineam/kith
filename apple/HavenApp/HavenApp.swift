@@ -1,8 +1,39 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
+#if !os(macOS)
 /// Receives the APNs device token + remote-notification wakes (SwiftUI App needs a delegate
 /// for these callbacks).
 final class HavenAppDelegate: NSObject, UIApplicationDelegate {
+    /// The story camera locks this to `.portrait` so capture/compose never rotate; reset to
+    /// `.all` elsewhere. Driven by `OrientationLock`.
+    static var orientationLock: UIInterfaceOrientationMask = .all
+
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        Self.orientationLock
+    }
+
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Start P2P networking immediately on launch — including a background VoIP wake — so an
+        // incoming call answered from the CallKit screen can connect without the user first
+        // opening the app. (Previously configure() only ran when the SwiftUI view appeared.)
+        if let seed = AccountStore.storedSeed() {
+            Task { @MainActor in FeedStore.shared.configure(seed: seed) }
+        }
+        #if targetEnvironment(macCatalyst)
+        // Let the Mac app run as an invisible background relay (hide the dock icon when the window
+        // is closed while serving as a relay; restore it on relaunch).
+        MacAgent.installSceneObservers()
+        #endif
+        return true
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { @MainActor in PushManager.shared.registered(deviceToken: deviceToken) }
     }
@@ -10,14 +41,52 @@ final class HavenAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didReceiveRemoteNotification userInfo: [AnyHashable: Any],
                      fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        // A silent push (e.g. multi-device self-sync) carries the sealed event inline but doesn't
+        // run the NSE — stash it here so the app ingests it on the next sync.
+        if let ev = userInfo["ev"] as? String, let env = Data(base64Encoded: ev) {
+            SharedInbox.append(env: env)
+        }
+        // The storage-owner cron nudge → re-mint fresh pre-signed URLs in the background.
+        if userInfo["remint"] != nil {
+            Task { @MainActor in PresignStore.shared.remintAllOwned() }
+        }
         Task { @MainActor in FeedStore.shared.forceSync(); completionHandler(.newData) }
     }
 }
+#else
+/// Native macOS delegate — same APNs token + remote-notification handling via AppKit. No
+/// orientation lock (irrelevant on Mac); no background-fetch completion handler on macOS.
+final class HavenAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if let seed = AccountStore.storedSeed() {
+            Task { @MainActor in FeedStore.shared.configure(seed: seed) }
+        }
+    }
+
+    func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor in PushManager.shared.registered(deviceToken: deviceToken) }
+    }
+    func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {}
+    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        if let ev = userInfo["ev"] as? String, let env = Data(base64Encoded: ev) {
+            SharedInbox.append(env: env)
+        }
+        if userInfo["remint"] != nil {
+            Task { @MainActor in PresignStore.shared.remintAllOwned() }
+        }
+        Task { @MainActor in FeedStore.shared.forceSync() }
+    }
+}
+#endif
 
 @main
 struct HavenApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(HavenAppDelegate.self) private var appDelegate
+    #else
     @UIApplicationDelegateAdaptor(HavenAppDelegate.self) private var appDelegate
+    #endif
 
     init() {
         // Register the background-refresh task at launch (required before didFinishLaunching).
@@ -28,14 +97,24 @@ struct HavenApp: App {
         WindowGroup {
             RootView()
                 .onAppear {
+                    // Screenshot/offline harness: never raise the system notification prompt or
+                    // touch the push relay — it would photobomb the captures and needs the network.
+                    guard ProcessInfo.processInfo.environment["HAVEN_NO_NET"] != "1" else { return }
                     NotificationManager.shared.requestAuthorization()
                     PushManager.shared.start()   // register for real push via the relay
+                    PushManager.shared.startVoip()   // PushKit VoIP so calls ring from killed/locked
                 }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
                 NotificationManager.shared.scheduleRefresh()
                 AudioCoordinator.shared.pauseForBackground()   // don't keep playing audio in the background
+                BiometricGate.shared.relockAll()   // re-lock biometric circles on the way out
+                Task { await BackgroundUploader.shared.flush() }   // finish pending mailbox uploads
+            } else if phase == .active {
+                // Back to the foreground — if we're sitting on a locked circle, prompt at once.
+                let cid = FeedStore.shared.activeCircleId
+                if BiometricGate.shared.isLocked(cid) { BiometricGate.shared.unlock(cid) }
             }
         }
     }
@@ -54,6 +133,8 @@ struct RootView: View {
     @ObservedObject private var contacts = ContactsStore.shared
     @ObservedObject private var feedStore = FeedStore.shared
     @ObservedObject private var connections = ConnectionsStore.shared
+    @ObservedObject private var linkPresenter = LinkPresenter.shared
+    @ObservedObject private var deepLinks = DeepLinkRouter.shared
 
     @State private var tab = ProcessInfo.processInfo.environment["HAVEN_TAB"] ?? "circle"
     @State private var showConnect = false
@@ -65,6 +146,11 @@ struct RootView: View {
     /// with a separate state captured a stale (nil) link, which is why it took two taps.
     @State private var pendingInvite: PendingInvite?
 
+    /// Blur when the app isn't frontmost and the active circle is biometric-locked.
+    private var shouldPrivacyBlur: Bool {
+        scenePhase != .active && CircleSettingsStore.shared.biometricRequired(feedStore.activeCircleId)
+    }
+
     var body: some View {
         Group {
             if !profile.onboarded {
@@ -75,19 +161,47 @@ struct RootView: View {
             }
         }
         .animation(HavenTheme.smooth, value: profile.onboarded)
+        // Privacy: while a biometric-locked circle is active, blur the app whenever it isn't
+        // frontmost — this is what the app-switcher snapshot captures, so locked content never
+        // leaks there. The lock screen takes over on return.
+        .overlay {
+            if shouldPrivacyBlur {
+                PrivacyBlurView()
+                    .transition(.opacity).ignoresSafeArea()
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: shouldPrivacyBlur)
         .onOpenURL { url in
-            // Invite links carry "<id>.<verify>" in the URL fragment (haven://invite#… or
-            // https://…/#…), so the web link loads on any static host.
+            // Profile/post deep links (haven://u/… , haven://p/…) route in-app.
+            if DeepLinkRouter.shared.handle(url, tab: &tab) { return }
+            // Otherwise it's an invite link — "<id>.<verify>" in the URL fragment
+            // (haven://invite#… or https://…/#…), so the web link loads on any static host.
             let s = url.absoluteString
             guard let frag = url.fragment, frag.contains(".") else { return }
             tab = "you"
             pendingInvite = PendingInvite(link: s)   // item-driven sheet → correct on first open
         }
+        // Shared links open inside Haven (in-app browser) from anywhere — posts, comments, bios.
+        .sheet(item: $linkPresenter.presented) { presented in
+            InAppBrowserView(url: presented.url)
+        }
+        // Profile / specific-post deep links open as a sheet.
+        .sheet(item: $deepLinks.route) { route in
+            switch route {
+            case .profile(let nodeHex):
+                NavigationStack {
+                    UserProfileView(authorHex: nodeHex,
+                                    name: ContactsStore.shared.name(forNodePrefix: nodeHex) ?? "Profile")
+                }
+            case .post(let circleId, let postId):
+                PostLinkView(circleId: circleId, postId: postId)
+            }
+        }
     }
 
     private var main: some View {
         TabView(selection: $tab) {
-            FeedView(seed: accountStore.account.secretSeed(), friendName: "Friend")
+            FeedView(account: accountStore.account, seed: accountStore.account.secretSeed(), friendName: "Friend")
                 .id(accountStore.account.nodeIdHex())
                 .tag("circle")
                 .tabItem { Label("Circle", systemImage: "sparkles") }
@@ -139,6 +253,8 @@ struct RootView: View {
         .onAppear {
             accountStore.reloadIfTemporary()
             FeedStore.shared.configure(seed: accountStore.account.secretSeed())
+            // Screenshot harness: bring up the group-call overlay over the seeded feed.
+            if DemoEnv.scene == .call { DemoSeeder.startDemoCall() }
             if ProcessInfo.processInfo.environment["HAVEN_OPEN_CONNECT"] == "1" {
                 showConnect = true
                 return

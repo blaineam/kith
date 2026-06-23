@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// Someone in your circle.
 struct Contact: Identifiable, Codable, Equatable {
@@ -15,6 +20,12 @@ struct Contact: Identifiable, Codable, Equatable {
     /// A nickname *you* deliberately set for this person. Highest priority — it's how
     /// you've chosen to see them, so it overrides even their signed name.
     var nickname: String?
+    /// The bio + link they signed and shared (their "business card"). Optional.
+    var bio: String?
+    var link: String?
+    /// The avatar (base64 JPEG) + emoji they signed and shared, so others see their real photo.
+    var avatarB64: String?
+    var emoji: String?
 
     /// What to show: your explicit nickname, else the owner's signed name, else the
     /// name from the original handshake.
@@ -52,6 +63,9 @@ final class ContactsStore: ObservableObject {
     func name(forNodePrefix prefix: String) -> String? {
         contacts.first { $0.idHex == prefix || $0.idHex.hasPrefix(prefix) }?.displayName
     }
+    func contact(forNodePrefix prefix: String) -> Contact? {
+        contacts.first { $0.idHex == prefix || $0.idHex.hasPrefix(prefix) }
+    }
 
     /// Record the authoritative (signed) name a contact sent during the handshake.
     func setAuthoritativeName(idHex: String, _ authName: String) {
@@ -59,6 +73,39 @@ final class ContactsStore: ObservableObject {
               contacts[i].authoritativeName != authName else { return }
         contacts[i].authoritativeName = authName
         save()
+    }
+
+    /// Record the signed business card (name + bio + link) a contact shared in the handshake.
+    func setCard(idHex: String, name: String, bio: String, link: String, avatar: String = "", emoji: String = "") {
+        guard let i = contacts.firstIndex(where: { $0.idHex == idHex }) else { return }
+        var changed = false
+        if !name.isEmpty, contacts[i].authoritativeName != name { contacts[i].authoritativeName = name; changed = true }
+        let newBio = bio.isEmpty ? nil : bio
+        let newLink = link.isEmpty ? nil : link
+        if contacts[i].bio != newBio { contacts[i].bio = newBio; changed = true }
+        if contacts[i].link != newLink { contacts[i].link = newLink; changed = true }
+        // Only overwrite avatar/emoji when the peer actually sent one (don't wipe on a legacy blob).
+        // Cap the avatar: ours is a ≤192px JPEG (~40KB b64); reject anything an order of magnitude
+        // larger so a malformed/hostile card from another client can't bloat storage or hitch the
+        // main thread when it's decoded for display.
+        if !avatar.isEmpty, avatar.count <= 200_000, contacts[i].avatarB64 != avatar {
+            contacts[i].avatarB64 = avatar; changed = true
+        }
+        if !emoji.isEmpty, contacts[i].emoji != emoji { contacts[i].emoji = emoji; changed = true }
+        if changed { save() }
+    }
+
+    /// A contact's shared avatar image (decoded), by node-id prefix — for rendering others' photos.
+    func avatarImage(forNodePrefix prefix: String) -> PlatformImage? {
+        guard let b64 = contact(forNodePrefix: prefix)?.avatarB64, let data = Data(base64Encoded: b64) else { return nil }
+        return PlatformImage(data: data)
+    }
+    func emoji(forNodePrefix prefix: String) -> String? { contact(forNodePrefix: prefix)?.emoji }
+
+    /// The stored business card for a contact, if any.
+    func card(forNodePrefix prefix: String) -> (bio: String?, link: String?)? {
+        guard let c = contacts.first(where: { $0.idHex == prefix || $0.idHex.hasPrefix(prefix) }) else { return nil }
+        return (c.bio, c.link)
     }
 
     /// Set (or clear, with "") a nickname you chose for this person.

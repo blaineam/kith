@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mac App Store requires the App Sandbox. iOS uses Haven.entitlements (no sandbox). -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- iroh needs outbound + inbound UDP (hole-punching, and serving as the in-app relay). -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- Picking/saving media, capture, and Photos library access under the sandbox. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+	<key>aps-environment</key>
+	<string>production</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.blaineam.kith</string>
+		<string>$(AppIdentifierPrefix)com.blaineam.kith.shared</string>
+	</array>
+</dict>
+</plist>

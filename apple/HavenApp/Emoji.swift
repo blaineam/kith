@@ -59,8 +59,8 @@ struct ReactionPicker: View {
                 .padding()
             }
             .navigationTitle("React")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .havenInlineNavTitle()
+            .toolbar { ToolbarItem(placement: .havenConfirmTrailing) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
     }
