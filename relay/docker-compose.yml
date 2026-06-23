@@ -1,6 +1,10 @@
 # Haven Bridge — a self-hosted, S3-compatible mailbox for your circle, via rclone (MIT).
 # Stores only SEALED blobs it cannot read. Start with:  docker compose up -d
 #
+# This is the CLASSIC bucket path (a public-ish S3 endpoint). The easiest no-host path is
+# the `haven-relay` binary, which links to your circle and serves BOTH the live relay and
+# the media mailbox over Haven Net with no port-forward or domain — see README.md.
+#
 # Set a strong key/secret below (or via a .env file), make a folder named 'haven' inside
 # ./data (that folder IS the bucket), then paste the endpoint, bucket, and these
 # credentials into Haven → Advanced → Storage → Custom S3 bucket, and turn on

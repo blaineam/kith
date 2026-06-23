@@ -6,6 +6,11 @@ compatibility_date = "2024-09-23"
 APNS_TOPIC = "com.blaineam.kith"
 APNS_HOST  = "api.push.apple.com"
 
+# Nudge S3-bucket owners to re-mint pre-signed URLs (silent push) twice a day, well inside the
+# 7-day pre-signed-URL TTL. (See the `scheduled` handler in worker.js.)
+[triggers]
+crons = ["0 */12 * * *"]
+
 # Create the namespace once: `wrangler kv namespace create TOKENS`, then paste the id here.
 [[kv_namespaces]]
 binding = "TOKENS"

@@ -1,0 +1,25 @@
+# Haven relay as a Linux systemd user service.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp haven-relay.service ~/.config/systemd/user/
+#   loginctl enable-linger "$USER"          # keep it running after you log out
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now haven-relay
+#   systemctl --user status haven-relay     # check it / read the node id from the log
+#
+# First-time only, attach to your circle once (saves the link), then start the service:
+#   haven-relay run --link <code>           # Ctrl-C after it says "saved"
+#
+[Unit]
+Description=Haven relay (always-on circle mailbox, ciphertext only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/haven-relay run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
