@@ -76,12 +76,34 @@ struct SecretBubble: View {
 }
 
 #if os(macOS)
-/// Native macOS has no UITextField secure-entry screenshot exclusion; render content directly.
-/// (Screenshot *detection* re-conceal also doesn't exist on macOS — secret bubbles still work
-/// via tap-to-reveal + auto-conceal.)
+/// Native macOS has no per-view secure-entry canvas like iOS. Instead, while the protected
+/// content is on screen (i.e. a secret is revealed) we mark the hosting window as excluded from
+/// screen capture/screenshots via `NSWindow.sharingType = .none`, restoring the prior value when
+/// the content goes away. This blanks the *window* in any capture for the brief, user-initiated
+/// reveal — coarser than iOS's per-view exclusion, but it keeps the secret out of screenshots
+/// and screen recordings.
 struct ScreenshotProtected<Content: View>: View {
     @ViewBuilder var content: Content
-    var body: some View { content }
+    var body: some View { content.background(WindowCaptureExcluder()) }
+}
+
+private struct WindowCaptureExcluder: NSViewRepresentable {
+    func makeNSView(context: Context) -> ExcluderView { ExcluderView() }
+    func updateNSView(_ nsView: ExcluderView, context: Context) {}
+    static func dismantleNSView(_ nsView: ExcluderView, coordinator: ()) { nsView.restore() }
+
+    final class ExcluderView: NSView {
+        private weak var trackedWindow: NSWindow?
+        private var priorSharing: NSWindow.SharingType = .readOnly
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let w = window else { return }
+            trackedWindow = w
+            priorSharing = w.sharingType
+            w.sharingType = .none   // exclude from screen capture / screenshots
+        }
+        func restore() { trackedWindow?.sharingType = priorSharing; trackedWindow = nil }
+    }
 }
 #else
 /// Hosts a SwiftUI view inside a secure-text-entry layer, which iOS excludes from
@@ -141,11 +163,11 @@ struct ScreenshotProtected<Content: View>: UIViewRepresentable {
 // MARK: - Screenshot / screen-recording protection
 
 extension View {
-    /// Host this view inside a `UITextField` secure-entry layer so iOS excludes it from
-    /// screenshots and screen recordings (they capture black) while it renders normally on screen.
-    /// No-op on macOS (use NSWindow.sharingType for desktop capture control).
+    /// Exclude this view from screenshots / screen recordings while it's on screen. iOS hosts it
+    /// inside a `UITextField` secure-entry layer (per-view); macOS marks the hosting window
+    /// `sharingType = .none` (window-level). Plain no-op on Mac Catalyst.
     @ViewBuilder func screenshotProtected() -> some View {
-        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        #if os(macOS) || (canImport(UIKit) && !targetEnvironment(macCatalyst))
         ScreenshotProtected { self }
         #else
         self
