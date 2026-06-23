@@ -163,6 +163,39 @@ fun MusicSearchSheet(onPick: (TrackRefFfi) -> Unit, onDismiss: () -> Unit) {
     }
 }
 
+/** "Listen on ▾" — opens the song in the user's preferred provider app (Apple Music / Spotify /
+ *  YouTube Music). Apple uses the exact store link; the others open a search for title+artist. */
+@Composable
+private fun ListenOnMenu(music: TrackRefFfi) {
+    val context = LocalContext.current
+    var open by remember { mutableStateOf(false) }
+    val q = remember(music.title, music.artist) {
+        java.net.URLEncoder.encode("${music.title} ${music.artist}".trim(), "UTF-8")
+    }
+    Box {
+        Text("Listen on ▾", color = HavenTheme.pink, fontSize = 11.sp,
+            modifier = Modifier.clickable { open = true })
+        androidx.compose.material3.DropdownMenu(
+            expanded = open, onDismissRequest = { open = false },
+            modifier = Modifier.background(HavenTheme.card),
+        ) {
+            val apple = if (music.catalogId.startsWith("http")) music.catalogId
+                else "https://music.apple.com/search?term=$q"
+            ProviderItem("Apple Music") { openExternal(context, apple); open = false }
+            ProviderItem("Spotify") { openExternal(context, "https://open.spotify.com/search/$q"); open = false }
+            ProviderItem("YouTube Music") { openExternal(context, "https://music.youtube.com/search?q=$q"); open = false }
+        }
+    }
+}
+
+@Composable
+private fun ProviderItem(label: String, onClick: () -> Unit) {
+    androidx.compose.material3.DropdownMenuItem(
+        text = { Text(label, color = Color.White) },
+        onClick = onClick,
+    )
+}
+
 /** The song chip in the feed: artwork + title/artist, a play button (30s preview), open-in-store. */
 @Composable
 fun MusicChip(music: TrackRefFfi, modifier: Modifier = Modifier) {
@@ -189,9 +222,7 @@ fun MusicChip(music: TrackRefFfi, modifier: Modifier = Modifier) {
             Text(music.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
             if (music.artist.isNotBlank())
                 Text(music.artist, color = HavenTheme.textSecondary, fontSize = 12.sp, maxLines = 1)
-            if (music.catalogId.startsWith("http"))
-                Text("Open in Apple Music", color = HavenTheme.pink, fontSize = 11.sp,
-                    modifier = Modifier.clickable { openInApp(context, music.catalogId) })
+            ListenOnMenu(music)
         }
         if (previewUrl != null) {
             Icon(

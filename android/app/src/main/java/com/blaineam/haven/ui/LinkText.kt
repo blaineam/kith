@@ -26,6 +26,13 @@ fun openInApp(context: Context, url: String) {
         .onFailure { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) } }
 }
 
+/** Open a URL externally (ACTION_VIEW) so an installed provider app (Spotify/YouTube/Music) catches it. */
+fun openExternal(context: Context, url: String) {
+    val uri = Uri.parse(if (url.startsWith("http")) url else "https://$url")
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        .onFailure { openInApp(context, url) }
+}
+
 /**
  * Renders body text with tappable links (http/https) that open in the in-app browser — parity with
  * iOS link rendering. Plain text otherwise. YouTube and any other URLs are just links.
