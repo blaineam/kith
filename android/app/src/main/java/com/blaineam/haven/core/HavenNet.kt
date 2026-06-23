@@ -174,10 +174,7 @@ object HavenNet : InboundListener {
         val env = runCatching {
             social.post(circleId, body, emptyList(), null, null, false, false, nowMs())
         }.getOrNull() ?: return
-        persist()
-        scope.launch(Dispatchers.Main) { feedVersion.value++ }
-        val payload = Wire.eventPayload(circleId, env)
-        for (idHex in social.contactNodeIds(circleId)) sendFrame(Wire.EVENT, payload, idHex)
+        afterAuthor(circleId, env)
     }
 
     private fun handleEvent(payload: ByteArray) {
@@ -242,11 +239,33 @@ object HavenNet : InboundListener {
     }
 
     /** Author a post in a circle and broadcast the sealed event to its members. */
-    fun post(circleId: String, body: String) {
-        if (body.isBlank()) return
+    fun post(circleId: String, body: String, media: List<String> = emptyList()) {
+        if (body.isBlank() && media.isEmpty()) return
         val env = runCatching {
-            social.post(circleId, body, emptyList(), null, null, false, false, nowMs())
+            social.post(circleId, body, media, null, null, false, false, nowMs())
         }.getOrNull() ?: return
+        afterAuthor(circleId, env)
+    }
+
+    /** React / unreact / comment on a post — author + broadcast, same as a post. */
+    fun react(circleId: String, postId: String, emoji: String) {
+        val env = runCatching { social.react(circleId, postId, emoji, nowMs()) }.getOrNull() ?: return
+        afterAuthor(circleId, env)
+    }
+
+    fun unreact(circleId: String, postId: String, emoji: String) {
+        val env = runCatching { social.unreact(circleId, postId, emoji, nowMs()) }.getOrNull() ?: return
+        afterAuthor(circleId, env)
+    }
+
+    fun comment(circleId: String, postId: String, body: String) {
+        if (body.isBlank()) return
+        val env = runCatching { social.comment(circleId, postId, body, emptyList(), nowMs()) }.getOrNull() ?: return
+        afterAuthor(circleId, env)
+    }
+
+    /** Persist, bump the feed, and broadcast a freshly-authored sealed envelope to members. */
+    private fun afterAuthor(circleId: String, env: ByteArray) {
         persist()
         scope.launch(Dispatchers.Main) { feedVersion.value++ }
         val payload = Wire.eventPayload(circleId, env)

@@ -144,8 +144,14 @@ private fun PendingCard(req: PendingRequest) {
     }
 }
 
+private val QUICK_EMOJI = listOf("❤️", "😂", "🔥", "👍", "🎉", "😮")
+
 @Composable
-fun PostCard(item: FeedItemFfi) {
+fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
+    var showComment by remember(item.id) { mutableStateOf(false) }
+    var commentDraft by remember(item.id) { mutableStateOf("") }
+    var showPicker by remember(item.id) { mutableStateOf(false) }
+
     Column(Modifier.fillMaxWidth().havenCard().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -162,10 +168,74 @@ fun PostCard(item: FeedItemFfi) {
             Spacer(Modifier.height(10.dp))
             Text(item.body, color = Color.White, fontSize = 15.sp)
         }
+
+        // Existing reactions.
         if (item.reactions.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                item.reactions.forEach { Text("${it.emoji} ${it.count}", fontSize = 13.sp, color = HavenTheme.textSecondary) }
+                item.reactions.forEach { r ->
+                    val mine = r.mine
+                    Box(
+                        Modifier.clip(RoundedCornerShape(20.dp))
+                            .background(if (mine) HavenTheme.pink.copy(alpha = 0.25f) else HavenTheme.background)
+                            .clickable {
+                                if (mine) HavenNet.unreact(circleId, item.id, r.emoji)
+                                else HavenNet.react(circleId, item.id, r.emoji)
+                            }
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                    ) { Text("${r.emoji} ${r.count}", fontSize = 13.sp, color = Color.White) }
+                }
+            }
+        }
+
+        // Action bar: react + comment.
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("React", color = HavenTheme.pink, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showPicker = !showPicker }.padding(6.dp))
+            Spacer(Modifier.size(8.dp))
+            Text("Comment", color = HavenTheme.pink, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showComment = !showComment }.padding(6.dp))
+        }
+        if (showPicker) {
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                QUICK_EMOJI.forEach { e ->
+                    Box(
+                        Modifier.clip(CircleShape).clickable {
+                            HavenNet.react(circleId, item.id, e); showPicker = false
+                        }.padding(6.dp),
+                    ) { Text(e, fontSize = 22.sp) }
+                }
+            }
+        }
+
+        // Comments.
+        if (item.comments.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            item.comments.forEach { c ->
+                Row(Modifier.padding(vertical = 2.dp)) {
+                    Text(if (c.isMe) "You: " else "${c.authorShort}: ",
+                        color = HavenTheme.pink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(c.body, color = Color.White, fontSize = 13.sp)
+                }
+            }
+        }
+        if (showComment) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = commentDraft, onValueChange = { commentDraft = it },
+                    placeholder = { Text("Add a comment…", fontSize = 13.sp) },
+                    modifier = Modifier.weight(1f), shape = RoundedCornerShape(18.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = HavenTheme.pink, cursorColor = HavenTheme.pink),
+                )
+                Text("Send", color = HavenTheme.pink, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+                        HavenNet.comment(circleId, item.id, commentDraft.trim())
+                        commentDraft = ""; showComment = false
+                    }.padding(10.dp))
             }
         }
     }
