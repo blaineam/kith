@@ -80,7 +80,9 @@ private fun MainScaffold() {
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> { HavenNet.isForeground = true; HavenNet.syncWithContacts() }
+                Lifecycle.Event.ON_RESUME -> {
+                    HavenNet.isForeground = true; HavenNet.syncWithContacts(); HavenNet.requestMissingMedia()
+                }
                 Lifecycle.Event.ON_PAUSE -> HavenNet.isForeground = false
                 else -> {}
             }

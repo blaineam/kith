@@ -367,10 +367,13 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
             Box(
                 Modifier.size(34.dp).clip(CircleShape).background(HavenTheme.brand),
                 contentAlignment = Alignment.Center,
-            ) { Text(if (item.isMe) "•" else item.authorShort.take(1).uppercase(), color = Color.White, fontSize = 14.sp) }
+            ) {
+                val authorName = if (item.isMe) "You" else HavenNet.displayName(item.authorShort)
+                Text(if (item.isMe) "•" else authorName.take(1).uppercase(), color = Color.White, fontSize = 14.sp)
+            }
             Spacer(Modifier.size(10.dp))
             Text(
-                if (item.isMe) "You" else item.authorShort,
+                if (item.isMe) "You" else HavenNet.displayName(item.authorShort),
                 color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
             )
         }
@@ -474,7 +477,7 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
             Spacer(Modifier.height(8.dp))
             item.comments.forEach { c ->
                 Row(Modifier.padding(vertical = 2.dp)) {
-                    Text(if (c.isMe) "You: " else "${c.authorShort}: ",
+                    Text(if (c.isMe) "You: " else "${HavenNet.displayName(c.authorShort)}: ",
                         color = HavenTheme.pink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     Text(c.body, color = Color.White, fontSize = 13.sp)
                 }

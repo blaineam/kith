@@ -99,6 +99,7 @@ object HavenNet : InboundListener {
                 Log.i(TAG, "node started: ${node?.nodeIdHex()}")
                 syncWithContacts()
                 pollMailbox()
+                requestMissingMedia()   // back-fill media for posts already in the feed
             } catch (e: Throwable) {
                 Log.e(TAG, "node start failed", e)
             }
@@ -121,6 +122,11 @@ object HavenNet : InboundListener {
 
     val nodeIdHex: String get() = core.nodeIdHex
     fun inviteUri(): String = core.inviteUri()
+
+    /** Resolve a feed item's short author id (8 hex) to a contact's display name. */
+    fun displayName(authorShort: String): String =
+        contacts.firstOrNull { it.idHex.startsWith(authorShort) }?.name
+            ?: if (authorShort.length >= 6) "Someone (${authorShort.take(6)})" else authorShort
 
     // ---- Inbound dispatch (called off-main by the Rust node) -----------------------------
 
@@ -333,6 +339,7 @@ object HavenNet : InboundListener {
             social.post(circleId, body, media, music, null, false, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
+        scope.launch { media.forEach { uploadMedia(circleId, it) } }   // push photos/videos to the relay
     }
 
     /** Build a portable track reference from a shared streaming link (YouTube/Spotify/etc.). */
@@ -349,6 +356,7 @@ object HavenNet : InboundListener {
             social.post(DEFAULT_CIRCLE, body, listOfNotNull(mediaId), null, 86_400UL, true, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(DEFAULT_CIRCLE, env)
+        scope.launch { mediaId?.let { uploadMedia(DEFAULT_CIRCLE, it) } }
     }
 
     /** React / unreact / comment on a post — author + broadcast, same as a post. */
@@ -499,6 +507,9 @@ object HavenNet : InboundListener {
         if (relayNodes[circleId] == null) return
         val envs = runCatching { social.exportMyEnvelopes(circleId) }.getOrDefault(emptyList())
         for (env in envs) uploadEvent(circleId, env)
+        // Also push the media bytes of anything I've posted here that I still hold locally.
+        val feed = runCatching { social.feed(circleId, nowMs(), null) }.getOrDefault(emptyList())
+        for (item in feed) if (item.isMe) item.media.forEach { if (LocalMedia.has(it)) uploadMedia(circleId, it) }
     }
 
     /** Poll every circle's mailbox; ingest envelopes we haven't seen. */
@@ -533,22 +544,46 @@ object HavenNet : InboundListener {
     private val incomingMedia = HashMap<String, IncomingMedia>()
     private val requestedRefs = HashSet<String>()
 
-    /** Ask contacts for any media refs in the feed we don't have yet (frame 3). */
+    private fun mediaKey(ref: String) = "haven/media/$ref"
+
+    /** Fetch missing feed media: try the circle relay (haven/media/<ref>) first, then ask contacts. */
     fun requestMissingMedia() {
         val myHex = nodeIdHex
-        val refs = LinkedHashSet<String>()
+        val missing = LinkedHashMap<String, String>()   // ref -> circleId
         for (c in social.circles()) {
             val feed = runCatching { social.feed(c.id, nowMs(), null) }.getOrDefault(emptyList())
             for (item in feed) {
-                item.media.forEach { if (!LocalMedia.has(it)) refs.add(it) }
-                item.comments.forEach { cm -> cm.media.forEach { if (!LocalMedia.has(it)) refs.add(it) } }
+                item.media.forEach { if (!LocalMedia.has(it)) missing.putIfAbsent(it, c.id) }
+                item.comments.forEach { cm -> cm.media.forEach { if (!LocalMedia.has(it)) missing.putIfAbsent(it, c.id) } }
             }
         }
-        for (ref in refs) {
-            if (!requestedRefs.add(ref)) continue   // ask once per session per ref
-            val payload = myHex.toByteArray(Charsets.UTF_8) + ref.toByteArray(Charsets.UTF_8)
-            for (idHex in contacts.map { it.idHex }) sendFrame(Wire.MEDIA_REQ, payload, idHex)
+        for ((ref, circleId) in missing) {
+            scope.launch {
+                if (fetchMediaFromRelay(circleId, ref)) {
+                    withContext(Dispatchers.Main) { feedVersion.value++ }
+                    return@launch
+                }
+                if (!requestedRefs.add(ref)) return@launch   // ask peers once per session per ref
+                val payload = myHex.toByteArray(Charsets.UTF_8) + ref.toByteArray(Charsets.UTF_8)
+                for (idHex in contacts.map { it.idHex }) sendFrame(Wire.MEDIA_REQ, payload, idHex)
+            }
         }
+    }
+
+    /** Upload a media blob to the circle relay so members can fetch it even when we're offline. */
+    suspend fun uploadMedia(circleId: String, ref: String) {
+        val nodeHex = relayNodes[circleId] ?: return
+        val client = relayClientFor(nodeHex) ?: return
+        val blob = LocalMedia.rawSealed(ref) ?: return
+        runCatching { client.put(mediaKey(ref), blob) }
+    }
+
+    private suspend fun fetchMediaFromRelay(circleId: String, ref: String): Boolean {
+        val nodeHex = relayNodes[circleId] ?: return false
+        val client = relayClientFor(nodeHex) ?: return false
+        val blob = runCatching { client.get(mediaKey(ref)) }.getOrNull() ?: return false
+        LocalMedia.writeRawSealed(ref, blob)
+        return true
     }
 
     /** Frame 3: [hex64 requester][ref]. If we hold the bytes, stream them back as sealed chunks. */

@@ -93,7 +93,7 @@ fun StoriesTray(groups: List<StoryGroup>, onAddStory: () -> Unit, onOpen: (Int) 
                 }
                 Spacer(Modifier.height(4.dp))
                 androidx.compose.material3.Text(
-                    if (g.isMe) "You" else g.authorShort.take(8),
+                    if (g.isMe) "You" else com.blaineam.haven.core.HavenNet.displayName(g.authorShort),
                     color = Color.White, fontSize = 11.sp, maxLines = 1,
                 )
             }
@@ -157,7 +157,7 @@ fun StoryViewer(groups: List<StoryGroup>, startGroup: Int, onClose: () -> Unit) 
             }
         }
         androidx.compose.material3.Text(
-            if (group.isMe) "You" else group.authorShort.take(10),
+            if (group.isMe) "You" else com.blaineam.haven.core.HavenNet.displayName(group.authorShort),
             color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 28.dp),
         )

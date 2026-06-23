@@ -71,6 +71,17 @@ object LocalMedia {
         runCatching { File(dir, bareId(ref)).writeBytes(toWrite) }
     }
 
+    /** The at-rest sealed blob for a ref — uploaded to the relay verbatim (same form iOS stores). */
+    fun rawSealed(ref: String): ByteArray? {
+        val f = File(dir, bareId(ref))
+        return if (f.exists()) f.readBytes() else null
+    }
+
+    /** Write a sealed blob fetched from the relay straight to disk (load() opens it on read). */
+    fun writeRawSealed(ref: String, blob: ByteArray) {
+        runCatching { File(dir, bareId(ref)).writeBytes(blob) }
+    }
+
     /** Delete every stored media file (part of "start over"). */
     fun clear() {
         runCatching { dir.listFiles()?.forEach { it.delete() } }
