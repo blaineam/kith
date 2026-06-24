@@ -75,13 +75,19 @@ struct EqualizerBars: View {
                     .fill(HavenTheme.brandHorizontal)
                     // Animate the bar's HEIGHT between its low and full height, anchored to the
                     // container's bottom edge — never a transform that escapes the frame.
+                    // Clamped to the resting low when not animating — a bar never goes shorter.
                     .frame(width: 3, height: (animating && bouncing) ? maxBarHeight : maxBarHeight * lows[i])
+                    // Oscillate (low↔full) while animating; keyed on the perpetual `bouncing` toggle.
                     .animation(
                         animating
                             ? .easeInOut(duration: durations[i]).repeatForever(autoreverses: true)
                             : .easeOut(duration: 0.2),
                         value: bouncing
                     )
+                    // When (un)muting, settle straight to the low with a finite ease — WITHOUT this,
+                    // the in-flight repeatForever autoreverse springs the bar BELOW its low while
+                    // stopping (the bug: muting drove the bars under the minimum).
+                    .animation(.easeOut(duration: 0.2), value: animating)
             }
         }
         .frame(width: 22, height: maxBarHeight, alignment: .bottom)
