@@ -25,6 +25,7 @@ pub mod crypto;
 pub mod device;
 pub mod identity;
 pub mod link;
+pub mod selfsync;
 pub mod social;
 pub mod transport;
 

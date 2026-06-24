@@ -82,8 +82,12 @@ signatures. 6 core tests green.
     account-signed `DeviceCredential`, versioned signed `DeviceList` (add/revoke,
     higher-version-wins, rollback-defended), verified against the pinned account key —
     MLS-independent, unit-tested.
-  - ⏭️ Phase 2 enrollment + UI · Phase 3 account-state self-sync (roster/profile/settings/
-    read-state converge across your devices) · Phase 4 live device-to-device delivery ·
+  - 🟡 **Phase 3: convergence engine** in core (`p2pcore::selfsync`): an `AccountState`
+    CRDT (LWW roster/contacts/profile/settings/blocked + grow-only read cursors) with a
+    commutative/associative/idempotent merge, self-encrypted via a seed-derived key only
+    the user's devices can derive — concurrent edits provably converge. Unit-tested.
+    Remaining: mailbox channel + sync loop + FFI + client wiring.
+  - ⏭️ Phase 2 enrollment + UI · Phase 4 live device-to-device delivery ·
     Phase 5 MLS leaf/commit hardening (forward + post-compromise secrecy; gated on MLS).
   - See `MULTI-DEVICE.md` → *Implementation phases*.
 - ⏭️ **Always-on device as personal store-and-forward** (ordered backlog cache; Phase 4).

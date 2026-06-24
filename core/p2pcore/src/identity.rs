@@ -191,6 +191,17 @@ impl Identity {
         self.signing.to_bytes()
     }
 
+    /// A 32-byte **symmetric** key for self-encrypting the account-state self-sync blob
+    /// (multi-device D16, see [`crate::selfsync`]). Derived from the master seed with its
+    /// own HKDF context, so it is independent of every other key and identical on *all* of
+    /// the user's devices (they share the seed) — and derivable by no one else.
+    pub fn self_sync_key(&self) -> [u8; 32] {
+        let hk = Hkdf::<Sha256>::new(Some(b"haven-selfsync-v1"), &self.seed);
+        let mut out = [0u8; 32];
+        hk.expand(b"state-key", &mut out).expect("32 is a valid HKDF length");
+        out
+    }
+
     /// The shareable public identity.
     pub fn public(&self) -> HavenId {
         HavenId {
