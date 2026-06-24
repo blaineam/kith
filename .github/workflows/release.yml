@@ -199,73 +199,11 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  # ── macOS desktop installer (.dmg, signed + notarized when secrets are present) ─────────
-  # The Apple iOS/macOS *app-store* pipeline lives elsewhere (rocket / native HavenMac); this
-  # builds the cross-platform Tauri desktop client as a downloadable .dmg for beta-testers.
-  macos-dmg:
-    needs: meta
-    runs-on: macos-latest
-    # The Mac ships via App Store Connect / TestFlight; this downloadable .dmg is a
-    # beta-tester convenience. Without code-signing secrets it can't sign, so it must
-    # never block the release — publish proceeds with the Win/Linux/relay/Flatpak assets.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: desktop/src-tauri
-      - name: Stamp version
-        run: |
-          node -e "const f='desktop/src-tauri/tauri.conf.json';const c=require('fs');const j=JSON.parse(c.readFileSync(f));j.version='${{ needs.meta.outputs.version }}'.split('-')[0];c.writeFileSync(f,JSON.stringify(j,null,2));"
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-      # Import the Developer ID Application cert into a dedicated keychain so `codesign` can
-      # resolve the identity non-interactively. Tauri's own APPLE_CERTIFICATE import was flaky
-      # ("failed to resolve signing identity"); this explicit import is the reliable CI pattern.
-      - name: Import Developer ID certificate
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          KC="$RUNNER_TEMP/haven-signing.keychain-db"
-          KCPW="$(openssl rand -hex 20)"
-          CERT="$RUNNER_TEMP/cert.p12"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT"
-          security create-keychain -p "$KCPW" "$KC"
-          security set-keychain-settings -lut 21600 "$KC"
-          security unlock-keychain -p "$KCPW" "$KC"
-          security import "$CERT" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 \
-            -k "$KC" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" >/dev/null
-          # Put our keychain first in the user search list so codesign + Tauri find the identity.
-          security list-keychains -d user -s "$KC" $(security list-keychains -d user | sed 's/"//g')
-          echo "── Available code-signing identities (must include a 'Developer ID Application'): ──"
-          security find-identity -v -p codesigning "$KC"
-      - name: Build .dmg (Developer ID signed + notarized)
-        working-directory: desktop/src-tauri
-        env:
-          # Cert is already in the keychain (above) — pass ONLY the identity name + notarization
-          # creds. Passing APPLE_CERTIFICATE here too triggers Tauri's own (conflicting) import.
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: cargo tauri build --bundles app dmg
-      - name: Collect .dmg
-        shell: bash
-        run: |
-          mkdir -p out
-          find desktop/src-tauri/target/release/bundle/dmg -name '*.dmg' -exec cp {} out/ \;
-          ls -la out
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-macos
-          path: out/*
-          if-no-files-found: error
+  # NOTE: there is intentionally NO macOS bundle here. macOS ships the **native SwiftUI app**
+  # (the `HavenMac` target) through App Store Connect / TestFlight via `rocket` — the same
+  # Apple-signed pipeline as iOS. The Tauri desktop client is Windows + Linux only; we do not
+  # build/distribute a Tauri .dmg for Mac (that would be the wrong, non-native app, and would
+  # need Developer ID notarization the native App Store build doesn't).
 
   # ── SteamOS / Steam Deck Flatpak (built from the Linux .deb) ────────────────────────────
   flatpak:
@@ -308,7 +246,7 @@ jobs:
 
   # ── Publish one Release with every artifact + a version-pinned Flatpak manifest ─────────
   publish:
-    needs: [meta, relay, relay-windows, desktop, macos-dmg, flatpak]
+    needs: [meta, relay, relay-windows, desktop, flatpak]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -343,8 +281,9 @@ jobs:
           cat > NOTES.md <<EOF
           Haven ${{ needs.meta.outputs.version }}
 
-          **Desktop GUI** — Windows (.msi / NSIS .exe) · macOS (.dmg) · Linux (.deb / .rpm /
-          AppImage) · SteamOS / Steam Deck (\`haven.flatpak\` + the pinned \`com.blaineam.haven.yml\`).
+          **Desktop GUI** — Windows (.msi / NSIS .exe) · Linux (.deb / .rpm / AppImage) ·
+          SteamOS / Steam Deck (\`haven.flatpak\` + the pinned \`com.blaineam.haven.yml\`).
+          **macOS** ships the native app via the App Store / TestFlight (not in this release).
           **Android** — sideloadable .apk (universal + per-ABI), attached by the \`android\` workflow.
           **Relay daemon** (\`haven-relay-<target>\`) — x86_64 / aarch64 / armv7 / armv6 (every
           Raspberry Pi) + macOS, plus .deb packages. Installed by \`relay/install.sh\`.

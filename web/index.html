@@ -349,7 +349,7 @@ haven-relay run --link "haven-relay://circle#…"</code></pre>
       <div class="center reveal">
         <span class="eyebrow">The beta is here</span>
         <h2 style="font-size:clamp(26px,4.5vw,40px)">Get <span class="h-grad">Haven</span> on every screen</h2>
-        <p class="lead">iPhone &amp; iPad via TestFlight; macOS, Windows, Linux and Steam&nbsp;Deck straight from the latest release; a tiny relay for a Pi or server.</p>
+        <p class="lead">iPhone, iPad and Mac via TestFlight; Windows, Linux and Steam&nbsp;Deck straight from the latest release; a tiny relay for a Pi or server.</p>
       </div>
       <div class="dl-grid reveal" id="download-grid" aria-live="polite">
         <p class="muted center" id="download-loading">Loading the latest release…</p>
@@ -507,13 +507,13 @@ haven-relay run --link "haven-relay://circle#…"</code></pre>
       : '<span class="muted small">TestFlight beta — invite required for now</span>';
     return card("iPhone &amp; iPad", "iOS · iPadOS — via TestFlight", [b], recommended);
   }
-  // macOS gets its own download: the notarized .dmg from the latest release (direct, no TestFlight).
-  function macCard(dmg, recommended) {
-    var b = dmg
-      ? btn(dmg, "Download for Mac (.dmg)", true)
-      : (APPLE_BETA_URL ? btn(APPLE_BETA_URL, "Join the TestFlight beta", true)
-                        : '<span class="muted small">Building…</span>');
-    return card("macOS", "Apple silicon &amp; Intel — notarized&nbsp;.dmg", [b], recommended);
+  // macOS is the NATIVE SwiftUI app (not the Tauri desktop) — same TestFlight / App Store
+  // pipeline as iOS, just its own card so Mac visitors see it called out.
+  function macCard(recommended) {
+    var b = APPLE_BETA_URL
+      ? btn(APPLE_BETA_URL, "Join the TestFlight beta", true)
+      : '<span class="muted small">TestFlight beta — invite required for now</span>';
+    return card("macOS", "Native Mac app — via TestFlight", [b], recommended);
   }
 
   // Detect the visitor's platform from the standard, browser-provided UA platform — no
@@ -556,14 +556,13 @@ haven-relay run --link "haven-relay://circle#…"</code></pre>
       var flat = pick(/\.flatpak$/i);
       var hasRelay = any(/^haven-relay-/i);
       var apk = pick(/universal.*\.apk$/i) || pick(/\.apk$/i);
-      var dmg = pick(/\.dmg$/i);
 
       var plat = detectPlatform();
       var rec = function (k) { return plat === k; };
       // Each entry tagged with its platform key; the matching card gets the badge and floats first.
       var entries = [
         { p: "ios",     html: iosCard(rec("ios")) },
-        { p: "macos",   html: macCard(dmg, rec("macos")) },
+        { p: "macos",   html: macCard(rec("macos")) },
         { p: "android", html: card("Android", "APK — sideload", [apk ? btn(apk, "Download APK", true) : btn(null)], rec("android")) },
         { p: "windows", html: card("Windows", "x86-64", winBtns.length ? winBtns : [btn(null)], rec("windows")) },
         { p: "linux",   html: card("Linux", "Ubuntu · Debian · Fedora · Arch", linuxBtns.length ? linuxBtns : [btn(null)], rec("linux")) },
@@ -575,7 +574,7 @@ haven-relay run --link "haven-relay://circle#…"</code></pre>
       grid.innerHTML = ordered.map(function (e) { return e.html; }).join("");
     })
     .catch(function () {
-      grid.innerHTML = iosCard() + macCard(null) +
+      grid.innerHTML = iosCard() + macCard() +
         '<div class="dl-card"><h4>Windows · Linux · Steam Deck</h4><div class="muted small">desktop &amp; relay</div>' +
         '<div class="dl-btns">' + btn("https://github.com/" + REPO + "/releases/latest", "Browse downloads on GitHub", true) + '</div></div>';
     });
