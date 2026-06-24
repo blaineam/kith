@@ -1568,17 +1568,18 @@ struct StoryMediaCanvas: View {
                             .blur(radius: 28)
                             .overlay(Color.black.opacity(0.28))
                     }
-                    // Foreground: the media aspect-FILLS the canvas by default (covers it, no bars),
-                    // with the author's zoom/reposition layered on top — pinch/drag reframes from
-                    // there. (Was scaledToFit, which left letterbox gaps the blurred backdrop showed
-                    // through.)
+                    // Foreground: the media aspect-FITS the canvas (letterboxed, never cropped),
+                    // exactly matching the story PLAYER (StoryViewer uses VideoSurface .resizeAspect
+                    // + scaledToFit for images, with this same blurred backdrop filling the bands).
+                    // Keeping the composer preview identical to the player means WYSIWYG — the
+                    // author sees the media framed and the caption positioned just as viewers will.
                     Group {
                         if m.kind == .video, let url = m.videoURL {
                             // Video previews WITH the chosen filter (same FilterEngine pipeline,
                             // applied per-frame), matching the live camera and the baked export.
-                            LoopingVideo(url: url, fill: true, filter: filter)
+                            LoopingVideo(url: url, fill: false, filter: filter)
                         } else if let img = still {
-                            Image(platformImage: img).resizable().scaledToFill()
+                            Image(platformImage: img).resizable().scaledToFit()
                                 .frame(width: geo.size.width, height: geo.size.height)
                         }
                     }

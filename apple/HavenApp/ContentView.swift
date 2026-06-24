@@ -25,6 +25,8 @@ struct YouView: View {
         NavigationStack {
             ZStack {
                 HavenBackground()
+                    .contentShape(Rectangle())
+                    .onTapGesture { havenDismissKeyboard() }   // tap outside a field to dismiss the keyboard
                 ScrollView {
                     VStack(spacing: 18) {
                         profileHeader
@@ -33,6 +35,7 @@ struct YouView: View {
                     }
                     .padding(20)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle("You")
             .toolbar {

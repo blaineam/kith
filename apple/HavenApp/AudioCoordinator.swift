@@ -55,7 +55,16 @@ final class AudioCoordinator: ObservableObject {
             videoPlayer?.volume = 0
             videoUnmuted = false
         } else {
-            ensureMusicPlaying()
+            // Unmute must actually (re)start audio for the active post — not just flip a flag.
+            // If a song is attached but was never queued (play() bails while silent), `resume()`
+            // has nothing to resume; reissue a full play so the track loads and starts.
+            if MusicPlayback.shared.current != nil {
+                MusicPlayback.shared.restartCurrent()
+            } else {
+                // No song: bring the active post's video audio back up (author/global allowing).
+                videoPlayer?.volume = 1
+                videoUnmuted = videoPlayer != nil
+            }
         }
     }
 
@@ -184,6 +193,12 @@ final class MusicPlayback {
         guard current != nil, player.state.playbackStatus != .playing else { return }
         Task { @MainActor in try? await player.play() }
     }
+    /// Fully (re)queue and start the current track — used on unmute, when the song may never
+    /// have been queued (play() bails while the app is silent, so resume() has nothing to do).
+    func restartCurrent() {
+        guard let track = current else { return }
+        play(track)
+    }
     func stop() {
         current = nil
         if player.state.playbackStatus == .playing { player.pause() }
@@ -237,6 +252,12 @@ final class MusicPlayback {
     func resume() {
         guard current != nil, player.playbackState != .playing else { return }
         player.play()
+    }
+    /// Fully (re)queue and start the current track — used on unmute, when the song may never
+    /// have been queued (play() bails while the app is silent, so resume() has nothing to do).
+    func restartCurrent() {
+        guard let track = current else { return }
+        play(track)
     }
     func stop() {
         current = nil

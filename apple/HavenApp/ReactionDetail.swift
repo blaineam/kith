@@ -19,9 +19,7 @@ struct ReactionDetailView: View {
                         Section {
                             ForEach(r.authors, id: \.self) { hex in
                                 HStack(spacing: 10) {
-                                    Circle().fill(HavenTheme.brand).frame(width: 30, height: 30)
-                                        .overlay(Text(String(name(hex).prefix(1)))
-                                            .font(.caption.bold()).foregroundStyle(.white))
+                                    avatar(hex)
                                     Text(name(hex)).font(.subheadline)
                                     Spacer()
                                 }
@@ -49,5 +47,15 @@ struct ReactionDetailView: View {
     private func name(_ hex: String) -> String {
         if hex == FeedStore.shared.myNodeHex { return "You" }
         return ContactsStore.shared.name(forNodePrefix: hex) ?? "Someone in your circle"
+    }
+
+    /// Each reactor's real avatar — my own photo/emoji for me, the cached signed-profile
+    /// photo/emoji (else initials) for everyone else — matching how the feed renders contacts.
+    @ViewBuilder private func avatar(_ hex: String) -> some View {
+        if hex == FeedStore.shared.myNodeHex {
+            HavenAvatar(image: ProfileStore.shared.avatar, emoji: ProfileStore.shared.emoji, size: 30)
+        } else {
+            PeerAvatar(nodeHex: hex, name: name(hex), size: 30)
+        }
     }
 }

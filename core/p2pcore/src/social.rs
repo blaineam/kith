@@ -447,20 +447,12 @@ pub fn build_feed(
         }
     }
 
-    // Attach comments to their targets (skip unsent comments).
-    for cid in &comment_order {
-        if let (Some(comment), Some(target)) =
-            (comments.get(cid).cloned(), comment_target(&events, cid))
-        {
-            if let Some(it) = items.get_mut(&target) {
-                if !comment.unsent {
-                    it.comments.push(comment);
-                }
-            }
-        }
-    }
-
     // Aggregate reactions onto their targets.
+    // NOTE: this runs BEFORE comments are attached to their parent items so that a
+    // comment's reactions are populated in the `comments` map first — the attach step
+    // below clones each comment into its item, so reactions aggregated afterward would
+    // never reach the cloned copies (post reactions were fine because they target
+    // `items` directly, but comment reactions silently vanished).
     for e in &events {
         if let EventKind::Reaction { target, emoji } = &e.kind {
             let bucket: Option<&mut Vec<ReactionGroup>> = if let Some(it) = items.get_mut(target) {
@@ -502,6 +494,20 @@ pub fn build_feed(
                     }
                 }
                 reactions.retain(|r| !r.authors.is_empty());   // drop a group nobody holds anymore
+            }
+        }
+    }
+
+    // Attach comments to their targets (skip unsent comments). Done AFTER reaction
+    // aggregation so each cloned comment carries its resolved reactions.
+    for cid in &comment_order {
+        if let (Some(comment), Some(target)) =
+            (comments.get(cid).cloned(), comment_target(&events, cid))
+        {
+            if let Some(it) = items.get_mut(&target) {
+                if !comment.unsent {
+                    it.comments.push(comment);
+                }
             }
         }
     }

@@ -1,5 +1,10 @@
 import SwiftUI
 import Photos
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// User preferences (on-device only).
 @MainActor
@@ -79,6 +84,16 @@ enum PhotoSaver {
     }
 }
 
+/// Resign first responder app-wide (cross-platform) so a tap outside a focused field
+/// dismisses the keyboard. Used on the You/Settings screens.
+@MainActor func havenDismissKeyboard() {
+    #if canImport(UIKit)
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    #else
+    NSApp.keyWindow?.makeFirstResponder(nil)
+    #endif
+}
+
 struct SettingsView: View {
     let account: Account
     let accountStore: AccountStore
@@ -88,6 +103,8 @@ struct SettingsView: View {
     var body: some View {
         ZStack {
             HavenBackground()
+                .contentShape(Rectangle())
+                .onTapGesture { havenDismissKeyboard() }
             Form {
                 Section {
                     HStack(alignment: .top, spacing: 12) {
@@ -161,6 +178,7 @@ struct SettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
+            .scrollDismissesKeyboard(.interactively)
         }
         .navigationTitle("Settings")
         .havenInlineNavTitle()

@@ -63,14 +63,19 @@ struct EqualizerBars: View {
 
     private let durations: [Double] = [0.42, 0.55, 0.36, 0.48]
     private let lows: [CGFloat] = [0.35, 0.5, 0.3, 0.45]
+    /// Tallest a bar ever gets — fixed so the bars are anchored to a baseline and animate
+    /// their HEIGHT (not a scale transform that could render past the frame). The container
+    /// is exactly this tall and bottom-aligned + clipped, so bars can never spill below the chip.
+    private let maxBarHeight: CGFloat = 14
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 2.5) {
             ForEach(0..<4, id: \.self) { i in
                 Capsule()
                     .fill(HavenTheme.brandHorizontal)
-                    .frame(width: 3, height: 15)
-                    .scaleEffect(y: (animating && bouncing) ? 1.0 : lows[i], anchor: .bottom)
+                    // Animate the bar's HEIGHT between its low and full height, anchored to the
+                    // container's bottom edge — never a transform that escapes the frame.
+                    .frame(width: 3, height: (animating && bouncing) ? maxBarHeight : maxBarHeight * lows[i])
                     .animation(
                         animating
                             ? .easeInOut(duration: durations[i]).repeatForever(autoreverses: true)
@@ -79,7 +84,8 @@ struct EqualizerBars: View {
                     )
             }
         }
-        .frame(width: 22, height: 16, alignment: .bottom)
+        .frame(width: 22, height: maxBarHeight, alignment: .bottom)
+        .clipped()   // hard-stop any overshoot at the chip's edge
         .onAppear { if animating { bouncing = true } }
         .onChange(of: animating) { _, now in bouncing = now }
     }
