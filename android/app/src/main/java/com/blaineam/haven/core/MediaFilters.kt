@@ -146,8 +146,10 @@ void main() {
         if (spec.fade > 0.0)
             sb.append("    rgb = max(rgb, vec3(${g(spec.fade * 0.12)}));\n")
         if (spec.grain > 0.0)
-            sb.append("    { float n = fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453);\n" +
-                "      rgb += (n - 0.5) * ${g(spec.grain * 0.5)}; }\n")
+            // Per-PIXEL hash (gl_FragCoord, not uv): a uv-based hash bands into horizontal lines
+            // because adjacent pixels get near-identical uv. This gives real film grain.
+            sb.append("    { float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);\n" +
+                "      rgb += (n - 0.5) * ${g(spec.grain * 0.28)}; }\n")
         if (spec.vignette > 0.0)
             sb.append("    rgb *= 1.0 - ${g(spec.vignette)} * smoothstep(0.35, 0.85, distance(uv, vec2(0.5)));\n")
 
