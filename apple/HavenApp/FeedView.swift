@@ -722,6 +722,9 @@ final class FeedStore: ObservableObject {
                 }
             }
             if changed { persist(); refresh(); requestMissingMedia() }
+            // Multi-device: converge this device's account state (profile/settings) with the
+            // user's other devices via the same relay mailbox (D16 Phase 3).
+            await SelfSyncCoordinator.shared.sync()
         }
     }
 
