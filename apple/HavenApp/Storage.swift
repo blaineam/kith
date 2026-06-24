@@ -102,7 +102,7 @@ struct StorageSettingsView: View {
                 if !others.isEmpty {
                     Section {
                         ForEach(others, id: \.self) { other in
-                            if let node = RelayMailboxStore.shared.explicitNode(forCircle: other) {
+                            if let node = RelayMailboxStore.shared.explicitRelays(forCircle: other).first {
                                 Button {
                                     FeedStore.shared.adoptRelayNode(node, circleIds: [cid], setDefault: false)
                                     relayAdopted = true
@@ -123,6 +123,11 @@ struct StorageSettingsView: View {
                     } header: { Text("Use another circle's mailbox") }
                     footer: { Text("Point this circle at a relay you already connected for a different circle.") }
                 }
+
+                // The redundant relay pool for this circle: posts are mirrored to every one, and
+                // read from any that's reachable. A relay in backoff (recently failed) shows as
+                // "unreachable" and is skipped until it recovers. Swipe / tap to forget one.
+                RelayPoolSection(circleId: cid)
 
                 if let cfg = mailbox.config {
                     Section {
@@ -168,6 +173,51 @@ struct StorageSettingsView: View {
         startAtLogin = relay.startsAtLogin
     }
 
+}
+
+/// The circle's redundant relay pool, surfaced in the Storage screen (mirrors the desktop Relay
+/// view): every configured relay with a live reachability dot, plus swipe-to-forget. Posts are
+/// mirrored to all of them and read from any reachable one; a failed relay backs off and is shown
+/// as unreachable until it recovers.
+struct RelayPoolSection: View {
+    let circleId: String
+    @ObservedObject private var mailbox = RelayMailboxStore.shared
+    @ObservedObject private var health = RelayHealth.shared
+    @ObservedObject private var relay = RelayHost.shared
+
+    private var relays: [String] { mailbox.relays(forCircle: circleId) }
+
+    var body: some View {
+        if !relays.isEmpty {
+            Section {
+                ForEach(relays, id: \.self) { node in
+                    let reachable = health.available(node)
+                    let isSelf = relay.serving && node == relay.nodeId
+                    HStack(spacing: 10) {
+                        Image(systemName: reachable ? "circle.fill" : "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(reachable ? Color.green : Color.orange)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(node.prefix(12))…").font(.system(.footnote, design: .monospaced))
+                            Text(isSelf ? "This device · \(reachable ? "reachable" : "backing off")"
+                                        : (reachable ? "Reachable" : "Unreachable — retrying"))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            FeedStore.shared.forgetRelay(node)
+                        } label: { Label("Forget", systemImage: "trash") }
+                    }
+                }
+            } header: {
+                Text(relays.count == 1 ? "Relay" : "Relays · \(relays.count)")
+            } footer: {
+                Text("Posts and media are mirrored to every relay here and read from any that's reachable, so your circle keeps syncing as long as one is up. A relay that fails is paused and retried automatically. Swipe a relay to forget it everywhere.")
+            }
+        }
+    }
 }
 
 /// Power-user storage, one tap below the simple relay toggle on the Storage screen: connect an

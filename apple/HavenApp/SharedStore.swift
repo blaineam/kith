@@ -54,9 +54,14 @@ enum SharedStore {
 
     private static func key(_ ref: String) -> String { "haven/media/\(ref)" }
 
-    /// The relay node id serving a circle, if the circle uses a Haven relay (the common path).
+    /// The relay node ids serving a circle (the common path) — posts are mirrored to ALL of them
+    /// and read from any (graceful fallback if one is down).
+    private static func relayNodes(_ circleId: String) -> [String] {
+        RelayMailboxStore.shared.relays(forCircle: circleId)
+    }
+    /// First configured relay — for "does this circle have a relay at all" checks.
     private static func relayNode(_ circleId: String) -> String? {
-        RelayMailboxStore.shared.nodeId(forCircle: circleId)
+        relayNodes(circleId).first
     }
     /// This device's OWN S3 bucket (the owner uses its credentials directly).
     static func ownerS3() -> S3Client? { S3Client(StorageStore.shared) }
@@ -73,9 +78,16 @@ enum SharedStore {
     static func backup(ref: String, circleId: String, social: HavenSocial) async {
         guard let raw = MediaStore.shared.rawBytes(ref),
               let sealed = try? social.sealCircleMedia(circleId: circleId, data: raw) else { return }
-        if let node = relayNode(circleId), let c = await RelayClients.client(node) {
-            if await c.has(key: key(ref)) { return }
-            try? await c.put(key: key(ref), data: sealed)
+        let nodes = relayNodes(circleId)
+        if !nodes.isEmpty {
+            // Mirror to EVERY configured relay (redundancy). Content-addressed key → idempotent
+            // re-puts, and a relay in backoff is skipped (RelayClients is health-aware).
+            for node in nodes {
+                guard let c = await RelayClients.client(node) else { continue }
+                if await c.has(key: key(ref)) { RelayHealth.shared.recordSuccess(node); continue }
+                do { try await c.put(key: key(ref), data: sealed); RelayHealth.shared.recordSuccess(node) }
+                catch { RelayHealth.shared.recordFailure(node); RelayClients.forget(node) }
+            }
             return
         }
         guard let s3 = mailboxClient() else { return }
@@ -86,10 +98,12 @@ enum SharedStore {
     /// Fetch a media blob from the circle's mailbox and open it for whichever circle it belongs to.
     static func restore(ref: String, circleIds: [String], social: HavenSocial) async -> Data? {
         var sealed: Data?
-        // Try each circle's relay first, then the S3 bucket.
-        for cid in circleIds {
-            if let node = relayNode(cid), let c = await RelayClients.client(node),
-               let s = await c.get(key: key(ref)) { sealed = s; break }
+        // Try every relay of every circle first (fallback reads), then the S3 bucket.
+        outer: for cid in circleIds {
+            for node in relayNodes(cid) {
+                guard let c = await RelayClients.client(node) else { continue }
+                if let s = await c.get(key: key(ref)) { RelayHealth.shared.recordSuccess(node); sealed = s; break outer }
+            }
         }
         if sealed == nil, let s3 = mailboxClient() { sealed = try? await s3.getObject(key: key(ref)) }
         guard let blob = sealed else { return nil }
@@ -122,10 +136,19 @@ enum SharedStore {
         let key = mailboxKey(circleId, env)
         if seenMailbox.contains(key) { return true }
         // Relay (common path) → owner's own bucket → member's pre-signed pool → legacy creds.
-        if let node = relayNode(circleId), let c = await RelayClients.client(node) {
-            if await c.has(key: key) { seenMailbox.insert(key); FeedStore.shared.markRelay(true); return true }
-            do { try await c.put(key: key, data: env); seenMailbox.insert(key); FeedStore.shared.markRelay(true); return true }
-            catch { FeedStore.shared.markRelay(false); return false }
+        let nodes = relayNodes(circleId)
+        if !nodes.isEmpty {
+            // Mirror to EVERY configured relay (redundancy). Content-addressed key → idempotent;
+            // a relay in backoff is skipped. Success on ANY relay means it's safely in a mailbox.
+            var landed = false
+            for node in nodes {
+                guard let c = await RelayClients.client(node) else { continue }
+                if await c.has(key: key) { RelayHealth.shared.recordSuccess(node); landed = true; continue }
+                do { try await c.put(key: key, data: env); RelayHealth.shared.recordSuccess(node); landed = true }
+                catch { RelayHealth.shared.recordFailure(node); RelayClients.forget(node) }
+            }
+            if landed { seenMailbox.insert(key); FeedStore.shared.markRelay(true); return true }
+            FeedStore.shared.markRelay(false); return false
         }
         if PresignStore.shared.hasPool(circleId) && !isOwner(circleId) {
             // Member: write to one of our pre-signed PUT slots (no credentials).
@@ -150,10 +173,18 @@ enum SharedStore {
         var out: [(String, Data)] = []
         for cid in circleIds {
             let prefix = "haven/mailbox/\(cid)/"
-            if let node = relayNode(cid), let c = await RelayClients.client(node) {
-                for key in await c.list(prefix: prefix) where !seenMailbox.contains(key) {
-                    seenMailbox.insert(key)
-                    if let data = await c.get(key: key) { out.append((cid, data)) }
+            let nodes = relayNodes(cid)
+            if !nodes.isEmpty {
+                // Read from ALL relays; seenMailbox is keyed by the content-addressed key, so the
+                // same envelope mirrored on several relays is ingested exactly once (dedup).
+                for node in nodes {
+                    guard let c = await RelayClients.client(node) else { continue }
+                    let keys = await c.list(prefix: prefix)
+                    RelayHealth.shared.recordSuccess(node)
+                    for key in keys where !seenMailbox.contains(key) {
+                        seenMailbox.insert(key)
+                        if let data = await c.get(key: key) { out.append((cid, data)) }
+                    }
                 }
             } else if PresignStore.shared.hasPool(cid) && !isOwner(cid) {
                 // Member: LIST + GET via the pre-signed pool URLs (no credentials).

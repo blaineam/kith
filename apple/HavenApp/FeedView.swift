@@ -459,7 +459,10 @@ final class FeedStore: ObservableObject {
     private func startSyncTimer() {
         syncTimer?.invalidate()
         syncTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.syncWithContacts() }
+            Task { @MainActor in
+                self?.syncWithContacts()
+                RelayHost.shared.meshSyncTick()   // if we host a relay, pull from sibling relays
+            }
         }
     }
 
@@ -845,10 +848,11 @@ final class FeedStore: ObservableObject {
     /// Adopt a relay node as the mailbox for specific circles (and optionally make it the default
     /// every present + future circle inherits). Each circle's members are told over frame 19.
     func adoptRelayNode(_ nodeHex: String, circleIds: [String], setDefault: Bool) {
-        guard let social, let data = nodeHex.data(using: .utf8) else { return }
-        if setDefault { RelayMailboxStore.shared.defaultNodeHex = nodeHex }
+        let hex = nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let social, hex.count == 64, let data = hex.data(using: .utf8) else { return }
+        if setDefault { RelayMailboxStore.shared.defaultNodeHex = hex }
         for cid in circleIds {
-            RelayMailboxStore.shared.set(circleId: cid, nodeHex: nodeHex)   // I use it too
+            RelayMailboxStore.shared.add(circleId: cid, nodeHex: hex)   // ADD (append), don't replace
             guard let sealed = try? social.sealCircleMedia(circleId: cid, data: data) else { continue }
             var p = Data(); lpAppend(&p, Data(cid.utf8)); p.append(sealed)
             let members = social.contactNodeIds(circleId: cid)
@@ -862,6 +866,12 @@ final class FeedStore: ObservableObject {
         backfillMailbox(circleIds: circleIds)
         Task { await BackgroundUploader.shared.flush() }
         pollMailboxNow()
+    }
+
+    /// Forget a relay across every circle (and as the default) — drops its cached connection and
+    /// health, mirroring desktop `forget_relay`. Local only: other members keep their own pools.
+    func forgetRelay(_ nodeHex: String) {
+        RelayMailboxStore.shared.forget(nodeHex: nodeHex)
     }
 
     /// Re-upload every post I've ALREADY authored in these circles to their mailbox. Fixes the
@@ -890,7 +900,11 @@ final class FeedStore: ObservableObject {
         guard !circleId.isEmpty, !sealed.isEmpty,
               let data = social.openCircleMedia(circleId: circleId, sealed: sealed),
               let nodeHex = String(data: data, encoding: .utf8), nodeHex.count == 64 else { return }
-        RelayMailboxStore.shared.set(circleId: circleId, nodeHex: nodeHex)
+        // A contact advertised their circle relay → ADD it to our redundant set for this circle, so
+        // members automatically pool relays (more redundancy, no manual setup) — desktop parity.
+        let wasNew = !RelayMailboxStore.shared.relays(forCircle: circleId).contains(nodeHex.lowercased())
+        RelayMailboxStore.shared.add(circleId: circleId, nodeHex: nodeHex)
+        if wasNew { backfillMailbox(circleIds: [circleId]) }   // mirror my past posts to the new relay
         Task { await BackgroundUploader.shared.flush() }   // deliver posts we couldn't send before
         pollMailboxNow()
     }
