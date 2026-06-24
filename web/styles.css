@@ -461,10 +461,18 @@ a:focus-visible,button:focus-visible,summary:focus-visible,.btn:focus-visible{
   background:var(--brand);color:#fff;box-shadow:0 8px 18px -7px rgba(236,72,153,.7);
 }
 
+/* Long commands must never widen a code block past the viewport — let <pre> shrink and
+   scroll internally (this also fixes flex items, whose default min-width:auto refuses to
+   shrink below the content's intrinsic width). */
+pre{max-width:100%;min-width:0}
+.copywrap{min-width:0;max-width:100%}
+
 /* Relay command copy block — responsive: on narrow screens the Copy button stacks
    below the command instead of overlapping the horizontally-scrolling <pre>. */
 @media (max-width:560px){
   .copywrap{display:flex;flex-direction:column-reverse;gap:8px}
   .copywrap .copybtn{position:static;align-self:flex-start}
-  .copywrap pre{padding-right:18px;margin:0;-webkit-overflow-scrolling:touch}
+  /* min-width:0 lets the <pre> flex item shrink so its overflow:auto scrolls instead of
+     forcing the whole block (and the page) wider than the screen. */
+  .copywrap pre{padding-right:18px;margin:0;-webkit-overflow-scrolling:touch;min-width:0;max-width:100%}
 }
