@@ -338,7 +338,8 @@ music out / video in). Full design + per-feature security audit in `MEDIA-AND-MU
 the same E2E path and the maker out of the trust chain.
 
 **Trade-off:** camera + MusicKit can't run in the Simulator, so implementation is
-device-verified via TestFlight; MusicKit needs the capability/entitlement on the App ID.
+device-verified via TestFlight. The MusicKit capability/entitlement is **granted on the
+App ID** — live Apple Music attach + playback is shipped.
 
 ## D19 — Post retention: auto-delete with sender override (shortest wins)
 

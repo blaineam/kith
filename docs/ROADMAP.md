@@ -168,9 +168,9 @@ app); the WASM client and `web/engine/` were removed.
   signaling over the sealed iroh channel; **VoIP PushKit** ring-from-killed; **CallKit**
   on iOS, in-app on native macOS; echo cancellation; **screen share** (macOS
   ScreenCaptureKit, iOS ReplayKit broadcast extension → App Group `group.com.blaineam.kith`).
-- ⏭️ **EXIF/GPS stripping** at the seal-and-send boundary; **MusicKit entitlement** on the
-  App ID (picker uses real catalog at runtime; entitlement not yet added so signing stays
-  green — see `MEDIA-AND-MUSIC.md`).
+- ✅ **MusicKit entitlement** on the App ID — granted; live Apple Music attach + playback
+  shipped (see `MEDIA-AND-MUSIC.md`).
+- ⏭️ **EXIF/GPS stripping** at the seal-and-send boundary.
 - ⏭️ On-device `SensitiveContentAnalysis` guards; per-circle toggles.
 
 ## ⏭️ M10 — CI & launch tooling

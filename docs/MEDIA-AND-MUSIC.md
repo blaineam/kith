@@ -44,8 +44,8 @@ plays. Each viewer hears it through **their own** Apple Music subscription.
   central component** — the "maker holds no keys" property is fully preserved.
 - **Least privilege:** request MusicKit authorization only when the user chooses to
   attach/play a song; degrade gracefully (show the pill, disable playback) if denied.
-- **Entitlement note:** needs the MusicKit capability on the App ID + the
-  `com.apple.developer.musickit` entitlement — a device-verified, ASC-side step.
+- **Entitlement note:** the MusicKit capability + `com.apple.developer.musickit`
+  entitlement are **granted on the App ID** — live Apple Music attach + playback is shipped.
 
 ## 3. Audio crossfade (music ↔ video)
 
