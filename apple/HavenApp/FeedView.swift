@@ -1916,6 +1916,10 @@ struct PostCard: View {
                     .font(.subheadline).italic().foregroundStyle(.secondary)
             } else {
                 if !item.body.isEmpty { LinkedText(text: item.body) }
+                // Rich Open Graph preview for the first link in a text post (no media of its own).
+                if item.media.isEmpty, let url = LinkScanner.urls(in: item.body).first {
+                    LinkPreviewCard(url: url).padding(.top, 8)
+                }
                 if !item.media.isEmpty {
                     // For a single-video post the GestureVideoPlayer owns tap/double-tap/hold/
                     // scrub itself (so its hold-to-pause and drag-to-scrub aren't stolen). For
@@ -2287,6 +2291,7 @@ struct PostCard: View {
                     Text("unsent").font(.caption).italic().foregroundStyle(.secondary)
                 } else if !c.body.isEmpty {
                     LinkedText(text: c.body, font: .caption)
+                    if let url = LinkScanner.urls(in: c.body).first { LinkPreviewCard(url: url).padding(.top, 6) }
                 }
                 if !c.unsent && !c.media.isEmpty { commentMediaRow(c.media) }
                 if !c.unsent { commentReactionsRow(c) }

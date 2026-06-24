@@ -231,6 +231,10 @@ struct DMThreadView: View {
                         .background(m.isMe ? AnyShapeStyle(HavenTheme.brand) : AnyShapeStyle(Color(.secondarySystemBackground)),
                                     in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .foregroundStyle(m.isMe ? .white : .primary)
+                    // Rich Open Graph preview for a link in the message.
+                    if let url = LinkScanner.urls(in: m.body).first {
+                        LinkPreviewCard(url: url).frame(maxWidth: 260)
+                    }
                 }
                 if !m.reactions.isEmpty {
                     HStack(spacing: 4) {
