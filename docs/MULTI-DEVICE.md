@@ -1,14 +1,39 @@
 # Multi-device: one account, many authorized devices
 
-> **Status (shipped vs. designed):** the account-key / device-credential / MLS-leaf model
-> below is the **target design**, not yet built. What ships **today** is simpler: a
-> **multi-identity switcher** (a roster of identities you can jump between, each with its
-> own profile namespaced by node-id), **move-to-device** via a transfer code / QR
-> (`haven-seed:…`), **iCloud-Keychain backup/restore** of identity history (the active
-> seed stays device-only), and **multi-token push** (the relay holds several device tokens
-> per identity, so every linked device gets pushes and authored events self-sync). True
-> per-device keys + signed device credentials + live device-to-device sync are still ahead
-> (see `ROADMAP.md` M2b).
+> **Status — building the full model in phases (D16).** What already ships: a
+> **multi-identity switcher**, **move-to-device** via a transfer code / QR (`haven-seed:…`),
+> **iCloud-Keychain backup/restore** of identity history (the active seed stays device-only),
+> and **multi-token push** (the relay holds several device tokens per identity, so every
+> linked device gets pushes and authored events self-sync through the shared circle mailbox).
+>
+> **Phase 1 (done):** the **device-credential trust layer** is implemented and unit-tested in
+> the core — [`p2pcore::device`](../core/p2pcore/src/device.rs): a per-device keypair, an
+> account-signed [`DeviceCredential`] (`{account_id, device bundle, name, created_at}`), and a
+> versioned, account-signed [`DeviceList`] (active + revoked, higher-version-wins merge,
+> rollback-defended). This is deliberately **MLS-independent** — it's just signed bindings the
+> existing per-recipient hybrid-KEM sealing can already encrypt to, so it works on today's
+> engine and the MLS hardening (Phase 5) layers on without changing these signatures.
+>
+> **Still ahead:** enrollment flow + UI (Phase 2), account-state self-sync so the roster /
+> profile / settings / read-state converge across your devices (Phase 3), live device-to-device
+> delivery + a personal forwarder (Phase 4), and the MLS leaf/commit hardening for forward
+> secrecy + post-compromise security (Phase 5). See **Implementation phases** below.
+
+## Implementation phases (D16)
+
+| Phase | Scope | Where | State |
+|---|---|---|---|
+| **1. Device-credential trust layer** | Per-device keys; account-signed `DeviceCredential`; versioned signed `DeviceList` (add/revoke, higher-version-wins, rollback defense); verify against the pinned account key. | `p2pcore::device` | **✅ core done & tested** |
+| **2. Enrollment & UI** | FFI export of Phase-1 types; QR/short-code link of a new device + out-of-band verification phrase; the authorizing device issues the credential and publishes a new `DeviceList`; "Blaine linked a new device" notice. Per-client (iOS → Android → desktop). | FFI + clients | ⏭️ |
+| **3. Account-state self-sync** | A per-account state blob (roster, circles, contacts, profile, settings, blocked list, read state) **self-sealed to the account's own devices** and synced via the mailbox; CRDT/LWW merge so devices converge. Gives "my devices show the same thing." | `p2pcore` + relay channel | ⏭️ |
+| **4. Live delivery + personal forwarder** | Real-time device-to-device push when both are online; an always-on device (Mac) as the user's ordered store-and-forward node, complementing the relay. | `haven-net` + clients | ⏭️ |
+| **5. MLS hardening** | Each device becomes an MLS leaf; Add/Remove **commits** give forward secrecy + post-compromise security on link/revoke. Gated on the separate MLS (D3) work. | `p2pcore` (mls-rs) | ⏭️ (after MLS) |
+
+> **Honest dependency:** the *fully drawn* design (device = MLS leaf, revocation = MLS Remove
+> commit re-key) needs **MLS**, which is itself not yet built (the engine currently seals a
+> fresh content key per recipient via the hybrid KEM — see `ARCHITECTURE.md`). Phases 1–4 are
+> built on **today's** engine and deliver real live multi-device sync; Phase 5 upgrades the
+> secrecy guarantees once MLS lands. Nothing in 1–4 has to change when 5 arrives.
 
 A user is **one account identity** with a set of **authorized devices**, each holding
 its *own* key. No private key is ever copied between devices. This gives "receive on

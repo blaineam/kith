@@ -77,10 +77,16 @@ signatures. 6 core tests green.
 - ✅ **Multi-token push**: the relay holds multiple device tokens per identity, so every
   linked device gets pushes; authored events self-sync via a silent push to your own
   devices.
-- ⏭️ True account identity key + per-device keys + signed **device credentials** (D16);
-  receive on all devices as MLS leaves; revoke via Remove commit; "new device linked"
-  transparency notices. Local device-to-device live sync is the remaining piece.
-- ⏭️ **Always-on device as personal store-and-forward** (ordered backlog cache).
+- 🟡 **Per-device keys + signed device credentials (D16)** — building in phases:
+  - ✅ **Phase 1: trust layer** in core (`p2pcore::device`): per-device keypair,
+    account-signed `DeviceCredential`, versioned signed `DeviceList` (add/revoke,
+    higher-version-wins, rollback-defended), verified against the pinned account key —
+    MLS-independent, unit-tested.
+  - ⏭️ Phase 2 enrollment + UI · Phase 3 account-state self-sync (roster/profile/settings/
+    read-state converge across your devices) · Phase 4 live device-to-device delivery ·
+    Phase 5 MLS leaf/commit hardening (forward + post-compromise secrecy; gated on MLS).
+  - See `MULTI-DEVICE.md` → *Implementation phases*.
+- ⏭️ **Always-on device as personal store-and-forward** (ordered backlog cache; Phase 4).
 - See `MULTI-DEVICE.md`
 
 ## ✅ M3 — Apple app (DONE, on TestFlight)
