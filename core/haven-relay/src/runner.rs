@@ -57,6 +57,22 @@ pub async fn run(cfg: Config) -> Result<()> {
                 store.display()
             );
             println!("  storage node id (volunteer_node_id): {}", blob.node_id_hex());
+
+            // Mesh replication: pull from each sibling relay every 30s so the mailbox
+            // self-heals across the mesh (peers do the same in reverse → eventual set-union).
+            if !cfg.peers.is_empty() {
+                println!("  meshing with {} sibling relay(s) — mailbox self-replicates.", cfg.peers.len());
+                let blob_mesh = blob.clone();
+                let peers = cfg.peers.clone();
+                tokio::spawn(async move {
+                    loop {
+                        for peer in &peers {
+                            let _ = blob_mesh.sync_pull_from(peer).await;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    }
+                });
+            }
             _blob_guard = Some(blob);
         }
         StoreBackend::S3 | StoreBackend::Rclone { .. } => {

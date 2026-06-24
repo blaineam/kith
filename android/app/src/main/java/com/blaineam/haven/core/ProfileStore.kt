@@ -25,6 +25,20 @@ class ProfileStore private constructor(context: Context) {
     /** Auto-expire posts older than this many days (0 = keep forever). Parity with iOS retention. */
     var retentionDays by mutableStateOf(prefs.getInt(KEY_RETENTION, 0))
 
+    // Save-to-Photos + media optimization (iOS Settings parity). Observable + persisted on set.
+    private val _saveMyPosts = mutableStateOf(prefs.getBoolean(KEY_SAVE_MINE, false))
+    private val _saveOthersPosts = mutableStateOf(prefs.getBoolean(KEY_SAVE_OTHERS, false))
+    private val _autoOptimize = mutableStateOf(prefs.getBoolean(KEY_OPTIMIZE, true))
+    var saveMyPosts: Boolean
+        get() = _saveMyPosts.value
+        set(v) { _saveMyPosts.value = v; prefs.edit().putBoolean(KEY_SAVE_MINE, v).apply() }
+    var saveOthersPosts: Boolean
+        get() = _saveOthersPosts.value
+        set(v) { _saveOthersPosts.value = v; prefs.edit().putBoolean(KEY_SAVE_OTHERS, v).apply() }
+    var autoOptimize: Boolean
+        get() = _autoOptimize.value
+        set(v) { _autoOptimize.value = v; prefs.edit().putBoolean(KEY_OPTIMIZE, v).apply() }
+
     /** Retention as a seconds value for the engine's feed() call (null = keep forever). */
     fun retentionSecs(): ULong? = if (retentionDays <= 0) null else (retentionDays.toLong() * 86_400L).toULong()
 
@@ -77,6 +91,9 @@ class ProfileStore private constructor(context: Context) {
         private const val KEY_EMOJI = "emoji"
         private const val KEY_AVATAR = "avatar"
         private const val KEY_RETENTION = "retentionDays"
+        private const val KEY_SAVE_MINE = "saveMyPosts"
+        private const val KEY_SAVE_OTHERS = "saveOthersPosts"
+        private const val KEY_OPTIMIZE = "autoOptimize"
 
         @Volatile private var instance: ProfileStore? = null
         fun get(context: Context): ProfileStore =

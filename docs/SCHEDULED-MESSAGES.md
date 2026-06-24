@@ -51,7 +51,7 @@ requires an always-on device — which is why D16's always-on forwarder matters 
 - **Timezones:** store the schedule as an absolute instant (UTC) plus the intended
   timezone; fire at the instant.
 - **Privacy:** the scheduled queue is encrypted at rest and in device-to-device sync;
-  no relay/iCloud ever sees the plaintext or the schedule.
+  no relay or storage backend ever sees the plaintext or the schedule.
 
 ## Connections
 
@@ -61,3 +61,39 @@ requires an always-on device — which is why D16's always-on forwarder matters 
 - **D11 (edit/unsend):** scheduled items are editable/cancelable before T; unsend after.
 - **D15 (store-and-forward):** delivers the message once fired, including to offline
   recipients.
+
+## Desktop implementation status
+
+The Tauri desktop client implements the **send-time** mode end to end (`desktop/src-tauri`):
+
+- **Queue** (`scheduled.rs`): pending items (post or DM) are stored as plaintext in
+  `scheduled.json` and fired by an in-process timer; `take_due(now)` is pure + unit-tested.
+  Items are editable/cancelable until they fire (matches D11) and seal at send time against
+  the current state (matches D3 — no pre-sealing).
+- **GUI open** → the 15s mailbox loop fires due items; overdue items flush once on launch.
+- **GUI closed (Option A — done):** `haven-desktop --headless` now also builds the active
+  identity's engine, so leaving the desktop binary running headless on an **always-on machine
+  makes that machine the primary firer** — scheduled sends go out with no window open. The
+  messaging keys stay on that machine; the co-hosted relay still only ever moves ciphertext.
+  This is the desktop realization of D16's "always-on forwarder fires it."
+
+### Option B — relay timed-release (planned, cross-platform)
+
+A stronger **display-time** variant that works even when *none* of the sender's machines is
+awake at T, without the secrecy weakness of pre-delivering ciphertext to recipients early:
+
+- At schedule time the client seals the envelope (`created_at = T`) and hands the **opaque
+  blob** to the relay/mailbox tagged `release_at = T`.
+- The relay holds ciphertext (it still can't read it) and **only surfaces the blob in
+  `list`/`get` once `now ≥ T`**; recipients pull it then and see a post timestamped T.
+- Ciphertext sits at the relay (which already only holds ciphertext), **not** at recipients —
+  closing the "modified client could peek early" gap of the recipient-pre-delivery approach.
+
+**Why it's a coordinated change, not a desktop tweak:** it touches the shared mailbox protocol
+used by iOS/Android — `haven-net` `BlobServer`, `RelayServerHandle`/`RelayClient`
+(`put_with_release(key, blob, release_at)` + release-gated `list`/`get`), and the standalone
+`haven-relay`. It needs a security review (a malicious relay could withhold or early-release —
+mitigated because content stays sealed and `created_at` is authenticated in the envelope) and
+matching client logic on every platform. Tracked as a follow-up; the desktop client will adopt
+`put_with_release` once the core lands it. Until then, **Option A covers app-closed delivery**
+for anyone running an always-on Haven machine.

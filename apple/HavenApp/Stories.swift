@@ -251,7 +251,9 @@ struct StoryViewer: View {
         let name = ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName
         guard let idHex = ContactsStore.shared.idHex(forNodePrefix: s.authorShort) else { return }
         let dm = FeedStore.shared.startDM(with: idHex, name: name)
-        FeedStore.shared.sendMessage(to: dm, text)
+        // Attach the story being replied to (its media) so the author knows which one — sendMessage
+        // re-seals the media to the DM circle via SharedStore.backup. Cross-platform parity w/ Android.
+        FeedStore.shared.sendMessage(to: dm, text, media: s.media, music: nil)
         replyText = ""
         replyFocused = false
         withAnimation { replySent = true }

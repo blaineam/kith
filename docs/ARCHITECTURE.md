@@ -70,8 +70,9 @@ Because there's no central store, large content for an offline peer falls throug
 1. **Sender stays online** — direct, zero cost.
 2. **Group-gossip cache** — other online group members opportunistically cache &
    forward the *encrypted* chunks for the offline member.
-3. **BYO storage pin** — the recipient optionally points Haven at their *own* iCloud /
-   S3 / NAS; encrypted blobs park there until pulled.
+3. **Relay mailbox / BYO storage pin** — encrypted blobs park on a **Haven relay
+   mailbox** (the in-app relay or the `haven-relay` daemon) or the recipient's *own*
+   **S3-compatible bucket** (S3/R2/B2/MinIO) until pulled.
 
 ## Clients
 
@@ -104,5 +105,5 @@ service. Full detail in [`RELAY-AND-DEPLOY.md`](RELAY-AND-DEPLOY.md).
   community member's, never required to be yours.
 
 Both run with **hardened, no-log, identity-blind defaults**; IPs are never logged or
-linked to identities, with an opt-in onion mode for full IP hiding. A
+linked to identities, with a planned (not-yet-shipped) opt-in onion mode for full IP hiding. A
 **`haven-relay`** deployment tool stands either role up on most clouds in one command.

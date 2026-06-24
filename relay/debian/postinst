@@ -22,3 +22,7 @@ if [ "$1" = "configure" ]; then
     echo "  sudo -u haven-relay HOME=/var/lib/haven-relay haven-relay run --link \"<code>\""
     echo "  sudo systemctl enable --now haven-relay"
 fi
+
+#DEBHELPER#
+
+exit 0

@@ -23,6 +23,7 @@ mod config;
 mod link;
 mod qr;
 mod runner;
+mod service;
 
 use anyhow::{anyhow, Result};
 
@@ -36,6 +37,14 @@ fn main() -> Result<()> {
         Some("link") => print_link(&args[2..]),
         Some("make-link") => make_link(&args[2..]),
         Some("id") => print_id(&args[2..]),
+        Some("service") => match args.get(2).map(String::as_str) {
+            Some("install") => service::install(),
+            Some("uninstall") | Some("remove") => service::uninstall(),
+            _ => {
+                eprintln!("usage: haven-relay service install | uninstall");
+                std::process::exit(2);
+            }
+        },
         Some("-h") | Some("--help") | None => {
             print_help();
             Ok(())
@@ -60,6 +69,8 @@ fn print_help() {
          haven-relay run --config relay.json      everything from a JSON file\n  \
          haven-relay link                         reprint the saved link + QR for the app\n  \
          haven-relay id                           print this relay's node id\n  \
+         haven-relay service install              auto-start on login/reboot (systemd/launchd/Task)\n  \
+         haven-relay service uninstall            remove the auto-start\n  \
          haven-relay make-link --circle <tag> --member <hex> …   (operator helper)\n\n\
          STORAGE BACKENDS (default = local disk, fully decentralized):\n  \
          (default)                 local-disk blob mailbox at <data>/store over haven/blob/1\n  \

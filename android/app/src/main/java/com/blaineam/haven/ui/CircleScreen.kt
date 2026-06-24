@@ -55,6 +55,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import com.blaineam.haven.core.DEFAULT_CIRCLE
 import com.blaineam.haven.core.HavenNet
@@ -62,6 +63,7 @@ import com.blaineam.haven.core.LocalMedia
 import com.blaineam.haven.core.PendingRequest
 import com.blaineam.haven.core.loadAndDownscale
 import com.blaineam.haven.core.nowMs
+import kotlinx.coroutines.launch
 import uniffi.haven_ffi.FeedItemFfi
 
 /** The Circle (feed) — real posts from the shared engine, a composer, and pending requests. */
@@ -359,6 +361,9 @@ fun MediaGallery(circleId: String, refs: List<String>, onOpen: (Int) -> Unit) {
 @Composable
 fun MediaViewer(circleId: String, refs: List<String>, startIndex: Int, onClose: () -> Unit) {
     val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = startIndex) { refs.size }
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var saved by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Color.Black).clickable { onClose() }) {
         androidx.compose.foundation.pager.HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
             val ref = refs[page]
@@ -369,8 +374,26 @@ fun MediaViewer(circleId: String, refs: List<String>, startIndex: Int, onClose: 
             .background(Color.Black.copy(alpha = 0.4f)).clickable { onClose() }, contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.Close, "Close", tint = Color.White)
         }
+        // Save this item to Photos.
+        Box(Modifier.align(Alignment.TopEnd).padding(16.dp).size(42.dp).clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.4f)).clickable {
+                val ref = refs[pager.currentPage]
+                scope.launch {
+                    saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        LocalMedia.loadAnyCircle(ref)?.let { com.blaineam.haven.core.MediaSaver.save(context, it, LocalMedia.isVideo(ref)) } ?: false
+                    }
+                }
+            }, contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Download, "Save to Photos", tint = Color.White)
+        }
         if (refs.size > 1) Text("${pager.currentPage + 1} / ${refs.size}", color = Color.White, fontSize = 13.sp,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp))
+        if (saved) {
+            LaunchedEffect(Unit) { kotlinx.coroutines.delay(1500); saved = false }
+            Text("Saved to Photos ✓", color = Color.White, fontSize = 13.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 40.dp).clip(RoundedCornerShape(20.dp))
+                    .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 16.dp, vertical = 8.dp))
+        }
     }
 }
 

@@ -58,11 +58,22 @@ Node/npm — just Rust + system WebKitGTK. (PKGBUILD source: `packaging/aur/have
 ### SteamOS / Steam Deck (Flatpak)
 
 SteamOS has an **immutable root filesystem**, so a `.deb`/AppImage won't persist across
-updates — **Flatpak is the supported path**. From Desktop Mode:
+updates — **Flatpak is the supported path**. From Desktop Mode, easiest is the prebuilt
+bundle attached to each release:
+
+```bash
+# Grab haven.flatpak from the GitHub release, then:
+flatpak install --user haven.flatpak
+flatpak run com.blaineam.haven
+```
+
+Or build it yourself from the **version-pinned manifest** the release publishes (its `.deb`
+`sha256` is already filled in):
 
 ```bash
 flatpak install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
-flatpak-builder --user --install --force-clean build-dir desktop/flatpak/com.blaineam.haven.yml
+# com.blaineam.haven.yml is a release asset (the in-repo copy uses a placeholder sha256)
+flatpak-builder --user --install --force-clean build-dir com.blaineam.haven.yml
 flatpak run com.blaineam.haven
 ```
 
@@ -155,30 +166,57 @@ The GUI is at parity with iOS/macOS; here is how each Apple-specific capability 
 | Crypto / identity / circles / feed / DMs / stories | **Same `haven_ffi` crate**, linked directly (no FFI hop) — identical engine |
 | iroh P2P transport + mesh relay | Same `haven-net` crate; native iroh peer in-process |
 | Keychain (seed storage) | OS **Secret Service** via `keyring` (keys never leave the device) |
-| In-app camera + story capture | `getUserMedia` (V4L2) + `MediaRecorder`; sealed in Rust before send |
+| In-app camera + 6 filters | `getUserMedia` (V4L2) live preview + filter strip; the selected filter is baked into both photos (canvas → JPEG) and video (recording a filtered `canvas.captureStream()` + mic audio); sealed in Rust before send |
 | Photo/video picker | Tauri dialog + XDG portal |
+| Voice messages | `MediaRecorder` (Opus/WebM) → sealed `a:` media ref; `<audio>` playback in feed + DMs (container MIME-sniffed server-side) |
 | WebRTC audio/video/group calls | `RTCPeerConnection` full-mesh in the WebView; SDP/ICE signaled over the sealed iroh channel — no call server |
 | **Screen share** | `getDisplayMedia` → on Wayland/SteamOS routes through `xdg-desktop-portal` ScreenCast (PipeWire); replaces the outgoing video track |
-| Apple Music on posts | **Portable music ref**: local audio = full inline playback; streaming = deep-link out (no Apple Music API on Linux) |
+| Secret / screenshot-protected messages | Same `\u{2}`-prefixed wire encoding as iOS (interops byte-for-byte); conceal-until-tap + auto-hide after 5s. **Best-effort only** — webviews can't truly block screenshots like iOS/Android |
+| Scheduled messages | Serverless "send later": queued to `scheduled.json`, fired by an in-process timer (and once on launch for anything overdue). Fires while the GUI is open **or** while `haven-desktop --headless` runs on an always-on machine (the relay box doubles as the scheduler) |
+| Multi-identity switcher | Roster of identities, each with its own seed (secure store), profile, circles + data dir; switching relaunches the app on the new identity |
+| Apple Music on posts | **Portable music ref**: paste a streaming link (deep-links out); local audio = a voice/audio attachment. No Apple Music catalog API on Linux |
 | Notifications | `tauri-plugin-notification` (libnotify / XDG) + system tray; **no push server** (honors the zero-recurring-cost mandate) |
 | CloudKit favorites/resume | Mailbox-based prefs blob (circle-sealed), same as Android |
 | BYO storage | Shared `core/haven-s3` SigV4 client |
 
 ### Known limitations on Linux
 
-- **Screenshot-protected secret messages**: Linux has no reliable cross-compositor screenshot
-  block, so this is best-effort only (unlike iOS's secure field / Android's `FLAG_SECURE`).
+- **Screenshot-protected secret messages**: Linux/webviews have no reliable cross-compositor
+  screenshot block, so secret messages are conceal-on-idle only (unlike iOS's secure field /
+  Android's `FLAG_SECURE`). The wire encoding still interops with iOS byte-for-byte.
+- **Scheduled messages** fire while the GUI is open, or while `haven-desktop --headless` runs
+  on an always-on machine (serverless — no remote server holds the queue). A relay-backed
+  timed-release path that works even when all your machines are off is designed in
+  [`SCHEDULED-MESSAGES.md`](SCHEDULED-MESSAGES.md) (Option B, cross-platform follow-up).
 - **GUI on Raspberry Pi**: builds for arm64 but camera/calls/perf parity on Pi hardware is a
   stretch — a Pi's real role here is the **relay daemon**, which runs great on all Pis.
 
 ---
 
-## CI & release artifacts
+## CI & automated releases
 
-- [`.github/workflows/desktop.yml`](../.github/workflows/desktop.yml) — tests the core +
-  desktop, builds Windows (`.msi`/NSIS) and Linux (`.deb`/`.rpm`/AppImage), and a
-  **Flatpak** for SteamOS.
-- [`.github/workflows/relay-release.yml`](../.github/workflows/relay-release.yml) —
-  cross-builds the `haven-relay` static binary for x86_64 / aarch64 / armv7 / armv6 (musl, via
-  `cargo-zigbuild`) + macOS, builds `.deb`s, and publishes them as the
-  `haven-relay-<target>` release assets that `relay/install.sh` downloads.
+**Cut a release by pushing a tag** — everything is built and published automatically:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) then builds and attaches
+to one GitHub Release:
+
+- **Relay** `haven-relay-<target>` for x86_64 / aarch64 / armv7 / armv6 (musl, via
+  `cargo-zigbuild`) + macOS — the exact assets `relay/install.sh` downloads — plus `.deb`s.
+- **Desktop** installers: Windows `.msi`/NSIS, Linux `.deb`/`.rpm`/AppImage.
+- **SteamOS** `haven.flatpak` **plus a version-pinned `com.blaineam.haven.yml`** (the real
+  `.deb` `sha256` is computed and injected at release time, so building the Flatpak from the
+  release manifest needs no manual pin).
+
+The tag drives the version (stamped into `tauri.conf.json` + the relay crate before build).
+
+Supporting workflows:
+
+- [`.github/workflows/desktop.yml`](../.github/workflows/desktop.yml) — PR/push CI: tests the
+  core + desktop and builds the installers + Flatpak as artifacts (no publish).
+- [`.github/workflows/relay-release.yml`](../.github/workflows/relay-release.yml) — a
+  **relay-only** path: tag `relay-v*` to ship just a new `haven-relay` without rebuilding the
+  desktop app.

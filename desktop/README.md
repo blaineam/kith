@@ -27,7 +27,7 @@ ui/          static WebView frontend (no bundler): index.html, styles.css, app.j
 cargo install tauri-cli --version '^2'      # one-time
 cd src-tauri
 cargo tauri dev                              # GUI
-cargo run -- --headless                      # relay only (prints a relay node id)
+cargo run -- --headless                      # relay + scheduler, no window (prints relay node id)
 ```
 
 ## Build (Windows artifact)
@@ -54,5 +54,20 @@ routes through the Wayland/SteamOS ScreenCast portal); **Linux packaging** for e
 distro — `.deb`/`.rpm`/AppImage (Ubuntu/Debian/Raspbian), AUR (Arch), and **Flatpak**
 (SteamOS / Steam Deck). See [`../docs/LINUX.md`](../docs/LINUX.md).
 
-Live-device-test pending: cross-device media-byte chunks, calls, and a real S3 bucket.
+iOS-parity wave (code + Rust unit tests, ready for on-device testing): **in-app camera**
+(live preview, 6 filters baked into both photos and video — recorded off a filtered
+`canvas.captureStream()` + mic); **voice messages** (`a:` sealed
+audio refs + `<audio>` playback, MIME-sniffed in `localmedia.rs`); **secret messages**
+(`\u{2}` marker — byte-compatible with iOS `SecretMessages`; conceal-until-tap, `secret.rs`
+keeps them out of previews/notifications); **scheduled messages** (`scheduled.rs` queue +
+in-process timer, fired on schedule and on launch); **multi-identity switcher** (`store.rs`
+roster + per-identity seed/data dir, switch relaunches). 26 backend unit tests pass.
+
+Also done: **relay redundancy + graceful fallback** — multiple relays per circle, writes
+mirrored to all + reads fanned out, per-relay exponential backoff so a dead relay is skipped
+and auto-recovered (`relayhealth.rs`, unit-tested); the Relay view lists each relay's
+reachability with add/remove.
+
+Live-device-test pending: camera/mic capture, voice round-trip, secret/scheduled flows,
+identity switch+relaunch, relay failover, cross-device media-byte chunks, calls, real S3.
 Not yet: MSIX/Microsoft Store packaging, on-device sensitive-content classifier.

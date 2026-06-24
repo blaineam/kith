@@ -340,6 +340,14 @@ impl RelayServerHandle {
     pub fn node_id_hex(&self) -> String {
         self.inner.node_id_hex()
     }
+
+    /// Mesh anti-entropy: pull every sealed blob a SIBLING relay holds that we lack, so the
+    /// mailbox self-replicates across relays. Call on a timer for each peer relay (≠ this one).
+    /// Returns the number of new blobs pulled (0 if the peer is unreachable). Safe set-union —
+    /// content-addressed + sealed, so it never sees content and can't conflict.
+    pub async fn sync_from(&self, peer_node_hex: String) -> u32 {
+        self.inner.sync_pull_from(&peer_node_hex).await.unwrap_or(0) as u32
+    }
 }
 
 // ===== Live social demo =====

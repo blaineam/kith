@@ -19,31 +19,97 @@ A peer with no route at all falls through the chain from `ARCHITECTURE.md`:
 **sender-online → group-gossip cache → storage relay (BYO or quota'd)**. The
 connection relay is only for the live-but-NAT-blocked case.
 
+## Redundancy & graceful fallback
+
+A circle isn't limited to one relay. Each client keeps an **ordered set of relays per circle**
+and degrades gracefully:
+
+- **Redundancy (mirrored writes):** every post + sealed-media blob is `put` to *all* of the
+  circle's relays (and the BYO S3 bucket). Keys are content-addressed, so re-puts are
+  idempotent and the same envelope on N relays is harmless.
+- **Fallback (fan-out reads):** the mailbox poll reads from *all* relays and dedups by the
+  content key, so a message present on **any one reachable** relay still arrives. Media fetch
+  tries each relay in turn and takes the first hit.
+- **Health-aware skipping:** a relay that fails to connect/put/list is put into **exponential
+  backoff** (5s → 5m cap) and skipped until it's due for a retry, so a dead relay never blocks
+  the others; when it recovers it's picked up automatically.
+- **Auto-pooling:** when a circle member advertises their relay (frame 19 / `RELAY_NODE`),
+  peers **add** it to their set rather than replacing — so adopting one relay each gives the
+  whole circle several, with no manual fan-out.
+- **Layered delivery:** relays are one tier of the chain above — if every relay is down, direct
+  P2P (online peers) and the BYO S3 bucket still carry traffic.
+
+Adopt several relays (one hosted on your always-on box, one on a friend's, a community one) and
+the circle keeps working through any single failure. The desktop client surfaces each relay's
+reachability (● online / retrying) with add/remove in **Relay**; per-relay backoff is
+unit-tested (`relayhealth.rs`).
+
+### Relay mesh — self-replicating mailboxes (implemented)
+
+On top of the client-driven redundancy above, relays now **replicate among themselves** so
+**any relay holds the whole circle mailbox**, a relay can **join and pull the full set** from
+peers, and one can **leave with zero loss** because others already have copies. Clients then
+only need to reach *one* relay. This is naturally a **CRDT set-union**: blobs are
+content-addressed and sealed, so replication is idempotent and conflict-free — no node ever
+sees content, only that a key exists.
+
+It's a small, well-shaped change on top of the existing `haven/blob/1` store, because a relay
+is **already both** a `BlobServer` (serves clients) and able to be a `BlobClient` (dial another
+relay). The pieces:
+
+1. **Peer set.** Each relay learns its sibling relays for the circle. Two sources: the relay
+   `Config`/link gains an optional `peers: [node_hex]`, and — since a client already knows every
+   relay it adopted — the client advertises the set to each relay (reuse the `RELAY_NODE`
+   channel). Relays can also gossip newly-learned peers transitively.
+2. **Anti-entropy loop.** Every ~30s each relay, for each reachable peer: `BlobClient.connect`
+   → `list("haven/")` → diff against its local store (`has`) → `get` + write the missing blobs
+   (and optionally push its own). Bidirectional pull ⇒ eventual consistency; the existing
+   per-relay backoff handles a peer that's down.
+3. **Join/leave = free.** A new relay starts empty, runs one anti-entropy pass, and is now a
+   full replica. A leaving relay needs no handoff — the set already lives on its peers.
+4. **Surfaces (shipped):** `core/haven-net/blobstore.rs` — `BlobServer::sync_pull_from(peer)`
+   over the existing put/get/has/list, with a pure unit-tested `keys_to_pull` (set-difference +
+   namespace-confinement) and a `MAX_SYNC_PULL` cap; `core/haven-relay` — `config.peers`
+   (repeatable `--peer <hex>` flag or `"peers"` in the JSON config) + a 30s anti-entropy loop on
+   the local-disk backend; `RelayServerHandle::sync_from` so the **in-app** relay meshes too —
+   the desktop engine auto-syncs its hosted relay from every adopted sibling (health-aware, so a
+   down peer is skipped). Every official client can be a full mesh node, not just the CLI.
+
+**Security note (review before relying on it in production):** replication never widens content exposure —
+adopting a relay already hands it the full (sealed) mailbox, so a peer relay holding the same
+ciphertext is no new disclosure. The review items are (a) **amplification/DoS** — cap peer
+fan-out, rate-limit `list`/`get`, and bound store size per circle; (b) **poisoning** — a peer
+can only add content-addressed blobs (a bad key simply never matches a real ref and is inert,
+but still counts against quota → needs a cap); (c) **membership authz** — only relays a circle
+actually adopted should mesh (gossiped peers must trace back to a `RELAY_NODE` advertisement
+sealed to the circle, not arbitrary node ids). This touches the security-audited core shared by
+iOS/Android, so it lands as a reviewed, cross-platform change — not a desktop-only tweak.
+
 ## Storage model
 
-> **Updated per DECISIONS D15 (zero operator cost).** The default is the *sender's
-> own* storage; there is **no operator-funded bucket** and therefore **no quota
-> system, blind tokens, or storage subscription**. A shared/quota'd bucket is now
-> only a *voluntary, community-run* option, never something the operator must fund.
+> **Updated per DECISIONS D15 (zero operator cost).** Media lives on a **Haven relay
+> mailbox** or the user's **own S3-compatible bucket**; there is **no operator-funded
+> bucket** and therefore **no quota system, blind tokens, or storage subscription**.
+> A relay is the user's own or a *voluntary, community-run* node, never something the
+> operator must fund.
 
-1. **Sender's own iCloud (Apple-first default).** Blobs go in the sender's **private
-   CloudKit DB** (billed to the *user's* iCloud quota — $0 to the operator) and are
-   shared to other Apple users via **`CKShare`**. The sender funds their own sharing.
-2. **BYO bucket.** Any user can point Haven at their own S3 / R2 / B2 / NAS — their
-   storage, their cost. Needed for cross-platform offline delivery (a web/Android peer
-   can't read a sender's iCloud).
-3. **Voluntary community bucket (optional).** Any entity *may* run a shared bucket
-   others use, fronted by the thin stateless broker below. This is opt-in generosity,
-   not required infrastructure.
+1. **Haven relay mailbox (default).** Sealed blobs park on a **Haven relay's local
+   disk** — the in-app relay any official client can host, or the standalone
+   `haven-relay` daemon. The relay is run by the user or a community volunteer, so it
+   is $0 to the operator. Any client can pull from a relay mailbox, so it works
+   cross-platform.
+2. **BYO bucket.** Any user can point Haven at their own **S3-compatible bucket** (AWS
+   S3, Cloudflare R2, Backblaze B2, MinIO) — their storage, their cost. Also works for
+   cross-platform offline delivery.
 
 Blobs are E2E-encrypted and content-addressed (BLAKE3) before leaving the device, and
 get a **lifecycle expiry** (auto-delete after N days) so nothing lingers.
 
-**The broker (only for shared/BYO-served buckets).** You can't hand arbitrary clients
+**The broker (only for BYO-served buckets).** You can't hand arbitrary clients
 raw bucket credentials, so a **thin, stateless broker** mints **scoped presigned
 URLs** (PUT/GET for one content hash). It is small — but it is *the* component where
-the no-log discipline must be absolute (see below). For a sender's own iCloud, CloudKit
-*is* the broker, so none of this is needed in the Apple↔Apple path.
+the no-log discipline must be absolute (see below). A Haven relay serves its own
+mailbox directly, so the broker is only needed for the BYO-bucket path.
 
 ## IP privacy — what is and isn't guaranteed
 
@@ -57,10 +123,10 @@ claim it. What we *do* guarantee, enforced by the deploy tool's default config:
   never to the relay. The relay/broker sees opaque sealed frames addressed by
   **ephemeral rendezvous tokens**, not Haven public keys. A node that somehow logged
   an IP still could not tie it to a Haven identity.
-- **No operator-funded quota.** Storage is the user's own (iCloud/BYO bucket) or a
-  volunteer's, so there is no metered allotment to enforce (the earlier blind-signed
-  quota-token model was deleted per D15).
-- **Opt-in onion/proxy mode for true hiding.** The only way a node genuinely cannot
+- **No operator-funded quota.** Storage is a Haven relay mailbox (the user's own or a
+  volunteer's) or the user's own S3-compatible bucket, so there is no metered allotment
+  to enforce (the earlier blind-signed quota-token model was deleted per D15).
+- **Opt-in onion/proxy mode for true hiding (planned — not yet shipped; iroh is QUIC/UDP, which Tor's SOCKS can't carry, so this needs a TCP transport).** The only way a node genuinely cannot
   see your IP is to not connect to it directly. Haven ships an **optional** mode that
   routes relay + storage access through Tor or a user-chosen proxy. Off by default
   (latency cost); on for users who want full IP hiding.

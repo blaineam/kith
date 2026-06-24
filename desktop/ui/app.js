@@ -143,9 +143,17 @@ async function renderFeed() {
       return sel;
     })(),
     el("button", { class: "btn small", onclick: newCircleDialog }, "+ Circle"),
+    el("button", { class: "btn small ghost", title: "Manage circle", onclick: () => manageCircleDialog(circles.find((c) => c.id === state.activeCircle)) }, "⚙︎"),
   );
 
-  const composer = buildComposer((body) => invoke("post", { circleId: state.activeCircle, body, media: state.attachments.map((a) => a.ref), music: null }));
+  const composer = buildComposer(
+    (body, music, muteVideo) => invoke("post", { circleId: state.activeCircle, body, media: state.attachments.map((a) => a.ref), music, muteVideo }),
+    "Share something with your circle…",
+    {
+      circleId: state.activeCircle,
+      onSchedule: (body, music, muteVideo, sendAtMs) => invoke("schedule_message", { kind: "post", circleId: state.activeCircle, body, media: state.attachments.map((a) => a.ref), music, muteVideo, sendAtMs }),
+    },
+  );
 
   const items = (await invoke("feed", { circleId: state.activeCircle })).filter((i) => !i.story);
   const list = el("div", {});
@@ -156,31 +164,70 @@ async function renderFeed() {
   hydrateMedia(root, state.activeCircle);
 }
 
-function buildComposer(onPost, placeholder = "Share something with your circle…") {
+function buildComposer(onPost, placeholder = "Share something with your circle…", opts = {}) {
+  const circleId = opts.circleId || state.activeCircle;
+  let music = null;
+  let muteVideo = false;
   const ta = el("textarea", { placeholder });
   const previews = el("div", { class: "attach-preview" });
+  const musicRow = el("div", {});
+  const muteBtn = el("button", { class: "btn small ghost", style: "display:none", onclick: () => { muteVideo = !muteVideo; muteBtn.textContent = muteVideo ? "🔇 Video muted" : "🔊 Mute video"; muteBtn.classList.toggle("primary", muteVideo); } }, "🔊 Mute video");
   const drawPreviews = () => {
     previews.replaceChildren(...state.attachments.map((a, i) =>
       el("div", { class: "chip" },
-        a.isVideo ? el("video", { src: a.url, muted: "" }) : el("img", { src: a.url }),
+        a.isAudio ? el("div", { style: "width:74px;height:74px;border-radius:11px;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:26px" }, "🎙️")
+          : a.isVideo ? el("video", { src: a.url, muted: "" }) : el("img", { src: a.url }),
         el("span", { class: "x", onclick: () => { state.attachments.splice(i, 1); drawPreviews(); } }, "×"),
       )));
+    const hasVideo = state.attachments.some((a) => a.isVideo);
+    muteBtn.style.display = hasVideo ? "" : "none";
+    if (!hasVideo) { muteVideo = false; muteBtn.textContent = "🔊 Mute video"; muteBtn.classList.remove("primary"); }
+  };
+  const addAttachment = async (ref, isVideo, isAudio) => {
+    const url = isAudio ? null : await invoke("media_data_url", { circleId, reference: ref }).catch(() => null);
+    state.attachments.push({ ref, url, isVideo, isAudio });
+    drawPreviews();
+  };
+  const drawMusic = () => {
+    musicRow.replaceChildren(music
+      ? el("div", { class: "song-chip", style: "margin-top:0" },
+          el("span", { class: "note" }, "🎵"),
+          el("div", { style: "flex:1;min-width:0" }, el("strong", {}, music.title), " — ", music.artist),
+          el("span", { class: "x", style: "position:static;cursor:pointer", onclick: () => { music = null; drawMusic(); } }, "×"))
+      : null);
   };
   const fileInput = el("input", { type: "file", accept: "image/*,video/*", style: "display:none", onchange: (e) => handleFiles(e.target.files, drawPreviews) });
   const card = el("div", { class: "card col" },
     ta,
     previews,
-    el("div", { class: "row" },
+    musicRow,
+    el("div", { class: "row wrap" },
       el("button", { class: "btn small ghost", onclick: () => fileInput.click() }, "📎 Photo / Video"),
+      el("button", { class: "btn small ghost", onclick: async () => { const r = await cameraDialog(circleId); if (r) addAttachment(r.ref, r.isVideo, false); } }, "📷 Camera"),
+      el("button", { class: "btn small ghost", onclick: async () => { const r = await recordVoice(circleId); if (r) addAttachment(r, false, true); } }, "🎙️ Voice"),
+      el("button", { class: "btn small ghost", onclick: () => musicDialog((m) => { music = m; drawMusic(); }) }, "🎵 Music"),
+      muteBtn,
       el("div", { class: "spacer", style: "flex:1" }),
+      opts.onSchedule ? el("button", { class: "btn small ghost", title: "Send later", onclick: () => {
+        const body = ta.value.trim();
+        if (!body && !state.attachments.length && !music) { toast("Write something first"); return; }
+        scheduleDialog((ms) => {
+          opts.onSchedule(body, music, muteVideo, ms);
+          ta.value = ""; state.attachments = []; music = null; muteVideo = false; drawPreviews(); drawMusic();
+          toast("Scheduled");
+        });
+      } }, "🕓") : null,
       el("button", {
         class: "btn primary", onclick: async () => {
           const body = ta.value.trim();
-          if (!body && !state.attachments.length) return;
-          await onPost(body);
+          if (!body && !state.attachments.length && !music) return;
+          await onPost(body, music, muteVideo);
           ta.value = "";
           state.attachments = [];
+          music = null;
+          muteVideo = false;
           drawPreviews();
+          drawMusic();
           toast("Posted");
         }
       }, "Post"),
@@ -188,6 +235,173 @@ function buildComposer(onPost, placeholder = "Share something with your circle�
     fileInput,
   );
   return card;
+}
+
+// Open a URL in the user's browser (Tauri opener plugin, falling back to window.open).
+function openExternal(url) {
+  try {
+    if (TAURI.opener && TAURI.opener.openUrl) return TAURI.opener.openUrl(url);
+    if (TAURI.shell && TAURI.shell.open) return TAURI.shell.open(url);
+  } catch (_) {}
+  window.open(url, "_blank");
+}
+
+// Attach a song as a portable music reference: paste a streaming link (Apple Music / Spotify /
+// YouTube / etc.) + title + artist. Viewers tap the chip to open it in their own player — the
+// portable model the Android/desktop redesign uses where there's no universal catalog API.
+function musicDialog(onPick) {
+  const link = el("input", { placeholder: "Paste a song link (Apple Music, Spotify, YouTube…)" });
+  const title = el("input", { placeholder: "Title" });
+  const artist = el("input", { placeholder: "Artist" });
+  modal(el("div", {},
+    el("h2", {}, "Attach a song"),
+    el("div", { class: "col" },
+      link, el("div", { class: "row" }, title, artist),
+      el("div", { class: "muted small" }, "The link opens in your friend's own music app."),
+      el("div", { class: "row", style: "justify-content:flex-end" },
+        el("button", { class: "btn primary", onclick: () => {
+          const catalog_id = link.value.trim();
+          if (!catalog_id || !title.value.trim()) { toast("Add a link and a title"); return; }
+          onPick({ catalog_id, title: title.value.trim(), artist: artist.value.trim() || "Unknown artist" });
+          $("#modal-root").replaceChildren();
+        } }, "Attach")))));
+}
+
+// Secret-message marker — byte-identical to iOS SecretMessages.marker ("\u{2}").
+const SECRET_MARKER = "";
+const isSecret = (b) => (b || "").startsWith(SECRET_MARKER);
+const secretText = (b) => (isSecret(b) ? b.slice(1) : b);
+
+function blobToBase64(blob) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
+}
+
+// Render a media ref as the right element: video (v:), voice note (a:), or image.
+function mediaNode(ref, imgStyle) {
+  if (ref.startsWith("v:")) return el("video", { "data-ref": ref, controls: "" });
+  if (ref.startsWith("a:")) return el("audio", { "data-ref": ref, controls: "", style: "width:100%;margin-top:6px;display:block" });
+  return el("img", Object.assign({ "data-ref": ref, loading: "lazy" }, imgStyle ? { style: imgStyle } : {}));
+}
+
+// A concealed secret bubble: tap to reveal, auto-conceals after 5s. (Webviews can't truly block
+// screenshots like iOS/Android, so this is conceal-on-idle only — documented best-effort.)
+function secretBubble(body, isMe) {
+  const text = secretText(body);
+  const wrap = el("div", { class: "chat-bubble secret" + (isMe ? " me" : "") });
+  let revealed = false, t;
+  const draw = () => {
+    wrap.replaceChildren(revealed
+      ? el("span", {}, text)
+      : el("span", { class: "muted" }, "🔒 Tap to reveal"));
+  };
+  wrap.addEventListener("click", () => {
+    revealed = !revealed; draw();
+    clearTimeout(t);
+    if (revealed) t = setTimeout(() => { revealed = false; draw(); }, 5000);
+  });
+  draw();
+  return wrap;
+}
+
+// Record a voice note → returns an `a:` media ref (or null if cancelled).
+function recordVoice(circleId) {
+  return new Promise((resolve) => {
+    let recorder, chunks = [], stream, timer, secs = 0, done = false;
+    const timeEl = el("div", { style: "font-size:30px;text-align:center;margin:6px 0" }, "0:00");
+    const status = el("div", { class: "muted small", style: "text-align:center" }, "Tap record to start");
+    const recBtn = el("button", { class: "btn primary" }, "● Record");
+    const stopBtn = el("button", { class: "btn danger", style: "display:none" }, "■ Stop & attach");
+    const finish = (ref) => { if (done) return; done = true; clearInterval(timer); if (stream) stream.getTracks().forEach((t) => t.stop()); $("#modal-root").replaceChildren(); resolve(ref); };
+    recBtn.onclick = async () => {
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (e) { toast("Mic unavailable: " + e); return; }
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        try { const ref = await invoke("add_audio", { circleId, dataBase64: await blobToBase64(blob) }); finish(ref); }
+        catch (e) { toast("Couldn't save: " + e); finish(null); }
+      };
+      recorder.start();
+      recBtn.style.display = "none"; stopBtn.style.display = ""; status.textContent = "Recording…";
+      timer = setInterval(() => { secs++; timeEl.textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`; }, 1000);
+    };
+    stopBtn.onclick = () => { if (recorder && recorder.state !== "inactive") recorder.stop(); };
+    modal(el("div", {}, el("h2", {}, "🎙️ Voice message"), timeEl, status,
+      el("div", { class: "row", style: "justify-content:center;margin-top:12px" }, recBtn, stopBtn,
+        el("button", { class: "btn ghost", onclick: () => finish(null) }, "Cancel"))));
+  });
+}
+
+// The 6 Haven capture filters (parity with iOS MediaFilters), as CSS filter strings.
+const CAMERA_FILTERS = [
+  { name: "Original", css: "" },
+  { name: "Warmth", css: "sepia(0.25) saturate(1.35) hue-rotate(-10deg) brightness(1.03)" },
+  { name: "Cool", css: "saturate(1.1) hue-rotate(14deg) brightness(1.05)" },
+  { name: "Sepia", css: "sepia(0.7) contrast(1.05)" },
+  { name: "Noir", css: "grayscale(1) contrast(1.25) brightness(1.05)" },
+  { name: "Vivid", css: "saturate(1.7) contrast(1.12)" },
+];
+
+// In-app camera: live preview, a filter strip, photo capture (filter baked into the JPEG) and
+// short video recording. Returns {ref, isVideo} or null.
+function cameraDialog(circleId) {
+  return new Promise((resolve) => {
+    let stream, recorder, chunks = [], recording = false, done = false, filter = CAMERA_FILTERS[0], rafId, recStream;
+    const video = el("video", { autoplay: "", muted: "", playsinline: "", style: "width:100%;border-radius:14px;background:#000;max-height:48vh" });
+    const strip = el("div", { class: "row wrap", style: "gap:6px;margin-top:8px" });
+    const setFilter = (f) => { filter = f; video.style.filter = f.css; [...strip.children].forEach((b) => b.classList.toggle("primary", b.textContent === f.name)); };
+    CAMERA_FILTERS.forEach((f) => strip.append(el("button", { class: "btn small", onclick: () => setFilter(f) }, f.name)));
+    const finish = (out) => { if (done) return; done = true; if (rafId) cancelAnimationFrame(rafId); if (recStream) recStream.getTracks().forEach((t) => t.stop()); if (stream) stream.getTracks().forEach((t) => t.stop()); $("#modal-root").replaceChildren(); resolve(out); };
+    const shoot = el("button", { class: "btn primary", onclick: async () => {
+      const c = document.createElement("canvas"); c.width = video.videoWidth || 1280; c.height = video.videoHeight || 720;
+      const ctx = c.getContext("2d"); ctx.filter = filter.css || "none"; ctx.drawImage(video, 0, 0, c.width, c.height);
+      const b64 = c.toDataURL("image/jpeg", 0.85).split(",")[1];
+      try { const ref = await invoke("add_media", { circleId, dataBase64: b64, isVideo: false }); finish({ ref, isVideo: false }); }
+      catch (e) { toast("Capture failed: " + e); }
+    } }, "📸 Capture");
+    const recBtn = el("button", { class: "btn", onclick: () => {
+      if (!recording) {
+        // Record a *filtered* canvas (the selected filter is drawn into every frame) plus the
+        // mic audio, so the chosen filter is baked into the saved video — not just the preview.
+        const c = document.createElement("canvas");
+        c.width = video.videoWidth || 1280; c.height = video.videoHeight || 720;
+        const ctx = c.getContext("2d");
+        const draw = () => { ctx.filter = filter.css || "none"; ctx.drawImage(video, 0, 0, c.width, c.height); rafId = requestAnimationFrame(draw); };
+        draw();
+        recStream = c.captureStream(30);
+        stream.getAudioTracks().forEach((t) => recStream.addTrack(t)); // mix in the mic
+        chunks = []; recorder = new MediaRecorder(recStream);
+        recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+        recorder.onstop = async () => {
+          if (rafId) cancelAnimationFrame(rafId);
+          const blob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+          try { const ref = await invoke("add_media", { circleId, dataBase64: await blobToBase64(blob), isVideo: true }); finish({ ref, isVideo: true }); }
+          catch (e) { toast("Save failed: " + e); }
+        };
+        recorder.start(); recording = true; recBtn.textContent = "■ Stop"; recBtn.classList.add("danger");
+      } else { recorder.stop(); }
+    } }, "🎥 Record");
+    modal(el("div", {}, el("h2", {}, "📷 Camera"), video, strip,
+      el("div", { class: "row", style: "margin-top:12px" }, shoot, recBtn, el("div", { class: "spacer", style: "flex:1" }),
+        el("button", { class: "btn ghost", onclick: () => finish(null) }, "Close"))));
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true })
+      .then((s) => { stream = s; video.srcObject = s; setFilter(CAMERA_FILTERS[0]); })
+      .catch((e) => { toast("Camera unavailable: " + e); finish(null); });
+  });
+}
+
+// Pick a future time → returns epoch ms (or null).
+function scheduleDialog(onPick) {
+  const input = el("input", { type: "datetime-local" });
+  const d = new Date(Date.now() + 3600_000); // default +1h
+  const pad = (n) => String(n).padStart(2, "0");
+  input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  modal(el("div", {}, el("h2", {}, "🕓 Schedule"),
+    el("div", { class: "muted small" }, "Haven has no server, so a scheduled message sends while this app is running at that time."),
+    input,
+    el("div", { class: "row", style: "justify-content:flex-end;margin-top:12px" },
+      el("button", { class: "btn primary", onclick: () => { const ms = new Date(input.value).getTime(); if (!ms || ms < Date.now()) { toast("Pick a future time"); return; } onPick(ms); $("#modal-root").replaceChildren(); } }, "Schedule"))));
 }
 
 async function handleFiles(files, after) {
@@ -243,13 +457,30 @@ function postCard(it, circleId) {
     ? el("div", { class: "post-body muted" }, "🚫 This post was unsent")
     : el("div", { class: "post-body" }, it.body);
 
-  const media = el("div", { class: "post-media" });
-  for (const ref of it.media || []) {
-    const m = ref.startsWith("v:") ? el("video", { controls: "", "data-ref": ref }) : el("img", { "data-ref": ref, loading: "lazy" });
-    media.append(m);
+  const mediaRefs = it.media || [];
+  const audioRefs = mediaRefs.filter((r) => r.startsWith("a:"));
+  const visualRefs = mediaRefs.filter((r) => !r.startsWith("a:"));
+  const mediaCount = visualRefs.length;
+  const media = el("div", { class: "post-media" + (mediaCount > 1 ? " masonry" : mediaCount === 1 ? " single" : ""), style: "position:relative" });
+  for (const ref of visualRefs) media.append(mediaNode(ref));
+  const audio = el("div", {});
+  for (const ref of audioRefs) audio.append(mediaNode(ref));
+  // Double-tap a photo to ❤️ it (Instagram-style), like the iOS gesture.
+  if (mediaCount && !it.unsent) {
+    media.addEventListener("dblclick", () => {
+      const burst = el("div", { class: "heart-burst" }, "❤️");
+      media.append(burst);
+      requestAnimationFrame(() => burst.classList.add("go"));
+      setTimeout(() => burst.remove(), 950);
+      if (!hasMine(it.reactions, "❤️")) invoke("react", { circleId, target: it.id, emoji: "❤️" });
+    });
   }
 
-  const song = it.music ? el("div", { class: "song-chip" }, "🎵 ", el("strong", {}, it.music.title), " — ", it.music.artist) : null;
+  const song = it.music ? el("a", {
+    class: "song-chip",
+    title: it.music.catalog_id && /^https?:/.test(it.music.catalog_id) ? "Open in your music app" : null,
+    onclick: () => { if (it.music.catalog_id && /^https?:/.test(it.music.catalog_id)) openExternal(it.music.catalog_id); },
+  }, el("span", { class: "note" }, "🎵"), el("strong", {}, it.music.title), " — ", it.music.artist) : null;
 
   const actions = el("div", { class: "post-actions" });
   const heart = el("button", { class: "react-pill" + (hasMine(it.reactions, "❤️") ? " mine" : ""), onclick: () => toggleReact(circleId, it.id, "❤️", it.reactions) }, "❤️", reactCount(it.reactions, "❤️"));
@@ -273,7 +504,7 @@ function postCard(it, circleId) {
   comments.append(el("div", { class: "row" }, cin));
   cmtBtn.addEventListener("click", () => comments.classList.toggle("show"));
 
-  return el("div", { class: "card post" }, head, body, media.children.length ? media : null, song, actions, comments);
+  return el("div", { class: "card post" }, head, body, media.children.length ? media : null, audio.children.length ? audio : null, song, actions, comments);
 }
 
 const hasMine = (rs, e) => (rs || []).some((r) => r.emoji === e && r.mine);
@@ -316,6 +547,36 @@ function newCircleDialog() {
       el("button", { class: "btn primary", onclick: async () => { if (inp.value.trim()) { state.activeCircle = await invoke("create_circle", { name: inp.value.trim() }); } $("#modal-root").replaceChildren(); renderFeed(); } }, "Create"))));
 }
 
+async function manageCircleDialog(circle) {
+  if (!circle) return;
+  const isDefault = circle.id === "default";
+  const nameInp = el("input", { value: circle.name });
+  const contacts = await invoke("contacts").catch(() => []);
+  const memberList = el("div", { class: "col" });
+  if (!contacts.length) memberList.append(el("div", { class: "muted small" }, "No contacts yet — connect a friend first."));
+  for (const c of contacts) {
+    memberList.append(el("div", { class: "list-item" },
+      el("div", { class: "avatar", style: "width:30px;height:30px;font-size:12px" }, initials(c.name)),
+      el("div", { style: "flex:1" }, c.name),
+      el("button", { class: "btn small", onclick: async (e) => {
+        try { await invoke("add_to_circle", { circleId: circle.id, contactIdHex: c.id_hex }); e.target.textContent = "Added ✓"; e.target.disabled = true; toast(`Added ${c.name}`); }
+        catch (err) { toast("Couldn't add: " + err); }
+      } }, "Add")));
+  }
+  modal(el("div", {},
+    el("h2", {}, "Manage circle"),
+    el("div", { class: "col" },
+      el("label", { class: "muted small" }, "Name"),
+      el("div", { class: "row" }, nameInp,
+        el("button", { class: "btn", onclick: async () => { const n = nameInp.value.trim(); if (n && n !== circle.name) { await invoke("rename_circle", { id: circle.id, name: n }); toast("Renamed"); $("#modal-root").replaceChildren(); renderFeed(); } } }, "Rename")),
+      el("label", { class: "muted small", style: "margin-top:6px" }, "Add members"),
+      memberList,
+      isDefault ? null : el("button", { class: "btn danger", style: "margin-top:6px", onclick: async () => {
+        await invoke("leave_circle", { id: circle.id }); state.activeCircle = "default"; $("#modal-root").replaceChildren(); toast("Left circle"); renderFeed();
+      } }, "Leave this circle"),
+    )));
+}
+
 function hydrateMedia(root, circleId) {
   $$("[data-ref]", root).forEach((node) => loadMedia(node, circleId, node.dataset.ref));
 }
@@ -341,9 +602,9 @@ async function renderStories() {
 
 function addStoryDialog() {
   state.attachments = [];
-  const composer = buildComposer(async (body) => {
-    await invoke("post_story", { body, media: state.attachments[0] ? state.attachments[0].ref : null, music: null });
-  }, "Caption your story…");
+  const composer = buildComposer(async (body, music) => {
+    await invoke("post_story", { body, media: state.attachments[0] ? state.attachments[0].ref : null, music });
+  }, "Caption your story…", { circleId: "default" });
   modal(el("div", {}, el("h2", {}, "New story"), composer));
 }
 
@@ -382,13 +643,27 @@ async function renderMessages() {
 
 async function renderThread(root, dm) {
   const msgs = await invoke("messages", { circleId: dm.id });
+  let secretOn = false;
   const chat = el("div", { class: "chat" });
   for (const m of msgs) {
     if (m.unsent) continue;
-    chat.append(el("div", { class: "bubble-row" + (m.is_me ? " me" : "") },
-      el("div", { class: "chat-bubble" }, m.body || "", ...(m.media || []).map((r) => r.startsWith("v:") ? el("video", { "data-ref": r, controls: "" }) : el("img", { "data-ref": r, style: "max-width:220px;border-radius:8px;display:block;margin-top:6px" })))));
+    const mediaEls = (m.media || []).map((r) => mediaNode(r, "max-width:220px;border-radius:10px;display:block;margin-top:6px"));
+    const bubble = isSecret(m.body)
+      ? secretBubble(m.body, m.is_me)
+      : el("div", { class: "chat-bubble" }, m.body || "", ...mediaEls);
+    if (isSecret(m.body) && mediaEls.length) bubble.append(...mediaEls);
+    chat.append(el("div", { class: "bubble-row" + (m.is_me ? " me" : "") }, bubble));
   }
-  const input = el("input", { placeholder: "Message…", onkeydown: async (e) => { if (e.key === "Enter" && e.target.value.trim()) { await invoke("send_dm", { circleId: dm.id, body: e.target.value.trim(), media: [] }); e.target.value = ""; } } });
+  const sendText = async (input) => {
+    const t = input.value.trim();
+    if (!t) return;
+    const body = secretOn ? SECRET_MARKER + t : t;
+    await invoke("send_dm", { circleId: dm.id, body, media: [] });
+    input.value = "";
+  };
+  const input = el("input", { placeholder: "Message…", onkeydown: async (e) => { if (e.key === "Enter") await sendText(e.target); } });
+  const secretBtn = el("button", { class: "btn", title: "Send secretly", onclick: () => { secretOn = !secretOn; secretBtn.classList.toggle("primary", secretOn); input.placeholder = secretOn ? "Secret message…" : "Message…"; } }, "🔒");
+  const voiceBtn = el("button", { class: "btn", title: "Voice message", onclick: async () => { const r = await recordVoice(dm.id); if (r) await invoke("send_dm", { circleId: dm.id, body: "", media: [r] }); } }, "🎙️");
   const partner = dm.id.replace("dm:", "").split("-").find((h) => h !== state.node) || "";
   root.replaceChildren(
     el("div", { class: "view-head" },
@@ -398,7 +673,9 @@ async function renderThread(root, dm) {
       partner ? el("button", { class: "btn small", title: "Audio call", onclick: () => callStart([partner], dm.name, false) }, "📞") : null,
       partner ? el("button", { class: "btn small", title: "Video call", onclick: () => callStart([partner], dm.name, true) }, "📹") : null,
     ),
-    el("div", { class: "card" }, chat, el("div", { class: "chat-input" }, input, el("button", { class: "btn primary", onclick: async () => { if (input.value.trim()) { await invoke("send_dm", { circleId: dm.id, body: input.value.trim(), media: [] }); input.value = ""; } } }, "Send"))),
+    el("div", { class: "card" }, chat,
+      el("div", { class: "chat-input" }, secretBtn, voiceBtn, input,
+        el("button", { class: "btn primary", onclick: () => sendText(input) }, "Send"))),
   );
   hydrateMedia(root, dm.id);
   chat.scrollTop = chat.scrollHeight;
@@ -521,14 +798,35 @@ async function renderRelay() {
         )
       : el("button", { class: "btn primary", onclick: async () => { try { await invoke("start_hosting"); toast("Relay started"); } catch (e) { toast("" + e); } renderRelay(); } }, "Start hosting"),
   );
+  const relayList = await invoke("relays").catch(() => []);
   const adoptCard = el("div", { class: "card col" },
-    el("h3", {}, "Use a friend's relay"),
-    el("div", { class: "muted small" }, "Paste the relay node id a friend (or a standalone " + esc("haven-relay") + ") shared. " + (s.has_relay ? "A relay is currently configured." : "No relay configured yet.")),
-    el("div", { class: "row" }, adoptInput, el("button", { class: "btn primary", onclick: async () => { if (adoptInput.value.trim().length === 64) { await invoke("adopt_relay", { nodeHex: adoptInput.value.trim() }); toast("Relay adopted"); adoptInput.value = ""; renderRelay(); } else toast("That's not a 64-hex node id"); } }, "Adopt")),
+    el("h3", {}, `Relays (${relayList.length})`),
+    el("div", { class: "muted small" }, "Add more than one for redundancy — posts and media are mirrored to every relay, and if one goes down Haven quietly uses the others. Paste a relay node id a friend (or a standalone " + esc("haven-relay") + ") shared."),
+  );
+  for (const r of relayList) {
+    adoptCard.append(el("div", { class: "list-item" },
+      el("span", { class: "dot " + (r.reachable ? "on" : ""), title: r.reachable ? "reachable" : "in backoff (unreachable)" }),
+      el("div", { class: "mono small", style: "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis" }, r.node_hex.slice(0, 20) + "…"),
+      r.hosted ? el("span", { class: "tag" }, "this PC") : null,
+      el("span", { class: "muted small" }, r.reachable ? "online" : "retrying…"),
+      el("button", { class: "btn small danger", onclick: async () => { await invoke("forget_relay", { nodeHex: r.node_hex }); toast("Relay removed"); renderRelay(); } }, "Remove"),
+    ));
+  }
+  if (!relayList.length) adoptCard.append(el("div", { class: "muted small" }, "No relays yet — host one above or adopt a friend's."));
+  adoptCard.append(el("div", { class: "row" }, adoptInput, el("button", { class: "btn primary", onclick: async () => { if (adoptInput.value.trim().length === 64) { await invoke("adopt_relay", { nodeHex: adoptInput.value.trim() }); toast("Relay added"); adoptInput.value = ""; renderRelay(); } else toast("That's not a 64-hex node id"); } }, "Add relay")));
+  const au = await invoke("autostart_status").catch(() => ({ login_item: false, host_on_launch: false }));
+  const loginChk = el("input", { type: "checkbox", style: "width:auto" }); loginChk.checked = au.login_item;
+  const hostChk = el("input", { type: "checkbox", style: "width:auto" }); hostChk.checked = au.host_on_launch;
+  const alwaysOn = el("div", { class: "card col" },
+    el("h3", {}, "Always-on relay (survives reboot)"),
+    el("div", { class: "muted small" }, "Have Haven start automatically when you log in and keep hosting your circle's mailbox — so this PC stays a relay across reboots, no terminal needed."),
+    el("label", { class: "row", style: "gap:8px" }, loginChk, el("span", {}, "Start Haven when I log in")),
+    el("label", { class: "row", style: "gap:8px" }, hostChk, el("span", {}, "Host the relay automatically on launch")),
+    el("button", { class: "btn primary", style: "align-self:flex-start", onclick: async () => { try { await invoke("set_autostart", { loginItem: loginChk.checked, hostOnLaunch: hostChk.checked }); toast("Saved"); renderRelay(); } catch (e) { toast("" + e); } } }, "Save"),
   );
   const headless = el("div", { class: "card col" },
     el("h3", {}, "Run headless"),
-    el("div", { class: "muted small html", html: "Launch <span class='mono'>haven-desktop --headless</span> to run only the relay with no window — like a small always-on server for your circle. It prints a relay id to share." }),
+    el("div", { class: "muted small html", html: "Prefer no window at all? Launch <span class='mono'>haven-desktop --headless</span> to run only the relay (and your scheduled-message dispatcher) as a small always-on server. Any official Haven app — iPhone, Mac, Windows, Linux — can also act as your relay in a pinch." }),
   );
   const s3 = await invoke("s3_status");
   const f = {
@@ -553,7 +851,7 @@ async function renderRelay() {
       s3.configured ? el("button", { class: "btn danger small", onclick: async () => { await invoke("s3_clear"); toast("Bucket removed"); renderRelay(); } }, "Remove") : null,
     ),
   );
-  root.replaceChildren(el("div", { class: "view-head" }, el("h1", {}, "Relay")), hostCard, adoptCard, s3card, headless);
+  root.replaceChildren(el("div", { class: "view-head" }, el("h1", {}, "Relay")), hostCard, alwaysOn, adoptCard, s3card, headless);
 }
 
 // ---- You / Settings --------------------------------------------------------------------
@@ -590,7 +888,35 @@ async function renderYou() {
     el("button", { class: "btn danger", onclick: () => { modal(el("div", {}, el("h2", {}, "Start over?"), el("p", {}, "This permanently deletes your identity and all local data on this PC."), el("div", { class: "row", style: "justify-content:flex-end" }, el("button", { class: "btn ghost", onclick: () => $("#modal-root").replaceChildren() }, "Cancel"), el("button", { class: "btn danger", onclick: async () => { await invoke("reset"); location.reload(); } }, "Delete everything")))); } }, "Start over"),
   );
 
-  root.replaceChildren(el("div", { class: "view-head" }, el("h1", {}, "You")), profileCard, security, blockedCard, danger);
+  // ---- identities ----
+  const ids = await invoke("identities").catch(() => []);
+  const idCard = el("div", { class: "card col" }, el("h3", {}, "Identities"),
+    el("div", { class: "muted small" }, "Keep more than one identity on this PC and switch between them. Each has its own profile, circles and contacts."));
+  for (const id of ids) {
+    idCard.append(el("div", { class: "list-item" },
+      el("div", { class: "avatar", style: "width:30px;height:30px;font-size:12px" }, initials(id.label)),
+      el("div", { style: "flex:1;min-width:0" }, el("div", { class: "name" }, id.label, id.active ? el("span", { class: "tag", style: "margin-left:8px" }, "active") : null), el("div", { class: "muted small mono" }, id.node_hex.slice(0, 18) + "…")),
+      id.active ? null : el("button", { class: "btn small primary", onclick: async () => { if (confirm(`Switch to "${id.label}"? Haven will relaunch.`)) await invoke("switch_identity", { nodeHex: id.node_hex }); } }, "Switch"),
+      el("button", { class: "btn small ghost", title: "Rename", onclick: () => { const i = el("input", { value: id.label }); modal(el("div", {}, el("h2", {}, "Rename identity"), i, el("div", { class: "row", style: "justify-content:flex-end;margin-top:10px" }, el("button", { class: "btn primary", onclick: async () => { await invoke("rename_identity", { nodeHex: id.node_hex, label: i.value.trim() || id.label }); $("#modal-root").replaceChildren(); renderYou(); } }, "Save")))); } }, "✏︎"),
+      id.active ? null : el("button", { class: "btn small danger", title: "Remove", onclick: async () => { if (confirm(`Remove "${id.label}" from this PC? Its local data is deleted.`)) { await invoke("remove_identity", { nodeHex: id.node_hex }); renderYou(); } } }, "🗑"),
+    ));
+  }
+  idCard.append(el("div", { class: "row", style: "margin-top:6px" },
+    el("button", { class: "btn small", onclick: () => { const i = el("input", { placeholder: "Label (e.g. Work)" }); modal(el("div", {}, el("h2", {}, "New identity"), i, el("div", { class: "row", style: "justify-content:flex-end;margin-top:10px" }, el("button", { class: "btn primary", onclick: async () => { await invoke("add_identity", { label: i.value.trim() || "New identity" }); $("#modal-root").replaceChildren(); renderYou(); toast("Identity created"); } }, "Create")))); } }, "+ New identity"),
+    el("button", { class: "btn small ghost", onclick: () => { const lab = el("input", { placeholder: "Label" }); const seed = el("input", { placeholder: "Seed (base64 transfer)" }); modal(el("div", {}, el("h2", {}, "Import identity"), lab, seed, el("div", { class: "row", style: "justify-content:flex-end;margin-top:10px" }, el("button", { class: "btn primary", onclick: async () => { try { await invoke("import_identity", { label: lab.value.trim() || "Imported", seedB64: seed.value.trim() }); $("#modal-root").replaceChildren(); renderYou(); toast("Imported"); } catch (e) { toast("Import failed: " + e); } } }, "Import")))); } }, "Import"),
+  ));
+
+  // ---- scheduled ----
+  const sched = await invoke("scheduled").catch(() => []);
+  const schedCard = el("div", { class: "card col" }, el("h3", {}, `Scheduled (${sched.length})`));
+  if (!sched.length) schedCard.append(el("div", { class: "muted small" }, "Nothing scheduled. Use the 🕓 button in the composer to send later."));
+  for (const s of sched) {
+    schedCard.append(el("div", { class: "list-item" },
+      el("div", { style: "flex:1;min-width:0" }, el("div", {}, (s.kind === "dm" ? "DM · " : "Post · ") + (s.body || (s.media_count ? `${s.media_count} attachment(s)` : "—"))), el("div", { class: "muted small" }, "sends " + new Date(s.send_at_ms).toLocaleString())),
+      el("button", { class: "btn small danger", onclick: async () => { await invoke("cancel_scheduled", { id: s.id }); renderYou(); } }, "Cancel")));
+  }
+
+  root.replaceChildren(el("div", { class: "view-head" }, el("h1", {}, "You")), profileCard, idCard, schedCard, security, blockedCard, danger);
 }
 
 const line = (label, ok) => el("div", { class: "row" }, el("span", { style: "flex:1" }, label), el("span", { class: ok ? "ok-text" : "warn-text" }, ok ? "✓ pass" : "✗ fail"));
@@ -830,7 +1156,21 @@ function renderCallOverlay() {
 }
 
 // ---- boot ------------------------------------------------------------------------------
+function initTheme() {
+  const saved = localStorage.getItem("haven-theme");
+  if (saved) document.documentElement.dataset.theme = saved;
+  const btn = $("#theme-toggle");
+  if (btn) btn.addEventListener("click", () => {
+    const cur = document.documentElement.dataset.theme
+      || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    const next = cur === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("haven-theme", next);
+  });
+}
+
 async function boot() {
+  initTheme();
   $$(".nav-btn").forEach((b) => b.addEventListener("click", () => switchView(b.dataset.view)));
   try {
     const b = await invoke("bootstrap");

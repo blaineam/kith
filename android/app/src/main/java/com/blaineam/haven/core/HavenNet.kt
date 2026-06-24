@@ -62,11 +62,37 @@ object HavenNet : InboundListener {
     var relayActive = mutableStateOf(false); private set
     @Volatile var isForeground = false   // set by the UI lifecycle; suppresses notifications when open   // true once a mailbox put/get succeeds
 
-    // Circle relay/mailbox: circleId -> relay node hex (the "circle supplied relay").
-    private val relayNodes = HashMap<String, String>()
+    // Circle relay/mailbox: circleId -> ORDERED list of relay node hexes. Posts are mirrored to
+    // every relay (redundancy) and read from all of them (graceful fallback if one is down) —
+    // parity with the desktop `relays: HashMap<String, Vec<String>>`.
+    private val relayNodes = HashMap<String, MutableList<String>>()
     private val relayClients = HashMap<String, RelayClient>()
     private val relayMutex = Mutex()
     private val seenMailbox = HashSet<String>()
+
+    /**
+     * Per-relay exponential-backoff health (5s → 5m), keyed by node hex — drives graceful
+     * fallback. A relay that fails to connect/put/list/get is parked in a backoff window so we
+     * stop hammering a dead relay and quietly use the others, then retry it later so a relay that
+     * comes back is picked up again automatically. Mirror of desktop relayhealth.rs.
+     */
+    private class RelayHealth {
+        var fails = 0
+        var nextRetryMs = 0L   // earliest epoch-ms we'll try again; 0 = available now
+        fun available(nowMs: Long): Boolean = nowMs >= nextRetryMs
+        fun recordSuccess() { fails = 0; nextRetryMs = 0L }
+        fun recordFailure(nowMs: Long) {
+            fails += 1
+            val shift = minOf(fails - 1, 6)   // cap the exponent so the shift never overflows
+            val backoff = minOf(BASE_BACKOFF_MS shl shift, MAX_BACKOFF_MS)
+            nextRetryMs = nowMs + backoff
+        }
+        companion object {
+            const val BASE_BACKOFF_MS = 5_000L      // first failure → 5s cool-off
+            const val MAX_BACKOFF_MS = 300_000L     // capped at 5 minutes
+        }
+    }
+    private val relayHealth = HashMap<String, RelayHealth>()
 
     // node ids we initiated a connect to (scanned their QR) → expected verify hash.
     private val initiated = HashMap<String, String>()
@@ -383,8 +409,8 @@ object HavenNet : InboundListener {
         sendFrame(Wire.HELLO, hello, toNodeHex)
         val envs = runCatching { social.syncEnvelopes(circleId) }.getOrDefault(emptyList())
         for (env in envs) sendFrame(Wire.EVENT, Wire.eventPayload(circleId, env), toNodeHex)
-        // If I know the circle's relay, tell this peer so we share a mailbox.
-        relayNodes[circleId]?.let { nodeHex ->
+        // Tell this peer about EVERY relay I know for the circle, so we pool all mailboxes.
+        for (nodeHex in relaysFor(circleId)) {
             val sealed = runCatching { social.sealCircleMedia(circleId, nodeHex.toByteArray()) }.getOrNull()
             if (sealed != null) sendFrame(Wire.RELAY_NODE, Wire.eventPayload(circleId, sealed), toNodeHex)
         }
@@ -414,6 +440,9 @@ object HavenNet : InboundListener {
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
         scope.launch { media.forEach { uploadMedia(circleId, it) } }   // push photos/videos to the relay
+        // "Save my posts to Photos" (iOS parity).
+        if (media.isNotEmpty() && ProfileStore.get(appContext).saveMyPosts)
+            scope.launch { media.forEach { MediaSaver.autoSave(appContext, it) } }
     }
 
     /** Build a portable track reference from a shared streaming link (YouTube/Spotify/etc.). */
@@ -512,10 +541,14 @@ object HavenNet : InboundListener {
         val open = runCatching { social.openCircleMedia(circleId, sealed) }.getOrNull() ?: return
         val nodeHex = String(open, Charsets.UTF_8).trim()
         if (nodeHex.length != 64) return
-        if (relayNodes[circleId] == nodeHex) return
-        relayNodes[circleId] = nodeHex
+        // A contact advertised their circle relay → ADD it to our redundant set for this circle,
+        // so members automatically pool relays (more redundancy, no manual setup). Append, never
+        // replace — parity with desktop handle_relay_node.
+        val list = relayNodes.getOrPut(circleId) { mutableListOf() }
+        if (list.contains(nodeHex)) return
+        list.add(nodeHex)
         saveRelayNodes()
-        Log.i(TAG, "adopted relay for $circleId: ${nodeHex.take(8)}")
+        Log.i(TAG, "learned relay for $circleId: ${nodeHex.take(8)}")
         scope.launch {
             backfillMailbox(circleId)   // upload everything I've already posted here
             pollMailbox()
@@ -537,14 +570,18 @@ object HavenNet : InboundListener {
         scope.launch { backfillMailbox(circleId); pollMailbox() }
     }
 
-    /** Manually adopt a relay node for all circles (Settings paste) + tell contacts via frame 19. */
+    /**
+     * Adopt a relay node for all circles (Settings paste) — ADDED to the redundant set, not
+     * replacing existing relays — + tell contacts via frame 19. Adopt several for redundancy.
+     */
     fun adoptRelay(nodeHex: String) {
         val hex = nodeHex.trim().lowercase()
         if (hex.length != 64) return
         scope.launch {
             for (c in social.circles()) {
                 val cid = c.id
-                relayNodes[cid] = hex
+                val list = relayNodes.getOrPut(cid) { mutableListOf() }
+                if (!list.contains(hex)) list.add(hex)
                 // Tell members (sealed) so they use the same mailbox.
                 val sealed = runCatching { social.sealCircleMedia(cid, hex.toByteArray()) }.getOrNull()
                 if (sealed != null) {
@@ -554,7 +591,52 @@ object HavenNet : InboundListener {
                 backfillMailbox(cid)
             }
             saveRelayNodes()
+            withContext(Dispatchers.Main) { bumpRelays() }
             pollMailbox()
+        }
+    }
+
+    /** Drop a relay from every circle (and forget its cached connection + health). */
+    fun forgetRelay(nodeHex: String) {
+        val hex = nodeHex.trim().lowercase()
+        scope.launch {
+            for (list in relayNodes.values) list.removeAll { it == hex }
+            relayNodes.entries.removeAll { it.value.isEmpty() }
+            saveRelayNodes()
+            relayMutex.withLock {
+                runCatching { relayClients.remove(hex)?.close() }
+                relayHealth.remove(hex)
+            }
+            withContext(Dispatchers.Main) { bumpRelays() }
+        }
+    }
+
+    /** Bump so the relay-settings UI recomposes after the adopted set / health changes. */
+    var relaysVersion = mutableStateOf(0); private set
+    private fun bumpRelays() { relaysVersion.value++ }
+
+    /** The redundant relay set for a circle (mirrored writes, fallback reads). */
+    private fun relaysFor(circleId: String): List<String> = relayNodes[circleId]?.toList() ?: emptyList()
+
+    /** Every distinct adopted relay across all circles. */
+    private fun allRelays(): List<String> = relayNodes.values.flatten().distinct()
+
+    private fun relayAvailable(nodeHex: String): Boolean =
+        relayHealth[nodeHex]?.available(System.currentTimeMillis()) ?: true
+
+    private fun markRelayOk(nodeHex: String) {
+        relayHealth.getOrPut(nodeHex) { RelayHealth() }.recordSuccess()
+    }
+
+    private fun markRelayFail(nodeHex: String) {
+        relayHealth.getOrPut(nodeHex) { RelayHealth() }.recordFailure(System.currentTimeMillis())
+    }
+
+    /** (nodeHex, reachable, isHostedByUs) for every distinct adopted relay — for the UI. */
+    fun relaysDetail(): List<Triple<String, Boolean, Boolean>> {
+        val hosted = runCatching { relayHost?.nodeIdHex() }.getOrNull()
+        return allRelays().map { hex ->
+            Triple(hex, relayAvailable(hex), hosted == hex)
         }
     }
 
@@ -587,11 +669,58 @@ object HavenNet : InboundListener {
         hosting.value = false
     }
 
+    /**
+     * Mesh anti-entropy: if we host an in-app relay, pull every sealed blob each adopted SIBLING
+     * relay holds that we lack, so the mailbox self-replicates across relays — any relay can then
+     * join/leave freely without losing the circle's data. Parity with desktop engine.mesh_sync.
+     *
+     * Calls the core's `RelayServerHandle::sync_from(peerNodeHex) -> u32` FFI per sibling. The
+     * generated uniffi bindings (haven_ffi.kt) currently PREDATE sync_from (they only expose
+     * nodeIdHex), so we invoke it reflectively: this compiles + runs against the current .so once
+     * the bindings are regenerated (android/build-rust.sh), and no-ops harmlessly until then.
+     */
+    private suspend fun meshSync() {
+        val host = relayHost ?: return
+        val myHex = runCatching { host.nodeIdHex() }.getOrNull() ?: return
+        val syncFrom = runCatching {
+            host.javaClass.methods.firstOrNull {
+                it.name == "syncFrom" && it.parameterTypes.size == 1 &&
+                    it.parameterTypes[0] == String::class.java
+            }
+        }.getOrNull() ?: return   // bindings predate sync_from — skip until regenerated
+        for (peer in allRelays()) {
+            if (peer == myHex || !relayAvailable(peer)) continue
+            val pulled = runCatching {
+                // sync_from is `async fn` → uniffi generates a `suspend` method, surfaced over JNA
+                // as a method returning a value (the bindings drive the future). Reflective call.
+                when (val r = syncFrom.invoke(host, peer)) {
+                    is Number -> r.toLong()
+                    else -> 0L
+                }
+            }.getOrDefault(0L)
+            if (pulled > 0L) {
+                markRelayOk(peer)
+                withContext(Dispatchers.Main) { relayActive.value = true }
+            }
+        }
+    }
+
     private suspend fun relayClientFor(nodeHex: String): RelayClient? = relayMutex.withLock {
         relayClients[nodeHex]?.let { return it }
-        val c = runCatching { RelayClient.connect(core.seed, nodeHex) }.getOrNull() ?: return null
+        // Skip a relay that's in its backoff window — try the others instead.
+        if (!relayAvailable(nodeHex)) return null
+        val c = runCatching { RelayClient.connect(core.seed, nodeHex) }.getOrNull()
+        if (c == null) { markRelayFail(nodeHex); return null }
+        markRelayOk(nodeHex)
         relayClients[nodeHex] = c
         c
+    }
+
+    /** On a put/list/get failure: back the relay off and drop its cached connection. */
+    private suspend fun relayFailed(nodeHex: String) = relayMutex.withLock {
+        markRelayFail(nodeHex)
+        runCatching { relayClients.remove(nodeHex)?.close() }
+        Unit
     }
 
     private fun mailboxKey(circleId: String, env: ByteArray): String {
@@ -607,21 +736,23 @@ object HavenNet : InboundListener {
                 withContext(Dispatchers.Main) { relayActive.value = true }
             }
         }
-        // Haven relay node over iroh.
-        val nodeHex = relayNodes[circleId] ?: return
-        val client = relayClientFor(nodeHex) ?: return
+        // Mirror to EVERY configured Haven relay (redundancy). Content-addressed keys make
+        // re-puts idempotent, and a relay in backoff is skipped — graceful fallback.
         val key = mailboxKey(circleId, env)
-        if (seenMailbox.contains(key)) return
-        runCatching {
-            client.put(key, env)
-            seenMailbox.add(key)
-            withContext(Dispatchers.Main) { relayActive.value = true }
-        }.onFailure { Log.d(TAG, "mailbox put failed: ${it.message}"); relayClients.remove(nodeHex) }
+        for (nodeHex in relaysFor(circleId)) {
+            val client = relayClientFor(nodeHex) ?: continue
+            runCatching { client.put(key, env) }
+                .onSuccess {
+                    markRelayOk(nodeHex)
+                    withContext(Dispatchers.Main) { relayActive.value = true }
+                }
+                .onFailure { Log.d(TAG, "mailbox put failed ($nodeHex): ${it.message}"); relayFailed(nodeHex) }
+        }
     }
 
     /** Re-upload every post I authored in a circle (for members who were offline when I posted). */
     private suspend fun backfillMailbox(circleId: String) {
-        if (relayNodes[circleId] == null && !Presign.hasBootstrap(circleId)) return
+        if (relaysFor(circleId).isEmpty() && !Presign.hasBootstrap(circleId)) return
         val envs = runCatching { social.exportMyEnvelopes(circleId) }.getOrDefault(emptyList())
         for (env in envs) uploadEvent(circleId, env)
         // Also push the media bytes of anything I've posted here that I still hold locally.
@@ -644,10 +775,18 @@ object HavenNet : InboundListener {
                 }
             }
         }
-        for ((circleId, nodeHex) in relayNodes.toMap()) {
+        // (circleId, relayNodeHex) for every circle × every configured relay — reading from all of
+        // them means a message present on ANY reachable relay still arrives. seenMailbox is keyed
+        // by the content-addressed key, so the same envelope mirrored on several relays is
+        // ingested exactly once (dedup by content key).
+        val relayTargets: List<Pair<String, String>> = relayNodes.toMap()
+            .flatMap { (cid, list) -> list.map { cid to it } }
+        for ((circleId, nodeHex) in relayTargets) {
             val client = relayClientFor(nodeHex) ?: continue
             val prefix = "haven/mailbox/$circleId/"
-            val keys = runCatching { client.list(prefix) }.getOrNull() ?: continue
+            val keys = runCatching { client.list(prefix) }.getOrNull()
+            if (keys == null) { relayFailed(nodeHex); continue }
+            markRelayOk(nodeHex)
             if (keys.isNotEmpty()) withContext(Dispatchers.Main) { relayActive.value = true }
             for (key in keys) {
                 if (seenMailbox.contains(key)) continue
@@ -659,6 +798,8 @@ object HavenNet : InboundListener {
                 }
             }
         }
+        // Mesh: if we host a relay, pull from each adopted sibling so the mailbox self-replicates.
+        meshSync()
         if (changed) {
             persist()
             withContext(Dispatchers.Main) { feedVersion.value++ }
@@ -700,20 +841,30 @@ object HavenNet : InboundListener {
         }
     }
 
-    /** Upload a media blob to the circle relay so members can fetch it even when we're offline. */
+    /** Mirror a sealed media blob to EVERY circle relay (redundancy) so members can fetch offline. */
     suspend fun uploadMedia(circleId: String, ref: String) {
-        val nodeHex = relayNodes[circleId] ?: return
-        val client = relayClientFor(nodeHex) ?: return
         val blob = LocalMedia.rawSealed(ref) ?: return
-        runCatching { client.put(mediaKey(ref), blob) }
+        val key = mediaKey(ref)
+        for (nodeHex in relaysFor(circleId)) {
+            val client = relayClientFor(nodeHex) ?: continue
+            runCatching { client.put(key, blob) }
+                .onSuccess { markRelayOk(nodeHex) }
+                .onFailure { relayFailed(nodeHex) }
+        }
     }
 
     private suspend fun fetchMediaFromRelay(circleId: String, ref: String): Boolean {
-        val nodeHex = relayNodes[circleId] ?: return false
-        val client = relayClientFor(nodeHex) ?: return false
-        val blob = runCatching { client.get(mediaKey(ref)) }.getOrNull() ?: return false
-        LocalMedia.writeRawSealed(ref, blob)
-        return true
+        val key = mediaKey(ref)
+        // Try each relay in turn; the first that has the blob wins (graceful fallback).
+        for (nodeHex in relaysFor(circleId)) {
+            val client = relayClientFor(nodeHex) ?: continue
+            val blob = runCatching { client.get(key) }.getOrNull()
+            if (blob == null) { relayFailed(nodeHex); continue }
+            markRelayOk(nodeHex)
+            LocalMedia.writeRawSealed(ref, blob)
+            return true
+        }
+        return false
     }
 
     /** Frame 3: [hex64 requester][ref]. If we hold the bytes, stream them back as sealed chunks. */
@@ -778,6 +929,8 @@ object HavenNet : InboundListener {
             LocalMedia.storeUnderRef(DEFAULT_CIRCLE, ref, full.copyOf(p))
             incomingMedia.remove(ref)
             scope.launch(Dispatchers.Main) { feedVersion.value++ }
+            // "Save others' posts to Photos" (iOS parity) — auto-save received media once.
+            if (ProfileStore.get(appContext).saveOthersPosts) scope.launch { MediaSaver.autoSave(appContext, ref) }
         }
     }
 
@@ -837,27 +990,57 @@ object HavenNet : InboundListener {
         prefs.edit().putString("blocked", arr.toString()).apply()
     }
 
+    /**
+     * Load the redundant relay set. New format is `relays` (circleId -> JSON array of node hexes).
+     * The legacy `relayNodes` (circleId -> single node hex string) is migrated in idempotently:
+     * each legacy entry is appended to the list if not already present. The migration re-runs
+     * harmlessly on every load until the next [saveRelayNodes] clears the legacy key.
+     */
     private fun loadRelayNodes() {
-        val raw = prefs.getString("relayNodes", null) ?: return
-        runCatching {
-            val o = JSONObject(raw)
-            relayNodes.clear()
-            o.keys().forEach { relayNodes[it] = o.getString(it) }
+        relayNodes.clear()
+        // New multi-relay format.
+        prefs.getString("relays", null)?.let { raw ->
+            runCatching {
+                val o = JSONObject(raw)
+                o.keys().forEach { cid ->
+                    val arr = o.getJSONArray(cid)
+                    val list = mutableListOf<String>()
+                    for (i in 0 until arr.length()) {
+                        val hex = arr.getString(i)
+                        if (hex.isNotEmpty() && !list.contains(hex)) list.add(hex)
+                    }
+                    if (list.isNotEmpty()) relayNodes[cid] = list
+                }
+            }
+        }
+        // Idempotent migration of the legacy single-relay-per-circle map.
+        prefs.getString("relayNodes", null)?.let { raw ->
+            runCatching {
+                val o = JSONObject(raw)
+                o.keys().forEach { cid ->
+                    val hex = o.getString(cid)
+                    if (hex.isNotEmpty()) {
+                        val list = relayNodes.getOrPut(cid) { mutableListOf() }
+                        if (!list.contains(hex)) list.add(hex)
+                    }
+                }
+            }
         }
     }
 
     private fun saveRelayNodes() {
         val o = JSONObject()
-        relayNodes.forEach { (k, v) -> o.put(k, v) }
-        prefs.edit().putString("relayNodes", o.toString()).apply()
+        relayNodes.forEach { (k, v) -> o.put(k, JSONArray().apply { v.forEach { put(it) } }) }
+        // Write the new format and clear the legacy key (completes the migration).
+        prefs.edit().putString("relays", o.toString()).remove("relayNodes").apply()
     }
 
     /** Whether any circle has a mailbox configured — Haven relay node or S3 pool (UI indicator). */
-    fun hasRelay(): Boolean = relayNodes.isNotEmpty() || Presign.anyBootstrap()
+    fun hasRelay(): Boolean = relayNodes.values.any { it.isNotEmpty() } || Presign.anyBootstrap()
 
     fun reset() {
         contacts.clear(); pending.clear(); blocked.clear(); initiated.clear()
-        relayNodes.clear(); relayClients.clear(); seenMailbox.clear()
+        relayNodes.clear(); relayClients.clear(); relayHealth.clear(); seenMailbox.clear()
         Presign.reset()
         CircleLock.reset()
         AvatarStore.clear()

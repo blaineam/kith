@@ -65,7 +65,11 @@ pub struct Engine {
     relay_host: StdMutex<Option<Arc<RelayServerHandle>>>,
     prefs: StdMutex<Prefs>,
     dyn_state: StdMutex<DynState>,
+    scheduled: StdMutex<crate::scheduled::ScheduledStore>,
+    sched_counter: std::sync::atomic::AtomicU64,
     relay_clients: TokioMutex<HashMap<String, Arc<RelayClient>>>,
+    /// Per-relay backoff health, keyed by node hex — drives graceful fallback.
+    relay_health: StdMutex<HashMap<String, crate::relayhealth::RelayHealth>>,
     s3: TokioMutex<Option<Arc<S3Mailbox>>>,
 }
 
@@ -88,6 +92,7 @@ impl Engine {
         }
         let prefs = Prefs::load(&paths);
         let media = LocalMedia::new(paths.media_dir());
+        let scheduled = crate::scheduled::ScheduledStore::load(&paths.scheduled_file());
         Ok(Arc::new(Self {
             seed,
             social,
@@ -98,7 +103,10 @@ impl Engine {
             relay_host: StdMutex::new(None),
             prefs: StdMutex::new(prefs),
             dyn_state: StdMutex::new(DynState::default()),
+            scheduled: StdMutex::new(scheduled),
+            sched_counter: std::sync::atomic::AtomicU64::new(0),
             relay_clients: TokioMutex::new(HashMap::new()),
+            relay_health: StdMutex::new(HashMap::new()),
             s3: TokioMutex::new(None),
         }))
     }
@@ -163,6 +171,85 @@ impl Engine {
         self.emit_changed();
     }
 
+    // ---- multi-identity -----------------------------------------------------------------
+
+    /// (node_hex, label, is_active) for every identity on this device.
+    pub fn identities(&self) -> Vec<(String, String, bool)> {
+        let ids = store::Identities::load(&self.paths);
+        ids.items
+            .iter()
+            .map(|e| (e.node_hex.clone(), e.label.clone(), e.node_hex == ids.active))
+            .collect()
+    }
+
+    /// Mint a brand-new identity (its seed goes to the secure store). Does not switch to it.
+    pub fn add_identity(&self, label: &str) -> Result<String> {
+        let acct = Account::generate();
+        let seed: [u8; 32] = acct
+            .secret_seed()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("generated seed not 32 bytes"))?;
+        let hex = acct.node_id_hex();
+        store::save_identity_seed(&hex, &seed)?;
+        let mut ids = store::Identities::load(&self.paths);
+        ids.add(&hex, label);
+        ids.save(&self.paths)?;
+        self.emit_changed();
+        Ok(hex)
+    }
+
+    /// Adopt an existing identity from a 32-byte seed (e.g. a transfer from another device).
+    pub fn import_identity(&self, label: &str, seed: [u8; 32]) -> Result<String> {
+        let acct = Account::from_seed(seed.to_vec()).map_err(|e| anyhow::anyhow!("bad seed: {e}"))?;
+        let hex = acct.node_id_hex();
+        store::save_identity_seed(&hex, &seed)?;
+        let mut ids = store::Identities::load(&self.paths);
+        ids.add(&hex, label);
+        ids.save(&self.paths)?;
+        self.emit_changed();
+        Ok(hex)
+    }
+
+    pub fn rename_identity(&self, node_hex: &str, label: &str) -> Result<()> {
+        let mut ids = store::Identities::load(&self.paths);
+        if !ids.rename(node_hex, label) {
+            return Err(anyhow::anyhow!("unknown identity"));
+        }
+        ids.save(&self.paths)?;
+        self.emit_changed();
+        Ok(())
+    }
+
+    /// Make `node_hex` the active identity. Mirrors its seed to the legacy `master-seed` so the
+    /// headless relay follows it too. The caller must relaunch the app to rebuild the engine.
+    pub fn set_active_identity(&self, node_hex: &str) -> Result<()> {
+        let mut ids = store::Identities::load(&self.paths);
+        if !ids.set_active(node_hex) {
+            return Err(anyhow::anyhow!("unknown identity"));
+        }
+        if let Some(seed) = store::load_identity_seed(node_hex)? {
+            store::save_seed(&seed)?;
+        }
+        ids.save(&self.paths)?;
+        Ok(())
+    }
+
+    pub fn remove_identity(&self, node_hex: &str) -> Result<()> {
+        let mut ids = store::Identities::load(&self.paths);
+        match ids.remove(node_hex) {
+            Some(dir) => {
+                ids.save(&self.paths)?;
+                store::delete_identity_seed(node_hex);
+                if !dir.is_empty() {
+                    let _ = std::fs::remove_dir_all(self.paths.base.join(dir));
+                }
+                self.emit_changed();
+                Ok(())
+            }
+            None => Err(anyhow::anyhow!("cannot remove the active or an unknown identity")),
+        }
+    }
+
     // ---- start --------------------------------------------------------------------------
 
     /// Start the iroh node and begin syncing. Safe to call repeatedly.
@@ -188,6 +275,7 @@ impl Engine {
                 log::error!("node start failed: {e}");
             }
         }
+        self.fire_due_scheduled(); // flush anything overdue from while the app was closed
         self.start_mailbox_loop();
     }
 
@@ -197,12 +285,119 @@ impl Engine {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                 me.poll_mailbox().await;
+                me.fire_due_scheduled();
+                me.mesh_sync().await;
             }
         });
     }
 
+    /// If we're hosting a relay, pull from every sibling relay so the mailbox self-replicates
+    /// across the mesh — any relay can then join/leave freely without losing the circle's data.
+    async fn mesh_sync(self: &Arc<Self>) {
+        let Some(host) = self.relay_host.lock().unwrap().clone() else { return };
+        let my_hex = host.node_id_hex();
+        let peers: std::collections::BTreeSet<String> =
+            self.prefs.lock().unwrap().relays.values().flatten().cloned().collect();
+        for peer in peers {
+            if peer == my_hex || !self.relay_available(&peer) {
+                continue;
+            }
+            if host.sync_from(peer.clone()).await > 0 {
+                self.mark_relay_ok(&peer);
+                self.dyn_state.lock().unwrap().relay_active = true;
+                self.emit_changed();
+            }
+        }
+    }
+
+    // ---- scheduled messages -------------------------------------------------------------
+
+    fn persist_scheduled(&self) {
+        let snap = self.scheduled.lock().unwrap().clone();
+        let _ = snap.save(&self.paths.scheduled_file());
+    }
+
+    /// Queue a post or DM to be sent at `send_at_ms`. Returns the generated item id.
+    pub fn schedule(
+        self: &Arc<Self>,
+        kind: crate::scheduled::SchedKind,
+        circle_id: String,
+        body: String,
+        media: Vec<String>,
+        music: Option<crate::scheduled::SchedTrack>,
+        mute_video: bool,
+        send_at_ms: u64,
+    ) -> String {
+        let n = self.sched_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = format!("sch-{}-{n}", now_ms());
+        let item = crate::scheduled::ScheduledItem {
+            id: id.clone(),
+            kind,
+            circle_id,
+            body,
+            media,
+            music,
+            mute_video,
+            send_at_ms,
+            created_at_ms: now_ms(),
+        };
+        self.scheduled.lock().unwrap().add(item);
+        self.persist_scheduled();
+        self.emit_changed();
+        id
+    }
+
+    pub fn list_scheduled(&self) -> Vec<crate::scheduled::ScheduledItem> {
+        self.scheduled.lock().unwrap().items.clone()
+    }
+
+    pub fn cancel_scheduled(self: &Arc<Self>, id: &str) {
+        let removed = self.scheduled.lock().unwrap().remove(id);
+        if removed {
+            self.persist_scheduled();
+            self.emit_changed();
+        }
+    }
+
+    /// Send everything whose time has arrived, then persist the remaining queue.
+    pub fn fire_due_scheduled(self: &Arc<Self>) {
+        let due = self.scheduled.lock().unwrap().take_due(now_ms());
+        if due.is_empty() {
+            return;
+        }
+        for it in due {
+            let music = it.music.map(|m| TrackRefFfi {
+                catalog_id: m.catalog_id,
+                title: m.title,
+                artist: m.artist,
+                artwork_url: m.artwork_url,
+                duration_ms: m.duration_ms,
+            });
+            match it.kind {
+                crate::scheduled::SchedKind::Post => {
+                    self.post(it.circle_id, it.body, it.media, music, it.mute_video);
+                }
+                crate::scheduled::SchedKind::Dm => {
+                    self.send_dm(it.circle_id, it.body, it.media);
+                }
+            }
+        }
+        self.persist_scheduled();
+        self.emit_changed();
+    }
+
     pub fn started(&self) -> bool {
         self.dyn_state.lock().unwrap().started
+    }
+
+    pub fn host_on_launch(&self) -> bool {
+        self.prefs.lock().unwrap().host_on_launch
+    }
+
+    pub fn set_host_on_launch(self: &Arc<Self>, on: bool) {
+        let mut p = self.prefs.lock().unwrap();
+        p.host_on_launch = on;
+        let _ = p.save(&self.paths);
     }
 
     // ---- circles ------------------------------------------------------------------------
@@ -253,11 +448,11 @@ impl Engine {
         self.social.feed(circle_id.to_string(), now_ms(), retention)
     }
 
-    pub fn post(self: &Arc<Self>, circle_id: String, body: String, media: Vec<String>, music: Option<TrackRefFfi>) {
+    pub fn post(self: &Arc<Self>, circle_id: String, body: String, media: Vec<String>, music: Option<TrackRefFfi>, mute_video: bool) {
         if body.trim().is_empty() && media.is_empty() && music.is_none() {
             return;
         }
-        match self.social.post(circle_id.clone(), body, media.clone(), music, None, false, false, now_ms()) {
+        match self.social.post(circle_id.clone(), body, media.clone(), music, None, false, mute_video, now_ms()) {
             Ok(env) => {
                 self.after_author(&circle_id, &env);
                 let me = self.clone();
@@ -389,7 +584,7 @@ impl Engine {
             let (last_body, last_at) = feed
                 .iter()
                 .max_by_key(|i| i.created_at)
-                .map(|i| (i.body.clone(), i.created_at))
+                .map(|i| (crate::secret::preview(&i.body), i.created_at))
                 .unwrap_or_default();
             out.push((c.id.clone(), c.name.clone(), last_body, last_at));
         }
@@ -523,9 +718,8 @@ impl Engine {
         for env in self.social.sync_envelopes(circle_id.to_string()) {
             self.send_frame(wire::EVENT, &wire::event_payload(circle_id, &env), to_node_hex);
         }
-        // If I know the circle's relay, tell this peer so we share a mailbox.
-        let relay = self.prefs.lock().unwrap().relay_nodes.get(circle_id).cloned();
-        if let Some(node_hex) = relay {
+        // Tell this peer about every relay I know for the circle, so we share all mailboxes.
+        for node_hex in self.relays_for(circle_id) {
             if let Ok(sealed) = self.social.seal_circle_media(circle_id.to_string(), node_hex.into_bytes()) {
                 self.send_frame(wire::RELAY_NODE, &wire::event_payload(circle_id, &sealed), to_node_hex);
             }
@@ -655,11 +849,14 @@ impl Engine {
             return;
         }
         {
+            // A contact advertised their circle relay → ADD it to our redundant set for this
+            // circle, so members automatically pool relays (more redundancy, no manual setup).
             let mut p = self.prefs.lock().unwrap();
-            if p.relay_nodes.get(&circle_id) == Some(&node_hex) {
+            let list = p.relays.entry(circle_id.clone()).or_default();
+            if list.contains(&node_hex) {
                 return;
             }
-            p.relay_nodes.insert(circle_id.clone(), node_hex.clone());
+            list.push(node_hex.clone());
             let _ = p.save(&self.paths);
         }
         self.backfill_mailbox(&circle_id).await;
@@ -669,7 +866,7 @@ impl Engine {
     pub fn relay_status(&self) -> (bool, bool, bool, bool, bool) {
         let st = self.dyn_state.lock().unwrap();
         let prefs = self.prefs.lock().unwrap();
-        let has_relay = !prefs.relay_nodes.is_empty() || prefs.s3.is_some();
+        let has_relay = prefs.relays.values().any(|v| !v.is_empty()) || prefs.s3.is_some();
         (st.hosting, has_relay, st.relay_active, st.internet_active, st.started)
     }
 
@@ -710,7 +907,8 @@ impl Engine {
         self.emit_changed();
     }
 
-    /// Adopt a relay node for all circles + tell contacts via frame 19.
+    /// Adopt a relay node for all circles (ADDED to the redundant set, not replacing existing
+    /// relays) + tell contacts via frame 19. Adopt several for redundancy.
     pub async fn adopt_relay(self: &Arc<Self>, node_hex: String) {
         let hex = node_hex.trim().to_lowercase();
         if hex.len() != 64 {
@@ -719,7 +917,10 @@ impl Engine {
         for c in self.social.circles() {
             {
                 let mut p = self.prefs.lock().unwrap();
-                p.relay_nodes.insert(c.id.clone(), hex.clone());
+                let list = p.relays.entry(c.id.clone()).or_default();
+                if !list.contains(&hex) {
+                    list.push(hex.clone());
+                }
                 let _ = p.save(&self.paths);
             }
             if let Ok(sealed) = self.social.seal_circle_media(c.id.clone(), hex.clone().into_bytes()) {
@@ -733,14 +934,88 @@ impl Engine {
         self.poll_mailbox().await;
     }
 
-    async fn relay_client_for(self: &Arc<Self>, node_hex: &str) -> Option<Arc<RelayClient>> {
-        let mut clients = self.relay_clients.lock().await;
-        if let Some(c) = clients.get(node_hex) {
-            return Some(c.clone());
+    /// Drop a relay from every circle (and forget its cached connection + health).
+    pub async fn forget_relay(self: &Arc<Self>, node_hex: String) {
+        let hex = node_hex.trim().to_lowercase();
+        {
+            let mut p = self.prefs.lock().unwrap();
+            for list in p.relays.values_mut() {
+                list.retain(|h| h != &hex);
+            }
+            let _ = p.save(&self.paths);
         }
-        let c = RelayClient::connect(self.seed.to_vec(), node_hex.to_string()).await.ok()?;
-        clients.insert(node_hex.to_string(), c.clone());
-        Some(c)
+        self.relay_clients.lock().await.remove(&hex);
+        self.relay_health.lock().unwrap().remove(&hex);
+        self.emit_changed();
+    }
+
+    /// (node_hex, reachable, is_hosted_by_us) for every distinct adopted relay — for the UI.
+    pub fn relays_detail(&self) -> Vec<(String, bool, bool)> {
+        let now = now_ms();
+        let hosted = self.relay_host.lock().unwrap().as_ref().map(|h| h.node_id_hex());
+        let mut seen = std::collections::BTreeSet::new();
+        let prefs = self.prefs.lock().unwrap();
+        let health = self.relay_health.lock().unwrap();
+        let mut out = vec![];
+        for list in prefs.relays.values() {
+            for hex in list {
+                if seen.insert(hex.clone()) {
+                    let reachable = health.get(hex).map(|h| h.available(now)).unwrap_or(true);
+                    out.push((hex.clone(), reachable, hosted.as_deref() == Some(hex.as_str())));
+                }
+            }
+        }
+        out
+    }
+
+    /// The redundant relay set for a circle (mirrored writes, fallback reads).
+    fn relays_for(&self, circle_id: &str) -> Vec<String> {
+        self.prefs.lock().unwrap().relays.get(circle_id).cloned().unwrap_or_default()
+    }
+
+    fn relay_available(&self, node_hex: &str) -> bool {
+        let now = now_ms();
+        self.relay_health.lock().unwrap().get(node_hex).map(|h| h.available(now)).unwrap_or(true)
+    }
+
+    fn mark_relay_ok(&self, node_hex: &str) {
+        self.relay_health.lock().unwrap().entry(node_hex.to_string()).or_default().record_success();
+    }
+
+    fn mark_relay_fail(&self, node_hex: &str) {
+        let now = now_ms();
+        self.relay_health.lock().unwrap().entry(node_hex.to_string()).or_default().record_failure(now);
+    }
+
+    async fn relay_client_for(self: &Arc<Self>, node_hex: &str) -> Option<Arc<RelayClient>> {
+        {
+            let clients = self.relay_clients.lock().await;
+            if let Some(c) = clients.get(node_hex) {
+                return Some(c.clone());
+            }
+        }
+        // Skip a relay that's in its backoff window — try the others instead.
+        if !self.relay_available(node_hex) {
+            return None;
+        }
+        match RelayClient::connect(self.seed.to_vec(), node_hex.to_string()).await {
+            Ok(c) => {
+                self.mark_relay_ok(node_hex);
+                self.relay_clients.lock().await.insert(node_hex.to_string(), c.clone());
+                Some(c)
+            }
+            Err(e) => {
+                log::debug!("relay connect failed ({node_hex}): {e}");
+                self.mark_relay_fail(node_hex);
+                None
+            }
+        }
+    }
+
+    /// On a put/list/get failure: back the relay off and drop its cached connection.
+    async fn relay_failed(self: &Arc<Self>, node_hex: &str) {
+        self.mark_relay_fail(node_hex);
+        self.relay_clients.lock().await.remove(node_hex);
     }
 
     fn mailbox_key(circle_id: &str, env: &[u8]) -> String {
@@ -772,26 +1047,23 @@ impl Engine {
 
     async fn upload_event(self: &Arc<Self>, circle_id: &str, env: &[u8]) {
         let key = Self::mailbox_key(circle_id, env);
-        // 1) Haven relay node over iroh (if a circle relay is configured).
-        let relay_node = self.prefs.lock().unwrap().relay_nodes.get(circle_id).cloned();
-        if let Some(node_hex) = relay_node {
-            let already = self.dyn_state.lock().unwrap().seen_mailbox.contains(&key);
-            if !already {
-                if let Some(client) = self.relay_client_for(&node_hex).await {
-                    match client.put(key.clone(), env.to_vec()).await {
-                        Ok(()) => {
-                            self.dyn_state.lock().unwrap().seen_mailbox.insert(key.clone());
-                            self.dyn_state.lock().unwrap().relay_active = true;
-                        }
-                        Err(e) => {
-                            log::debug!("mailbox put failed: {e}");
-                            self.relay_clients.lock().await.remove(&node_hex);
-                        }
+        // 1) Mirror to EVERY configured Haven relay (redundancy). Content-addressed keys make
+        //    re-puts idempotent, and a relay in backoff is skipped — graceful fallback.
+        for node_hex in self.relays_for(circle_id) {
+            if let Some(client) = self.relay_client_for(&node_hex).await {
+                match client.put(key.clone(), env.to_vec()).await {
+                    Ok(()) => {
+                        self.mark_relay_ok(&node_hex);
+                        self.dyn_state.lock().unwrap().relay_active = true;
+                    }
+                    Err(e) => {
+                        log::debug!("mailbox put failed ({node_hex}): {e}");
+                        self.relay_failed(&node_hex).await;
                     }
                 }
             }
         }
-        // 2) BYO S3 bucket (content-addressed, so re-puts are idempotent).
+        // 2) BYO S3 bucket — an additional, independent mailbox (also idempotent).
         if let Some(s3) = self.s3_client().await {
             if s3.put(&key, env).await.is_ok() {
                 self.dyn_state.lock().unwrap().relay_active = true;
@@ -800,7 +1072,7 @@ impl Engine {
     }
 
     async fn backfill_mailbox(self: &Arc<Self>, circle_id: &str) {
-        let has_relay = self.prefs.lock().unwrap().relay_nodes.get(circle_id).is_some();
+        let has_relay = !self.relays_for(circle_id).is_empty();
         let has_s3 = self.prefs.lock().unwrap().s3.is_some();
         if !has_relay && !has_s3 {
             return;
@@ -822,22 +1094,27 @@ impl Engine {
 
     pub async fn poll_mailbox(self: &Arc<Self>) {
         let mut changed = false;
-        let relay_nodes: Vec<(String, String)> = self
-            .prefs
-            .lock()
-            .unwrap()
-            .relay_nodes
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        for (circle_id, node_hex) in relay_nodes {
+        // (circle_id, relay_node_hex) for every circle × every configured relay — reading from
+        // all of them means a message present on any reachable relay still arrives.
+        let relay_targets: Vec<(String, String)> = {
+            let prefs = self.prefs.lock().unwrap();
+            prefs
+                .relays
+                .iter()
+                .flat_map(|(cid, list)| list.iter().map(move |hex| (cid.clone(), hex.clone())))
+                .collect()
+        };
+        for (circle_id, node_hex) in relay_targets {
             let Some(client) = self.relay_client_for(&node_hex).await else { continue };
             let prefix = format!("haven/mailbox/{circle_id}/");
             let keys = client.list(prefix).await;
+            self.mark_relay_ok(&node_hex);
             if !keys.is_empty() {
                 self.dyn_state.lock().unwrap().relay_active = true;
             }
             for key in keys {
+                // seen_mailbox is keyed by the content-addressed key, so the same envelope
+                // mirrored on several relays is ingested exactly once.
                 if self.dyn_state.lock().unwrap().seen_mailbox.contains(&key) {
                     continue;
                 }
@@ -983,10 +1260,13 @@ impl Engine {
     async fn upload_media(self: &Arc<Self>, circle_id: &str, reference: &str) {
         let Some(blob) = self.media.raw_sealed(reference) else { return };
         let key = Self::media_key(reference);
-        let relay_node = self.prefs.lock().unwrap().relay_nodes.get(circle_id).cloned();
-        if let Some(node_hex) = relay_node {
+        // Mirror the sealed media blob to every relay (redundancy).
+        for node_hex in self.relays_for(circle_id) {
             if let Some(client) = self.relay_client_for(&node_hex).await {
-                let _ = client.put(key.clone(), blob.clone()).await;
+                match client.put(key.clone(), blob.clone()).await {
+                    Ok(()) => self.mark_relay_ok(&node_hex),
+                    Err(_) => self.relay_failed(&node_hex).await,
+                }
             }
         }
         if let Some(s3) = self.s3_client().await {
@@ -996,10 +1276,11 @@ impl Engine {
 
     async fn fetch_media_from_relay(self: &Arc<Self>, circle_id: &str, reference: &str) -> bool {
         let key = Self::media_key(reference);
-        let relay_node = self.prefs.lock().unwrap().relay_nodes.get(circle_id).cloned();
-        if let Some(node_hex) = relay_node {
+        // Try each relay in turn; the first that has the blob wins (graceful fallback).
+        for node_hex in self.relays_for(circle_id) {
             if let Some(client) = self.relay_client_for(&node_hex).await {
                 if let Some(blob) = client.get(key.clone()).await {
+                    self.mark_relay_ok(&node_hex);
                     self.media.write_raw_sealed(reference, &blob);
                     return true;
                 }
@@ -1090,6 +1371,10 @@ impl Engine {
 
     pub fn add_local_media(&self, circle_id: &str, bytes: &[u8], is_video: bool) -> String {
         self.media.store(&self.social, circle_id, bytes, is_video)
+    }
+
+    pub fn add_local_audio(&self, circle_id: &str, bytes: &[u8]) -> String {
+        self.media.store_kind(&self.social, circle_id, bytes, crate::localmedia::MediaKind::Audio)
     }
 
     /// Decrypt a stored media ref for display, trying the given circle then any circle.

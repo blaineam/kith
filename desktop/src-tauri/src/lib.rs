@@ -6,6 +6,9 @@ mod callwire;
 mod commands;
 mod engine;
 mod localmedia;
+mod relayhealth;
+mod scheduled;
+mod secret;
 mod store;
 mod wire;
 
@@ -35,10 +38,51 @@ fn ensure_seed() -> Result<[u8; 32]> {
     Ok(seed)
 }
 
+/// Resolve the active identity's seed + data dir, migrating a legacy single-identity install
+/// into the roster on first run (the legacy identity keeps the existing flat data dir).
+fn ensure_active_identity() -> Result<([u8; 32], Paths)> {
+    let base = Paths::resolve()?;
+    let mut ids = store::Identities::load(&base);
+
+    if ids.is_empty() {
+        // First run (or pre-roster install): adopt the legacy seed, or mint a fresh identity.
+        let seed = match store::load_seed()? {
+            Some(s) => s,
+            None => {
+                let acct: Arc<Account> = Account::generate();
+                let s: [u8; 32] = acct
+                    .secret_seed()
+                    .try_into()
+                    .map_err(|_| anyhow!("generated seed is not 32 bytes"))?;
+                store::save_seed(&s)?;
+                s
+            }
+        };
+        let hex = Account::from_seed(seed.to_vec())
+            .map_err(|e| anyhow!("derive node id: {e}"))?
+            .node_id_hex();
+        store::save_identity_seed(&hex, &seed)?;
+        ids.add(&hex, "Identity 1"); // first identity → legacy root, active
+        ids.save(&base)?;
+        return Ok((seed, Paths::resolve_for("")?));
+    }
+
+    let entry = ids
+        .active_entry()
+        .cloned()
+        .ok_or_else(|| anyhow!("roster has no active identity"))?;
+    let seed = match store::load_identity_seed(&entry.node_hex)? {
+        Some(s) => s,
+        None => store::load_seed()?.ok_or_else(|| anyhow!("active identity seed missing"))?,
+    };
+    // Keep the legacy `master-seed` mirrored to the active identity so the headless relay follows.
+    let _ = store::save_seed(&seed);
+    Ok((seed, Paths::resolve_for(&entry.dir)?))
+}
+
 /// Run the full GUI app.
 pub fn run() {
-    let paths = Paths::resolve().expect("resolve app data dir");
-    let seed = ensure_seed().expect("load or create identity");
+    let (seed, paths) = ensure_active_identity().expect("load or create identity");
     let engine = Engine::new(paths, seed).expect("build engine");
 
     let setup_engine = engine.clone();
@@ -46,6 +90,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(engine)
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -53,6 +101,11 @@ pub fn run() {
             let e = setup_engine.clone();
             tauri::async_runtime::spawn(async move {
                 e.start().await;
+                // If the user opted in, host the relay automatically — combined with
+                // launch-on-login this makes the desktop app a reboot-surviving relay.
+                if e.host_on_launch() {
+                    let _ = e.start_hosting().await;
+                }
             });
 
             // System tray: show the window, toggle the relay, or quit. The relay keeps running
@@ -120,13 +173,27 @@ pub fn run() {
             commands::start_hosting,
             commands::stop_hosting,
             commands::adopt_relay,
+            commands::relays,
+            commands::forget_relay,
+            commands::autostart_status,
+            commands::set_autostart,
             commands::add_media,
+            commands::add_audio,
             commands::media_data_url,
+            commands::schedule_message,
+            commands::scheduled,
+            commands::cancel_scheduled,
             commands::call_group_invite,
             commands::call_accept,
             commands::call_hangup,
             commands::call_signal,
             commands::my_node_hex,
+            commands::identities,
+            commands::add_identity,
+            commands::import_identity,
+            commands::rename_identity,
+            commands::remove_identity,
+            commands::switch_identity,
             commands::s3_status,
             commands::s3_configure,
             commands::s3_clear,
@@ -137,17 +204,18 @@ pub fn run() {
         .expect("error while running Haven");
 }
 
-/// Run only the circle relay/mailbox — no window. Mirrors the Mac app's invisible relay and the
-/// standalone `haven-relay`: serves E2E-sealed blobs it can never read, identified by a stable
-/// relay-specific node id derived from this device's seed.
+/// Run with no window. Serves the circle relay/mailbox (E2E-sealed blobs it can never read) AND
+/// runs the active identity's engine so **scheduled messages dispatch and the mailbox syncs even
+/// with the GUI closed** — leave this running on an always-on machine and "send later" works
+/// without the app open. The messaging keys stay on this machine (the relay still never sees
+/// plaintext); the relay node id is derived from a distinct relay-specific seed.
 pub fn run_headless() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("tokio runtime");
     rt.block_on(async {
-        let paths = Paths::resolve().expect("resolve app data dir");
-        let seed = ensure_seed().expect("load or create identity");
+        let (seed, paths) = ensure_active_identity().expect("load or create identity");
 
         // Stable relay-specific seed, distinct from the messaging identity (per the core's contract).
         let mut hasher = Sha256::new();
@@ -162,18 +230,26 @@ pub fn run_headless() {
             .expect("start relay");
         let node_hex = handle.node_id_hex();
 
+        // Build + start the engine for the active identity: this brings up the messaging node,
+        // the 15s mailbox poll, and the scheduled-message dispatcher (which also flushes anything
+        // overdue on launch). No AppHandle → notifications/UI events are simply no-ops.
+        let engine = Engine::new(paths.clone(), seed).expect("build engine");
+        engine.start().await;
+
         let prefs = store::Prefs::load(&paths);
         let members: Vec<String> = prefs.contacts.iter().map(|c| c.id_hex.clone()).collect();
         let link = haven_ffi::make_relay_link(node_hex.clone(), members);
+        let pending = engine.list_scheduled().len();
 
-        println!("Haven relay running.");
+        println!("Haven relay + scheduler running.");
         println!("  relay node id : {node_hex}");
         println!("  relay link    : {link}");
         println!("  storage       : {}", dir.display());
+        println!("  scheduled     : {pending} message(s) queued — they'll send while this runs");
         println!("Share the relay link with your circle, then leave this running. Ctrl-C to stop.");
 
         let _ = tokio::signal::ctrl_c().await;
-        println!("\nStopping relay.");
+        println!("\nStopping.");
         drop(handle);
     });
 }

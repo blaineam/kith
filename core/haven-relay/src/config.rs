@@ -49,6 +49,11 @@ pub struct Config {
     pub rclone_bin: Option<String>,
     /// Optional explicit rclone.conf path (so a remote resolves without env wrangling).
     pub rclone_config: Option<String>,
+    /// Sibling relay node ids (64-hex) to mesh-replicate the mailbox with — every ~30s this
+    /// relay pulls any sealed blob a peer holds that it lacks (and vice-versa, as peers do the
+    /// same), so the circle's mailbox self-heals and any relay can join/leave freely. Only the
+    /// local-disk store backend meshes (S3/rclone backends are external). `--peer <hex>` (repeatable).
+    pub peers: Vec<String>,
 }
 
 /// On-disk JSON config (the `--config` form), all fields optional except `link`.
@@ -69,6 +74,9 @@ struct FileConfig {
     rclone_bin: Option<String>,
     #[serde(default)]
     rclone_config: Option<String>,
+    /// Sibling relay node ids (64-hex) to mesh-replicate the mailbox with.
+    #[serde(default)]
+    peers: Option<Vec<String>>,
 }
 
 fn default_s3_port() -> u16 {
@@ -127,8 +135,16 @@ impl Config {
             StoreBackend::Local
         };
 
+        // Repeatable `--peer <hex>` flags → sibling relays to mesh-replicate with.
+        let peers: Vec<String> = args
+            .windows(2)
+            .filter(|w| w[0] == "--peer")
+            .map(|w| w[1].trim().to_lowercase())
+            .filter(|h| h.len() == 64)
+            .collect();
+
         let seed = load_or_create_seed(&data_dir)?;
-        Ok(Self { link, data_dir, seed, backend, s3_port, rclone_bin, rclone_config })
+        Ok(Self { link, data_dir, seed, backend, s3_port, rclone_bin, rclone_config, peers })
     }
 
     fn from_file(path: &str) -> Result<Self> {
@@ -164,6 +180,13 @@ impl Config {
             s3_port: fc.s3_port,
             rclone_bin: fc.rclone_bin,
             rclone_config: fc.rclone_config,
+            peers: fc
+                .peers
+                .unwrap_or_default()
+                .into_iter()
+                .map(|h| h.trim().to_lowercase())
+                .filter(|h| h.len() == 64)
+                .collect(),
         })
     }
 }

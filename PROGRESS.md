@@ -6,6 +6,48 @@ Updated continuously. (Times in your local day.)
 ---
 
 ## 🆕 Latest wave (built, batched for next upload)
+- **CLI self-installs auto-start**: `haven-relay service install` wires up reboot-survival on
+  the current OS itself (systemd user unit / launchd agent / Windows Scheduled Task; crontab
+  `@reboot` fallback) — `service uninstall` reverses it. No more hand-editing unit files.
+- **Desktop logo now matches iOS/Android**: regenerated the whole Tauri icon set (.png/.ico/
+  .icns + Store logos) from the real `apple/.../icon_1024.png`, so the constellation glyph is
+  pixel-identical across iPhone, Android, Windows, and Linux.
+- **Tor honesty**: removed the "there's an opt-in onion/Tor mode" claim from the site + softened
+  the design docs to "(planned, not shipped)". Haven is iroh/QUIC (UDP); Tor's SOCKS can't carry
+  UDP, so real onion routing needs a TCP transport — it is **not** built. Today's IP privacy is
+  relay-mediated (peers never see each other's IP) + run-behind-your-own-VPN.
+- **Relays survive reboot, everywhere**: Windows gets a one-line `install.ps1` that downloads
+  `haven-relay.exe` (x86-64 + Arm64) **and registers a logon Scheduled Task** so it relaunches
+  on reboot; macOS (launchd) + Linux (systemd) already did. The desktop app added an **"Always-on
+  relay"** toggle (launch-on-login via `tauri-plugin-autostart` + auto-host-on-launch) so any
+  official client is a reboot-surviving relay with no terminal. CI now builds the Windows relay
+  `.exe`. Site/README corrected: **storage is only a Haven relay or your own S3 bucket** (dropped
+  iCloud/Drive/Dropbox/NAS copy), and the "keys never leave the device" line is now honest about
+  Apple's E2E iCloud-Keychain sync. Designed **relay-mesh self-replication** (RELAY-AND-DEPLOY.md).
+- **Relay mesh — self-replicating mailboxes**: relays now replicate among themselves. Each
+  pulls any sealed blob a sibling holds that it lacks (~30s anti-entropy, content-addressed →
+  conflict-free set-union), so a relay can **join or leave freely** and the mailbox self-heals —
+  far more resilient. `haven-net` `BlobServer::sync_pull_from` (pure `keys_to_pull` unit-tested +
+  caps), `haven-relay --peer`/JSON `peers`, and `RelayServerHandle::sync_from` so the **in-app**
+  relay auto-meshes every adopted sibling (any official client = a full mesh node). Security
+  review of the anti-entropy still pending before production reliance.
+- **Relay redundancy + graceful fallback**: a circle can now have **multiple relays**. Posts
+  and sealed media are mirrored to *every* relay (idempotent, content-addressed) and reads fan
+  out across all of them, so delivery survives any single relay dying. A failed relay drops into
+  **exponential backoff** (5s→5m) and is skipped until it recovers; members auto-pool each
+  other's relays. Per-relay health is unit-tested; the desktop Relay view shows each relay's
+  reachability with add/remove. Layers under existing direct-P2P + BYO-S3 fallback.
+- **Desktop iOS-parity wave** (code + 26 Rust unit tests, ready to device-test): the
+  Tauri client gained **in-app camera** (live preview + 6 filters baked into photos + video
+  capture), **voice messages** (sealed `a:` audio refs + inline `<audio>`), **secret /
+  screenshot-protected messages** (same `\u{2}` wire marker as iOS — interops byte-for-byte;
+  concealed in previews/notifications), **scheduled "send later" messages** (serverless queue
+  + in-process timer; `haven-desktop --headless` now also runs the scheduler so sends fire with
+  the GUI closed on an always-on box — relay-backed timed-release for fully-offline senders is
+  designed in `docs/SCHEDULED-MESSAGES.md`), and a **multi-identity switcher** (per-identity seed + data dir; switch
+  relaunches). Plus a visual/motion rewrite that makes the desktop UI *feel* like the iOS app
+  (glass surfaces, masonry feed, spring motion, double-tap-❤️, light/dark) and music-picker /
+  circle-management / video-mute wiring.
 - **Linux, first-class**: the Tauri desktop client + the headless `haven-relay` daemon now
   target **Ubuntu, Debian, Raspberry Pi OS, Arch, and SteamOS/Steam Deck**. GUI ships as
   `.deb`/`.rpm`/AppImage, an **AUR** package (Arch), and a **Flatpak** (Steam Deck, via

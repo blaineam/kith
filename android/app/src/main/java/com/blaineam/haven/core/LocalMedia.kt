@@ -117,7 +117,11 @@ fun isVideoUri(context: Context, uri: Uri): Boolean =
  * Reads the URI's bytes ONCE (re-opening a picker content stream often fails → blank previews),
  * samples down to avoid OOM on large photos, and applies EXIF rotation (so photos aren't sideways).
  */
-fun loadAndDownscale(context: Context, uri: Uri, maxDim: Int = 2048, quality: Int = 82): ByteArray? = runCatching {
+fun loadAndDownscale(
+    context: Context, uri: Uri,
+    maxDim: Int = if (ProfileStore.get(context).autoOptimize) 2048 else 4096,
+    quality: Int = if (ProfileStore.get(context).autoOptimize) 82 else 95,
+): ByteArray? = runCatching {
     val raw = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
         ?: return null.also { android.util.Log.w("LocalMedia", "openInputStream null for $uri") }
 

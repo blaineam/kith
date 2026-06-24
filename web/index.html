@@ -39,45 +39,61 @@
   <!-- ── Invite slot: filled by JS when the URL carries an invite payload ── -->
   <div class="container" id="invite-slot"></div>
 
-  <!-- ── Hero ── -->
-  <section class="hero" id="hero">
+  <!-- ════════════════════════════════════════════════════════════════════
+       MASTHEAD HERO — magazine cover with overlapping device renders
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="mag-hero" id="hero">
     <div class="container">
-      <span class="eyebrow reveal">Your friends &amp; your family</span>
-      <h1 class="reveal">A private home<br /><span class="h-grad">for your people.</span></h1>
-      <p class="lead reveal">
-        Haven is a calm little social app just for the people you love. Share photos, stories,
-        messages and calls — all end-to-end encrypted, with no servers, no ads, and no tracking.
-        Nothing you share ever leaves your circle.
-      </p>
-
-      <div class="btn-row reveal">
-        <a class="btn" href="features.html">See everything Haven does</a>
-        <a class="btn ghost" href="relay.html">Run your own relay</a>
+      <div class="issue-line reveal">
+        <span>Haven</span><span class="dot-sep"></span>
+        <span class="accent">The Private Edition</span><span class="dot-sep"></span>
+        <span>End-to-end encrypted</span><span class="dot-sep"></span>
+        <span>No servers · No ads</span>
       </div>
 
-      <div class="platforms reveal" style="margin-top:30px">
-        <span class="pill"><span class="ic"></span>iPhone &amp; iPad</span>
-        <span class="pill"><span class="ic"></span>Mac</span>
-        <span class="pill"><span class="ic"></span>Android</span>
-        <span class="pill"><span class="ic"></span>Windows</span>
-        <span class="pill"><span class="ic"></span>Linux</span>
+      <div class="mag-hero-grid">
+        <div class="reveal">
+          <h1 class="mag-title">A private home<br /><span class="h-grad">for your people.</span></h1>
+          <p class="mag-deck">
+            Haven is a calm little social app just for the people you love. Share photos, stories,
+            messages and calls — all end-to-end encrypted, with no servers, no ads, and no tracking.
+            Nothing you share ever leaves your circle.
+          </p>
+          <div class="btn-row" style="justify-content:flex-start">
+            <a class="btn" href="features.html">See everything Haven does</a>
+            <a class="btn ghost" href="relay.html">Run your own relay</a>
+          </div>
+          <div class="platforms" style="justify-content:flex-start;margin-top:26px">
+            <span class="pill"><span class="ic"></span>iPhone &amp; iPad</span>
+            <span class="pill"><span class="ic"></span>Mac</span>
+            <span class="pill"><span class="ic"></span>Android</span>
+            <span class="pill"><span class="ic"></span>Windows</span>
+            <span class="pill"><span class="ic"></span>Linux</span>
+          </div>
+          <p class="mag-byline">
+            <b>One-time price.</b> No subscription. No monthly cost, ever.
+          </p>
+        </div>
+
+        <div class="hero-renders reveal" aria-hidden="false">
+          <img class="render r-back" src="assets/renders/phone-story.png"
+               alt="Haven story view on iPhone — a full-screen photo story shared inside a private circle"
+               loading="eager" width="660" height="1434" />
+          <img class="render r-front" src="assets/renders/phone-feed.png"
+               alt="Haven feed on iPhone — posts from a small private circle of family and friends"
+               loading="eager" width="660" height="1434" />
+        </div>
       </div>
-      <p class="dim reveal" style="margin-top:16px;font-size:13.5px">
-        One-time price. No subscription. No monthly cost, ever.
-      </p>
     </div>
   </section>
 
-  <!-- ── The one-sentence promise ── -->
+  <!-- ── Lede / one-sentence promise (drop cap) ── -->
   <section class="section tight">
     <div class="container">
-      <div class="card reveal center" style="padding:34px 26px">
-        <p style="font-size:clamp(20px,3.4vw,28px);font-weight:750;line-height:1.3;margin:0;letter-spacing:-.02em">
+      <div class="card reveal" style="padding:clamp(28px,5vw,44px) clamp(22px,4vw,40px);max-width:880px;margin:0 auto">
+        <p class="drop-cap" style="font-size:clamp(19px,2.9vw,26px);font-weight:650;line-height:1.42;margin:0;letter-spacing:-.015em">
           Imagine a family photo album and a group chat that
-          <span class="h-grad">only your people can ever open</span> —
-          with no company in the middle.
-        </p>
-        <p class="kicker center" style="margin:14px auto 0">
+          <span class="h-grad">only your people can ever open</span> — with no company in the middle.
           That's Haven. The keys that lock your moments live on your phone, not on a server.
           Even we can't read them.
         </p>
@@ -85,69 +101,166 @@
     </div>
   </section>
 
-  <!-- ── Three pillars ── -->
+  <!-- ════════════════════════════════════════════════════════════════════
+       SPREAD 01 — The feed (image left, copy right is default)
+  ═════════════════════════════════════════════════════════════════════ -->
   <section class="section" id="why">
     <div class="container">
-      <div class="center reveal">
-        <span class="eyebrow">Why Haven feels different</span>
-        <h2 style="font-size:clamp(26px,4.5vw,40px)">Built like a quiet room, not a stadium.</h2>
-        <p class="lead">No likes to chase, no strangers, no algorithm deciding what you see. Just your circle.</p>
-      </div>
-
-      <div class="grid cols-3" style="margin-top:36px">
-        <article class="card feature reveal">
-          <div class="ficon" aria-hidden="true">🔒</div>
-          <h3>Locked to your circle</h3>
-          <p>Everything is end-to-end encrypted before it leaves your device — and protected against even future quantum computers.</p>
-          <p class="why"><b>Why it matters:</b> the only people who can read your posts are the people you invited. Full stop.</p>
-        </article>
-        <article class="card feature reveal">
-          <div class="ficon" aria-hidden="true">🛰️</div>
-          <h3>No servers, no accounts</h3>
-          <p>Your posts travel peer-to-peer, device to device. There's no big database of you sitting in a data center somewhere.</p>
-          <p class="why"><b>Why it matters:</b> there's nothing to hack, sell, subpoena, or shut down. You don't even make an account.</p>
-        </article>
-        <article class="card feature reveal">
-          <div class="ficon" aria-hidden="true">🌿</div>
-          <h3>Calm by design</h3>
-          <p>No ads, no tracking, no engagement traps. Just photos, stories, messages and calls with people you actually know.</p>
-          <p class="why"><b>Why it matters:</b> a feed that exists to connect you, not to keep you scrolling.</p>
-        </article>
+      <div class="spread reveal">
+        <div class="spread-art render-wrap float">
+          <img class="render tilt" src="assets/renders/phone-feed.png"
+               alt="Haven home feed on iPhone — a calm chronological feed of posts from one private circle"
+               loading="lazy" width="660" height="1434" />
+        </div>
+        <div class="spread-copy">
+          <div class="spread-num">01 — The feed</div>
+          <span class="eyebrow">Built like a quiet room, not a stadium</span>
+          <h2>A feed that exists to connect you, not to keep you scrolling.</h2>
+          <p class="lead">
+            No likes to chase, no strangers, no algorithm deciding what you see. Just the people
+            you actually know, in a small private circle you control.
+          </p>
+          <ul class="points">
+            <li><span class="dot"></span><span><b>Circles</b> — small private groups for family, close friends, a team. You choose who's in.</span></li>
+            <li><span class="dot"></span><span><b>No accounts, no profiles</b> — there's no central database of you sitting in a data center.</span></li>
+            <li><span class="dot"></span><span><b>Calm by design</b> — no ads, no tracking, no engagement traps.</span></li>
+          </ul>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- ── Feature teaser ── -->
+  <!-- ── Pull quote interlude ── -->
   <section class="section tight">
     <div class="container">
-      <div class="card reveal" style="padding:30px 26px">
-        <div class="center">
-          <span class="eyebrow">A quick tour</span>
-          <h2 style="font-size:clamp(24px,4vw,34px)">Everything you'd want, kept private.</h2>
+      <blockquote class="pullquote reveal">
+        <span class="pq-mark">“</span>The keys that lock your moments live on
+        <span class="h-grad">your phone</span>, not on a server.<span class="pq-mark">”</span>
+        <div class="pq-cite">The Haven promise</div>
+      </blockquote>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       SPREAD 02 — Stories (flipped: copy left, image right)
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="section">
+    <div class="container">
+      <div class="spread flip reveal">
+        <div class="spread-art render-wrap float">
+          <img class="render tilt-r" src="assets/renders/phone-story.png"
+               alt="Haven story view on iPhone — a full-screen photo story with a film-style look"
+               loading="lazy" width="660" height="1434" />
         </div>
-        <ul class="points" style="max-width:760px;margin:18px auto 0">
-          <li><span class="dot"></span><span><b>Circles</b> — small private groups for family, close friends, a team. You choose who's in.</span></li>
-          <li><span class="dot"></span><span><b>Posts &amp; stories</b> — photos and videos with beautiful film-style filters, including a warm Kodak Gold look.</span></li>
-          <li><span class="dot"></span><span><b>Messages &amp; group calls</b> — direct messages plus voice and video calls with screen sharing.</span></li>
-          <li><span class="dot"></span><span><b>Music on posts</b> — attach a song so your moment has a soundtrack, played through each viewer's own subscription.</span></li>
-          <li><span class="dot"></span><span><b>Nearby sharing</b> — pass things device-to-device even with no internet at all.</span></li>
-          <li><span class="dot"></span><span><b>Face ID locks &amp; multi-device</b> — lock private circles behind your face, and use Haven on all your devices.</span></li>
-        </ul>
-        <div class="btn-row">
-          <a class="btn" href="features.html">Explore every feature</a>
+        <div class="spread-copy">
+          <div class="spread-num">02 — Posts &amp; stories</div>
+          <span class="eyebrow">Moments, beautifully kept</span>
+          <h2>Photos and stories with a warm, film-style soul.</h2>
+          <p class="lead">
+            Share photos and videos with beautiful film-style filters — including a warm Kodak Gold
+            look — and add a song so your moment has a soundtrack, played through each viewer's own
+            music subscription.
+          </p>
+          <ul class="points">
+            <li><span class="dot"></span><span><b>Film-style filters</b> for posts and stories, including a warm Kodak Gold look.</span></li>
+            <li><span class="dot"></span><span><b>Music on posts</b> — attach a song, played through each viewer's own subscription.</span></li>
+            <li><span class="dot"></span><span><b>Encrypted before it leaves</b> — every photo and video is locked to your circle.</span></li>
+          </ul>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       SHOWCASE — Calls & messages, tablet-scale band
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="section tight">
+    <div class="container">
+      <div class="showcase reveal">
+        <div class="showcase-grid">
+          <div class="render-wrap">
+            <img class="render" src="assets/renders/tablet-thread.png"
+                 alt="Haven conversation thread on iPad — a private message thread with reactions"
+                 loading="lazy" width="900" height="1200" />
+          </div>
+          <div class="spread-copy">
+            <div class="spread-num">03 — Messages &amp; calls</div>
+            <span class="eyebrow">Stay close, stay private</span>
+            <h2>Direct messages, group calls, screen sharing.</h2>
+            <p class="lead">
+              Talk in real time with voice and video calls for your whole circle, share your screen,
+              and keep one continuous conversation — all end-to-end encrypted.
+            </p>
+            <ul class="points">
+              <li><span class="dot"></span><span><b>Group voice &amp; video calls</b> with screen sharing built in.</span></li>
+              <li><span class="dot"></span><span><b>Nearby sharing</b> — pass things device-to-device even with no internet at all.</span></li>
+              <li><span class="dot"></span><span><b>One app, every device</b> — iPhone, iPad, Mac, Android, Windows and Linux.</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       GALLERY STRIP — three phone renders, editorial caption
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="section">
+    <div class="container">
+      <div class="center reveal" style="margin-bottom:40px">
+        <span class="eyebrow">A quick tour</span>
+        <h2 style="font-size:clamp(26px,4.2vw,40px)">Everything you'd want, kept private.</h2>
+        <p class="lead">Calls, conversations, and a place that's truly yours — across every screen.</p>
+      </div>
+      <div class="gallery reveal">
+        <figure class="g-item" style="margin:0">
+          <img class="render" src="assets/renders/phone-call.png"
+               alt="Haven group video call on iPhone — three participants in an encrypted call"
+               loading="lazy" width="660" height="1434" />
+          <figcaption class="g-cap">Group calls &amp; screen share</figcaption>
+        </figure>
+        <figure class="g-item lift" style="margin:0">
+          <img class="render" src="assets/renders/phone-messages.png"
+               alt="Haven messages on iPhone — a list of private direct-message conversations"
+               loading="lazy" width="660" height="1434" />
+          <figcaption class="g-cap">Direct &amp; group messages</figcaption>
+        </figure>
+        <figure class="g-item" style="margin:0">
+          <img class="render" src="assets/renders/phone-you.png"
+               alt="Haven profile and settings on iPhone — your identity and circle controls"
+               loading="lazy" width="660" height="1434" />
+          <figcaption class="g-cap">Your space, your controls</figcaption>
+        </figure>
+      </div>
+      <div class="btn-row reveal">
+        <a class="btn" href="features.html">Explore every feature</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Pull quote: privacy ── -->
+  <section class="section tight">
+    <div class="container">
+      <div class="spread reveal" style="align-items:center">
+        <blockquote class="pullquote left" style="margin:0">
+          <span class="h-grad">We never</span> hold your keys.
+        </blockquote>
+        <p class="muted" style="font-size:17px;max-width:46ch">
+          The secret keys that unlock your content stay on your own devices — never on a server,
+          never with us. That single fact is what makes everything else on this page true.
+        </p>
       </div>
     </div>
   </section>
 
   <!-- ── Privacy / trust ── -->
-  <section class="section" id="privacy">
+  <section class="section" id="privacy" style="padding-top:24px">
     <div class="container">
       <div class="center reveal">
         <span class="eyebrow">Privacy, in plain words</span>
-        <h2 style="font-size:clamp(26px,4.5vw,40px)">Your keys never leave your phone.</h2>
+        <h2 style="font-size:clamp(26px,4.5vw,40px)">The honest version, no fine print.</h2>
         <p class="lead">
-          Here's the honest version of how Haven keeps your life yours — no asterisks, no fine print.
+          Here's how Haven keeps your life yours — what stays private, and the honest limits too.
         </p>
       </div>
 
@@ -156,9 +269,9 @@
           <h3 style="font-size:20px;margin-bottom:8px">What stays private</h3>
           <ul class="points" style="margin-top:6px">
             <li><span class="dot"></span><span>Every post, message, photo, video and call is <b>encrypted on your device</b> before it's sent.</span></li>
-            <li><span class="dot"></span><span>The secret keys that unlock your content <b>live only on your devices</b> — stored in the Secure Enclave on Apple devices.</span></li>
+            <li><span class="dot"></span><span>The secret keys that unlock your content <b>stay on your own devices</b> — in the Secure Enclave on Apple devices, the OS secure store elsewhere. The only way they sync between <i>your</i> devices is Apple's end-to-end-encrypted iCloud Keychain, which we can't read either. <b>We never hold them.</b></span></li>
             <li><span class="dot"></span><span>There's <b>no central account</b>, no profile database, no advertising ID, no analytics.</span></li>
-            <li><span class="dot"></span><span>Choose <b>your own storage</b> — your iCloud, your S3 bucket, your NAS. We never hold your keys.</span></li>
+            <li><span class="dot"></span><span>Choose <b>your own storage</b> — a Haven relay you (or a friend) run, or your own S3 bucket (S3/R2/B2). We run no storage and hold no credentials.</span></li>
           </ul>
         </div>
         <div class="card">
@@ -166,7 +279,7 @@
           <ul class="points" style="margin-top:6px">
             <li><span class="dot"></span><span>A <b>relay</b> (an optional helper) can see that <em>some</em> encrypted bytes passed through, but never what they say.</span></li>
             <li><span class="dot"></span><span>To deliver bytes to you, a relay <b>briefly handles your IP address</b> — that's just how the internet works. It's never logged, and never tied to who you are.</span></li>
-            <li><span class="dot"></span><span>Want full IP hiding? There's an <b>opt-in onion / Tor mode</b> for that.</span></li>
+            <li><span class="dot"></span><span>Friends <b>never see each other's IP</b> when a relay is in the path — only the relay does, briefly. For full IP hiding today, run Haven behind your own VPN; a built-in onion/Tor mode is on the roadmap, not shipped.</span></li>
             <li><span class="dot"></span><span>If someone steals your unlocked, malware-infected device, they have your device. No app on earth fixes that.</span></li>
           </ul>
         </div>
@@ -211,13 +324,46 @@ haven-relay run --link "haven-relay://circle#…"</code></pre>
     </div>
   </section>
 
+  <!-- ── Stat row ── -->
+  <section class="section tight">
+    <div class="container">
+      <div class="statrow reveal">
+        <div class="stat"><div class="n">0</div><div class="l">Servers holding your data</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">Ads &amp; trackers</div></div>
+        <div class="stat"><div class="n">$0</div><div class="l">Monthly cost, ever</div></div>
+        <div class="stat"><div class="n">5</div><div class="l">Platforms, one circle</div></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ── Final CTA ── -->
+  <!-- ════════════════════════════════════════════════════════════════════
+       DOWNLOAD THE BETA — per-platform links pulled live from the GitHub release
+  ═════════════════════════════════════════════════════════════════════ -->
+  <section class="section" id="download">
+    <div class="container">
+      <div class="center reveal">
+        <span class="eyebrow">The beta is here</span>
+        <h2 style="font-size:clamp(26px,4.5vw,40px)">Get <span class="h-grad">Haven</span> on every screen</h2>
+        <p class="lead">iPhone, iPad and Mac via TestFlight; Windows, Linux and Steam&nbsp;Deck straight from the latest release; a tiny relay for a Pi or server.</p>
+      </div>
+      <div class="dl-grid reveal" id="download-grid" aria-live="polite">
+        <p class="muted center" id="download-loading">Loading the latest release…</p>
+      </div>
+      <p class="muted small center" style="margin-top:16px">
+        Desktop &amp; relay builds come from the
+        <a class="inline" id="download-release-link" href="https://github.com/blaineam/haven/releases/latest" rel="noopener">latest GitHub release</a>.
+        It's an early beta — expect rough edges.
+      </p>
+    </div>
+  </section>
+
   <section class="section center">
     <div class="container reveal">
       <h2 style="font-size:clamp(28px,5vw,44px)">A smaller, kinder internet —<br /><span class="h-grad">just for your people.</span></h2>
       <p class="lead">Bring your circle home to Haven.</p>
       <div class="btn-row">
-        <a class="btn" href="features.html">Get started</a>
+        <a class="btn" href="#download">Get the beta</a>
         <a class="btn ghost" href="https://github.com/blaineam/haven" rel="noopener">View the source on GitHub</a>
       </div>
     </div>
@@ -331,6 +477,70 @@ haven-relay run --link "haven-relay://circle#…"</code></pre>
   window.addEventListener("hashchange", render);
 })();
 </script>
+
+<!-- Download section — fills per-platform links from the latest GitHub release. -->
+<script>
+(function () {
+  var REPO = "blaineam/haven";
+  // Public TestFlight invite link — set this once external testing is enabled in App Store Connect.
+  var APPLE_BETA_URL = "";
+  var grid = document.getElementById("download-grid");
+  if (!grid) return;
+
+  function btn(href, label, primary) {
+    if (!href) return '<span class="muted small">Building…</span>';
+    return '<a class="btn ' + (primary ? "" : "ghost") + '" href="' + href + '" rel="noopener">' + label + '</a>';
+  }
+  function card(title, sub, btns) {
+    return '<div class="dl-card"><h4>' + title + '</h4><div class="muted small">' + sub +
+           '</div><div class="dl-btns">' + btns.join("") + '</div></div>';
+  }
+  function appleCard() {
+    var b = APPLE_BETA_URL
+      ? btn(APPLE_BETA_URL, "Join the TestFlight beta", true)
+      : '<span class="muted small">TestFlight beta — invite required for now</span>';
+    return card("Apple — iPhone · iPad · Mac", "via TestFlight", [b]);
+  }
+
+  fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { headers: { Accept: "application/vnd.github+json" } })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (rel) {
+      var assets = rel.assets || [];
+      var pick = function (re) { for (var i = 0; i < assets.length; i++) if (re.test(assets[i].name)) return assets[i].browser_download_url; return null; };
+      var any = function (re) { return assets.some(function (a) { return re.test(a.name); }); };
+      var link = document.getElementById("download-release-link");
+      if (link && rel.html_url) link.href = rel.html_url;
+
+      var winBtns = [];
+      var exe = pick(/setup\.exe$/i) || pick(/\.exe$/i), msi = pick(/\.msi$/i);
+      if (exe) winBtns.push(btn(exe, "Installer (.exe)", true));
+      if (msi) winBtns.push(btn(msi, ".msi", false));
+
+      var linuxBtns = [];
+      var deb = pick(/_amd64\.deb$/i) || pick(/\.deb$/i), appimg = pick(/\.AppImage$/i), rpm = pick(/\.rpm$/i);
+      if (deb) linuxBtns.push(btn(deb, ".deb", true));
+      if (appimg) linuxBtns.push(btn(appimg, "AppImage", false));
+      if (rpm) linuxBtns.push(btn(rpm, ".rpm", false));
+
+      var flat = pick(/\.flatpak$/i);
+      var hasRelay = any(/^haven-relay-/i);
+
+      grid.innerHTML = [
+        appleCard(),
+        card("Windows", "x86-64", winBtns.length ? winBtns : [btn(null)]),
+        card("Linux", "Ubuntu · Debian · Fedora · Arch", linuxBtns.length ? linuxBtns : [btn(null)]),
+        card("SteamOS · Steam Deck", "Flatpak", [flat ? btn(flat, "Download Flatpak", true) : (rel.html_url ? btn(rel.html_url, "Get on GitHub", false) : btn(null))]),
+        card("Headless relay", "Pi · server · always-on", [hasRelay ? btn(rel.html_url, "All relay binaries", false) : btn(null)])
+      ].join("");
+    })
+    .catch(function () {
+      grid.innerHTML = appleCard() +
+        '<div class="dl-card"><h4>Windows · Linux · Steam Deck</h4><div class="muted small">desktop &amp; relay</div>' +
+        '<div class="dl-btns">' + btn("https://github.com/" + REPO + "/releases/latest", "Browse downloads on GitHub", true) + '</div></div>';
+    });
+})();
+</script>
+
 <script src="app.js" defer></script>
 </body>
 </html>

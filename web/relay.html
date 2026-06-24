@@ -353,7 +353,8 @@ cargo build --release -p haven-relay --target x86_64-pc-windows-gnu</code></pre>
         <b>On your IP address, honestly:</b> a relay <em>does</em> briefly handle your IP — that's
         physically how bytes reach you. Haven's hardened defaults mean it's <b>never logged, never
         persisted, and never linked to your identity</b> (peers authenticate to each other, never to the
-        relay). For total IP hiding there's an opt-in onion / Tor mode. The relay link itself carries
+        relay). For full IP hiding today, run Haven behind your own VPN; a built-in onion/Tor mode is on
+        the roadmap, not yet shipped. The relay link itself carries
         <b>no content key, no roster secret</b> — so adding a relay can never turn it into a content reader.
         Read the full <a class="inline" href="docs.html#threat">threat model</a>.
       </div>
@@ -366,21 +367,23 @@ cargo build --release -p haven-relay --target x86_64-pc-windows-gnu</code></pre>
       <div class="card reveal" style="padding:30px 26px">
         <div class="grid cols-2" style="align-items:center;gap:24px">
           <div>
-            <span class="eyebrow">Bring your own storage</span>
-            <h2 style="font-size:clamp(22px,4vw,30px)">Your media, on your storage.</h2>
+            <span class="eyebrow">Where your media lives</span>
+            <h2 style="font-size:clamp(22px,4vw,30px)">Your media, on storage you control.</h2>
             <p class="muted" style="margin-top:12px">
-              Prefer to keep your media on storage you already trust? Point Haven at your own iCloud, an
-              S3 bucket (AWS, Cloudflare R2, Backblaze B2), Google Drive, Dropbox, or a NAS. Whatever you
-              pick, your media is <b>encrypted before it's stored</b>, so the provider only ever holds
+              Haven keeps your media in one of exactly two places — both yours, neither ours. A
+              <b>Haven relay</b> (the free app on a PC, Mac, or a Raspberry Pi you leave running — or a
+              friend's) holds it on its own disk, or you point Haven at your own <b>S3-compatible
+              bucket</b> (AWS S3, Cloudflare R2, Backblaze B2, MinIO). Either way your media is
+              <b>end-to-end sealed before it's stored</b>, so the relay or bucket only ever holds
               ciphertext — and Haven never holds a single one of your credentials.
             </p>
           </div>
           <div>
             <ul class="points" style="margin-top:0">
-              <li><span class="dot"></span><span><b>Your iCloud</b> (default) — billed to your own quota; we host nothing.</span></li>
-              <li><span class="dot"></span><span><b>Custom S3 bucket</b> — endpoint + keys stored only in your device Keychain.</span></li>
-              <li><span class="dot"></span><span><b>Google Drive / Dropbox</b> — you sign in on the provider's own page (OAuth + PKCE); Haven keeps only a token, no client secret anywhere.</span></li>
-              <li><span class="dot"></span><span><b>We can't read, list, or revoke it</b> — we hold no credentials, by design.</span></li>
+              <li><span class="dot"></span><span><b>A Haven relay</b> — any official Haven app can host it, or run the tiny <code>haven-relay</code> on a Pi/server. Stores sealed blobs on its own disk; no cloud account.</span></li>
+              <li><span class="dot"></span><span><b>Your own S3 bucket</b> (S3 / R2 / B2 / MinIO) — endpoint + keys stored only in your device's secure store.</span></li>
+              <li><span class="dot"></span><span><b>Run several relays</b> — media is mirrored across them and reads fall back, so a circle survives any one relay going down.</span></li>
+              <li><span class="dot"></span><span><b>We can't read, list, or revoke it</b> — we hold no credentials and run no storage, by design.</span></li>
             </ul>
           </div>
         </div>

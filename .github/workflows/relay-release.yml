@@ -1,13 +1,15 @@
 name: relay-release
 
-# Cross-builds the headless `haven-relay` static binary for every Linux arch the installer
-# knows about, plus macOS, and publishes them as release assets named exactly what
-# `relay/install.sh` downloads: `haven-relay-<target>`. Also builds .deb packages
-# (Debian/Ubuntu/Raspbian) via cargo-deb. Triggered on a `relay-v*` tag or manually.
+# Relay-ONLY release path. Cross-builds the headless `haven-relay` static binary for every
+# Linux arch the installer knows about, plus macOS, and publishes them as release assets named
+# exactly what `relay/install.sh` downloads: `haven-relay-<target>`. Also builds .deb packages.
+#
+# A full `v*` tag is handled by release.yml (relay + desktop + Flatpak in one Release). Use a
+# `relay-v*` tag here when you want to ship JUST a new relay without rebuilding the desktop app.
 
 on:
   push:
-    tags: ["relay-v*", "v*"]
+    tags: ["relay-v*"]
   workflow_dispatch:
 
 permissions:
@@ -38,7 +40,12 @@ jobs:
           workspaces: core
 
       # zig gives painless musl + Arm cross-compilation from a single x86_64 runner.
-      - uses: mlugg/setup-zig@v1
+      - name: Install zig
+        run: |
+          ZIG_VER=0.13.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz" -o /tmp/zig.tar.xz
+          mkdir -p /tmp/zig && tar -xJf /tmp/zig.tar.xz -C /tmp/zig --strip-components=1
+          echo "/tmp/zig" >> "$GITHUB_PATH"
       - name: Install cargo-zigbuild + cargo-deb
         run: cargo install cargo-zigbuild cargo-deb --locked
 
@@ -93,8 +100,37 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build haven-relay (${{ matrix.target }})
+        working-directory: core
+        run: cargo build --release -p haven-relay --target ${{ matrix.target }}
+      - name: Stage binary as haven-relay-<target>.exe
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "core/target/${{ matrix.target }}/release/haven-relay.exe" \
+             "dist/haven-relay-${{ matrix.target }}.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
-    needs: [build, macos]
+    needs: [build, macos, windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:

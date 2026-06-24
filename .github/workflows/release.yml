@@ -81,9 +81,13 @@ jobs:
           t = re.sub(r'(?m)^version = ".*"', f'version = "{v}"', t, count=1)
           p.write_text(t)
           PY
-      - name: Linux cross toolchain
+      - name: Install zig (for cargo-zigbuild cross-compiles)
         if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v1
+        run: |
+          ZIG_VER=0.13.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz" -o /tmp/zig.tar.xz
+          mkdir -p /tmp/zig && tar -xJf /tmp/zig.tar.xz -C /tmp/zig --strip-components=1
+          echo "/tmp/zig" >> "$GITHUB_PATH"
       - name: Install cargo-zigbuild + cargo-deb
         if: runner.os == 'Linux'
         run: cargo install cargo-zigbuild cargo-deb --locked
@@ -104,6 +108,40 @@ jobs:
         if: matrix.deb
         working-directory: core
         run: cargo deb -p haven-relay --no-build --target ${{ matrix.target }} --output ../dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ── Relay: Windows .exe (x86-64 + Arm64) ────────────────────────────────────────────────
+  relay-windows:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Stamp version
+        shell: bash
+        run: |
+          python -c "import re,pathlib; p=pathlib.Path('core/haven-relay/Cargo.toml'); t=p.read_text(); p.write_text(re.sub(r'(?m)^version = \".*\"','version = \"${{ needs.meta.outputs.version }}\"',t,count=1))"
+      - name: Build haven-relay (${{ matrix.target }})
+        working-directory: core
+        run: cargo build --release -p haven-relay --target ${{ matrix.target }}
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "core/target/${{ matrix.target }}/release/haven-relay.exe" "dist/haven-relay-${{ matrix.target }}.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: relay-${{ matrix.target }}
@@ -242,7 +280,7 @@ jobs:
 
   # ── Publish one Release with every artifact + a version-pinned Flatpak manifest ─────────
   publish:
-    needs: [meta, relay, desktop, macos-dmg, flatpak]
+    needs: [meta, relay, relay-windows, desktop, macos-dmg, flatpak]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:

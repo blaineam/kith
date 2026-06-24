@@ -14,15 +14,17 @@ email. No tracking. No ads. No doomscroll.**
 
 Think iMessage + Apple Photos + Apple Music as a private social network — without the
 ads, the surveillance, or the infinite feed. The maker runs no servers and pays
-nothing monthly; your media rides on your own iCloud and direct peer-to-peer links.
+nothing monthly; your media rides on a Haven relay you (or a friend) run, your own
+S3-compatible bucket, or a direct peer-to-peer link.
 
 ## What makes it different
 
 - **No surveillance, zero operator cost.** There is no server that ever sees your
   plaintext or any personal data — and nothing the maker has to pay for monthly.
-  Media rides on *your own* iCloud/storage; peer connections use free, swappable,
-  community/public relays only as a last-resort encrypted pipe. The app is a one-time
-  $9.99 with no subscription.
+  Media rides on a Haven relay you run (any official app, or the tiny `haven-relay` on a
+  Pi/server) or your own S3-compatible bucket (S3/R2/B2) — nothing else, nothing of ours.
+  Peer connections use free, swappable, community/public relays only as a last-resort
+  encrypted pipe. The app is a one-time $9.99 with no subscription.
 - **Quantum-safe by default.** Every content key is derived from a *hybrid* of
   classical (X25519) and post-quantum (ML-KEM-768) key exchange, so stored
   ciphertext is protected against "harvest-now, decrypt-later" attacks.

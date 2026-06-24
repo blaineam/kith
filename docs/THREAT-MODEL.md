@@ -23,9 +23,9 @@ What we guarantee instead, enforced by default config (see `RELAY-AND-DEPLOY.md`
 - **Never logged / never persisted** — RAM-only, no access logs, provider logging off.
 - **Never linked to your identity** — peers authenticate to each other E2E, never to
   the relay; the relay/mailbox sees opaque circle-sealed blobs, not your public key. The
-  storage mailbox is the user's own (iCloud/BYO bucket) or a volunteer's, so there is no
-  operator-funded quota to meter (per D15).
-- **Optionally fully hidden** — opt-in onion/proxy (Tor) mode for users who want a
+  storage mailbox is a Haven relay (the user's own or a volunteer's) or the user's own
+  S3-compatible bucket, so there is no operator-funded quota to meter (per D15).
+- **Optionally fully hidden (planned, not yet shipped)** — an opt-in onion/proxy (Tor) mode for users who want a
   node to be unable to see their IP at all (off by default; latency cost).
 
 Promise: **never logged, never linked to you, optionally fully hidden.**
@@ -34,7 +34,7 @@ Promise: **never logged, never linked to you, optionally fully hidden.**
 
 - **Metadata-perfect anonymity vs. a global passive adversary, by default.** We hide
   content and identity-PII and never log/link IPs, but a relay still *handles* an IP
-  to route bytes. Full metadata/IP hiding is the opt-in onion mode, not the default.
+  to route bytes. Full metadata/IP hiding is the (planned) opt-in onion mode; today, run Haven behind your own VPN.
 - **Protecting against a fully compromised endpoint.** If malware owns the device, it
   owns the plaintext. Standard for any E2E system.
 - **Moderating content centrally.** There is no server to moderate from (by design).

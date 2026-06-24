@@ -110,7 +110,40 @@ haven-relay id          # -> the relay's node id (what the app stores as the rel
 > backends (pass `--rclone /path/to/rclone`). The default local-disk and relay-only modes
 > have **zero external dependencies**.
 
-### Keep it always-on (a true background daemon)
+### Keep it always-on — survives reboot on every OS
+
+**The one command that does it for you (any OS):**
+
+```sh
+haven-relay run --link "<code>"   # attach to your circle once (Ctrl-C after it saves)
+haven-relay service install       # ← wires up auto-start on login/reboot for THIS OS
+#   Linux → systemd user unit (+ enable-linger), or crontab @reboot fallback
+#   macOS → launchd LaunchAgent (RunAtLoad + KeepAlive)
+#   Windows → Scheduled Task at logon
+haven-relay service uninstall     # undo it
+```
+
+That's the easiest path. The per-OS manual recipes below are equivalent, if you prefer to set
+them up by hand or tweak them.
+
+
+| OS | Install | Auto-relaunch on reboot |
+|---|---|---|
+| **Linux** (x86-64 / Arm / Pi) | `curl -fsSL …/install.sh \| sh` | systemd unit (system service in the `.deb`/AUR, or the user unit below) |
+| **macOS** (Intel / Apple Silicon) | `curl -fsSL …/install.sh \| sh` | launchd LaunchAgent (`setup-macos.sh`) |
+| **Windows** (x86-64 / Arm64) | `irm …/install.ps1 \| iex` | Scheduled Task at logon — **set up automatically by the installer** |
+
+> The shell `install.sh` is POSIX `sh` → **macOS + Linux**. **Windows** uses `install.ps1`
+> (PowerShell), which downloads `haven-relay.exe` *and* registers the logon Scheduled Task in
+> one step. All three cover both x86-64 and Arm.
+
+**Windows — one line** (registers `haven-relay.exe` to start on every logon, no admin):
+
+```powershell
+irm https://wemiller.com/apps/haven/relay/install.ps1 | iex
+haven-relay run --link "haven-relay://circle#...."   # paste once; it auto-starts thereafter
+# start now:  schtasks /Run /TN HavenRelay   •   stop auto-start:  schtasks /Delete /TN HavenRelay /F
+```
 
 **macOS — one command** (installs a launchd LaunchAgent, starts at login, auto-restarts):
 
@@ -135,6 +168,32 @@ systemctl --user status haven-relay # node id is in the log
 
 **Then, in the app:** Settings → Storage → **Connect a relay** → paste the node id the daemon
 prints (`haven-relay id`). Your whole circle adopts it as the always-on mailbox.
+
+### Mesh several relays together (self-replicating mailbox)
+
+Point relays at each other and they **replicate the mailbox among themselves** every ~30s —
+each pulls any sealed blob a sibling holds that it lacks. The mailbox becomes a self-healing
+set: a relay can **join** (one pass makes it a full replica) or **leave** (peers already have
+copies) with zero loss, so the circle survives any relay coming or going.
+
+```sh
+# Tell this relay about its siblings (repeatable; or "peers": [...] in a --config JSON):
+haven-relay run --link <code> --peer <sibling-node-id> --peer <another-node-id>
+```
+
+In the desktop app it's automatic: any relay you **host** auto-meshes with every other relay
+your circle has adopted (Relay view) — no flags. Only the local-disk store meshes (S3/rclone
+backends are external stores). Replication only ever moves ciphertext, like everything else.
+
+### You don't even need the CLI — any official Haven app can be the relay
+
+The standalone binary is the leanest option for a headless box, but it's **not the only way**.
+Every official Haven client — iPhone, Mac, **Windows, Linux desktop** — can host the exact same
+relay in-process. On the desktop app: **Relay → "Always-on relay (survives reboot)"** → tick
+*Start Haven when I log in* + *Host the relay automatically on launch*, and that machine becomes
+a reboot-surviving relay with no terminal at all. (`haven-desktop --headless` does the same with
+no window — and also runs your scheduled-message dispatcher.) Adopt several — your phone-hosted
+relay, a friend's Mac, and a Pi — for redundancy; the circle survives any one going down.
 
 ### How linking works (and why it's safe)
 

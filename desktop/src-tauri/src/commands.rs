@@ -259,9 +259,9 @@ pub fn feed(engine: Eng, circle_id: String) -> Vec<FeedItemDto> {
 }
 
 #[tauri::command]
-pub fn post(engine: Eng, circle_id: String, body: String, media: Vec<String>, music: Option<TrackInput>) {
+pub fn post(engine: Eng, circle_id: String, body: String, media: Vec<String>, music: Option<TrackInput>, mute_video: Option<bool>) {
     let cid = if circle_id.is_empty() { DEFAULT_CIRCLE.to_string() } else { circle_id };
-    engine.post(cid, body, media, music.map(|m| m.into_ffi()));
+    engine.post(cid, body, media, music.map(|m| m.into_ffi()), mute_video.unwrap_or(false));
 }
 
 #[tauri::command]
@@ -388,9 +388,61 @@ pub fn stop_hosting(engine: Eng) {
     engine.stop_hosting();
 }
 
+#[derive(Serialize)]
+pub struct AutostartDto {
+    pub login_item: bool,
+    pub host_on_launch: bool,
+}
+
+/// Whether Haven launches at login + whether it auto-hosts the relay on launch.
+#[tauri::command]
+pub fn autostart_status(app: tauri::AppHandle, engine: Eng) -> AutostartDto {
+    use tauri_plugin_autostart::ManagerExt;
+    let login_item = app.autolaunch().is_enabled().unwrap_or(false);
+    AutostartDto { login_item, host_on_launch: engine.host_on_launch() }
+}
+
+/// Enable/disable launch-on-login and the auto-host-relay-on-launch preference. Setting both =
+/// the desktop client becomes an always-on relay that survives reboot.
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, engine: Eng, login_item: bool, host_on_launch: bool) -> R<()> {
+    use tauri_plugin_autostart::ManagerExt;
+    let mgr = app.autolaunch();
+    if login_item {
+        mgr.enable().map_err(|e| e.to_string())?;
+    } else {
+        mgr.disable().map_err(|e| e.to_string())?;
+    }
+    engine.set_host_on_launch(host_on_launch);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn adopt_relay(engine: Eng<'_>, node_hex: String) -> R<()> {
     engine.adopt_relay(node_hex).await;
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct RelayDto {
+    pub node_hex: String,
+    pub reachable: bool,
+    pub hosted: bool,
+}
+
+/// Every adopted relay + its reachability (for the redundancy UI).
+#[tauri::command]
+pub fn relays(engine: Eng) -> Vec<RelayDto> {
+    engine
+        .relays_detail()
+        .into_iter()
+        .map(|(node_hex, reachable, hosted)| RelayDto { node_hex, reachable, hosted })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn forget_relay(engine: Eng<'_>, node_hex: String) -> R<()> {
+    engine.forget_relay(node_hex).await;
     Ok(())
 }
 
@@ -405,14 +457,96 @@ pub fn add_media(engine: Eng, circle_id: String, data_base64: String, is_video: 
     Ok(engine.add_local_media(&cid, &bytes, is_video))
 }
 
+/// Store a recorded voice note (sealed, content-addressed) and return an `a:` ref.
+#[tauri::command]
+pub fn add_audio(engine: Eng, circle_id: String, data_base64: String) -> R<String> {
+    let cid = if circle_id.is_empty() { DEFAULT_CIRCLE.to_string() } else { circle_id };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("bad base64: {e}"))?;
+    Ok(engine.add_local_audio(&cid, &bytes))
+}
+
 /// Return a `data:` URL for a stored media ref so the WebView can render it inline.
 #[tauri::command]
 pub fn media_data_url(engine: Eng, circle_id: String, reference: String) -> Option<String> {
     let cid = if circle_id.is_empty() { DEFAULT_CIRCLE.to_string() } else { circle_id };
     let bytes = engine.media_bytes(&cid, &reference)?;
-    let mime = if reference.starts_with("v:") { "video/mp4" } else { "image/jpeg" };
+    let mime = if reference.starts_with("v:") {
+        "video/mp4"
+    } else if reference.starts_with("a:") {
+        crate::localmedia::audio_mime(&bytes)
+    } else {
+        "image/jpeg"
+    };
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Some(format!("data:{mime};base64,{b64}"))
+}
+
+// ---- scheduled messages ------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct ScheduledDto {
+    pub id: String,
+    pub kind: String,
+    pub circle_id: String,
+    pub body: String,
+    pub media_count: usize,
+    pub has_music: bool,
+    pub send_at_ms: u64,
+}
+
+/// Queue a post (`kind = "post"`) or DM (`kind = "dm"`) to send at `send_at_ms` (epoch ms).
+#[tauri::command]
+pub fn schedule_message(
+    engine: Eng,
+    kind: String,
+    circle_id: String,
+    body: String,
+    media: Vec<String>,
+    music: Option<TrackInput>,
+    mute_video: Option<bool>,
+    send_at_ms: u64,
+) -> String {
+    let sched_kind = if kind == "dm" {
+        crate::scheduled::SchedKind::Dm
+    } else {
+        crate::scheduled::SchedKind::Post
+    };
+    let cid = if circle_id.is_empty() { DEFAULT_CIRCLE.to_string() } else { circle_id };
+    let track = music.map(|m| crate::scheduled::SchedTrack {
+        catalog_id: m.catalog_id,
+        title: m.title,
+        artist: m.artist,
+        artwork_url: m.artwork_url,
+        duration_ms: m.duration_ms,
+    });
+    engine.schedule(sched_kind, cid, body, media, track, mute_video.unwrap_or(false), send_at_ms)
+}
+
+#[tauri::command]
+pub fn scheduled(engine: Eng) -> Vec<ScheduledDto> {
+    engine
+        .list_scheduled()
+        .into_iter()
+        .map(|it| ScheduledDto {
+            id: it.id,
+            kind: match it.kind {
+                crate::scheduled::SchedKind::Post => "post".into(),
+                crate::scheduled::SchedKind::Dm => "dm".into(),
+            },
+            circle_id: it.circle_id,
+            body: crate::secret::preview(&it.body),
+            media_count: it.media.len(),
+            has_music: it.music.is_some(),
+            send_at_ms: it.send_at_ms,
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn cancel_scheduled(engine: Eng, id: String) {
+    engine.cancel_scheduled(&id);
 }
 
 // ---- BYO S3 mailbox ----------------------------------------------------------------------
@@ -472,6 +606,56 @@ pub fn call_signal(engine: Eng, kind: String, session_id: String, json: String, 
 #[tauri::command]
 pub fn my_node_hex(engine: Eng) -> String {
     engine.node_id_hex()
+}
+
+// ---- multi-identity ----------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct IdentityDto {
+    pub node_hex: String,
+    pub label: String,
+    pub active: bool,
+}
+
+#[tauri::command]
+pub fn identities(engine: Eng) -> Vec<IdentityDto> {
+    engine
+        .identities()
+        .into_iter()
+        .map(|(node_hex, label, active)| IdentityDto { node_hex, label, active })
+        .collect()
+}
+
+#[tauri::command]
+pub fn add_identity(engine: Eng, label: String) -> R<String> {
+    engine.add_identity(&label).map_err(|e| e.to_string())
+}
+
+/// Import an identity from a base64-encoded 32-byte seed (a transfer from another device).
+#[tauri::command]
+pub fn import_identity(engine: Eng, label: String, seed_b64: String) -> R<String> {
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(seed_b64.trim())
+        .map_err(|e| format!("bad seed base64: {e}"))?;
+    let seed: [u8; 32] = raw.try_into().map_err(|_| "seed is not 32 bytes".to_string())?;
+    engine.import_identity(&label, seed).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn rename_identity(engine: Eng, node_hex: String, label: String) -> R<()> {
+    engine.rename_identity(&node_hex, &label).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_identity(engine: Eng, node_hex: String) -> R<()> {
+    engine.remove_identity(&node_hex).map_err(|e| e.to_string())
+}
+
+/// Switch the active identity and relaunch so the engine rebuilds on the new seed + data dir.
+#[tauri::command]
+pub fn switch_identity(app: tauri::AppHandle, engine: Eng, node_hex: String) -> R<()> {
+    engine.set_active_identity(&node_hex).map_err(|e| e.to_string())?;
+    app.restart();
 }
 
 // ---- misc --------------------------------------------------------------------------------

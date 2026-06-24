@@ -90,6 +90,24 @@ impl<T, E: std::fmt::Debug> IntoAnyhow<T> for std::result::Result<T, E> {
 
 /// Validate a blob key and resolve it to a concrete path **inside** `root`, refusing any
 /// key that could escape the store directory. Returns the joined path.
+/// Pure mesh-sync decision: of the keys a peer advertises, which should we pull? Those that
+/// (a) stay inside our namespace (no traversal / absolute / `..`), and (b) we don't already
+/// hold — capped at `MAX_SYNC_PULL`. Factored out so the set-difference + safety logic is
+/// unit-testable without a live network.
+fn keys_to_pull(root: &Path, peer_keys: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in peer_keys {
+        if out.len() >= MAX_SYNC_PULL {
+            break;
+        }
+        match safe_path(root, key) {
+            Ok(p) if !p.is_file() => out.push(key.clone()),
+            _ => {} // already have it, or it escapes our namespace → never pull
+        }
+    }
+    out
+}
+
 fn safe_path(root: &Path, key: &str) -> Result<PathBuf> {
     if key.is_empty() || key.len() > MAX_KEY {
         bail!("bad key length");
@@ -121,8 +139,19 @@ fn safe_path(root: &Path, key: &str) -> Result<PathBuf> {
 
 /// A relay-side **local-disk blob store** served over iroh. Stores and serves
 /// content-addressed sealed blobs from `root`; it never decrypts them.
+/// Most blobs to pull from a single peer in one anti-entropy pass — a backstop against a
+/// misbehaving/over-eager peer flooding our disk. The pass simply resumes next tick.
+const MAX_SYNC_PULL: usize = 20_000;
+
+/// Key prefix the mailbox + media blobs all live under, so a sync only ever touches Haven's
+/// own namespace (never arbitrary peer-supplied paths). `LIST` forbids an empty key, so this
+/// non-empty root is also required by the wire protocol.
+const SYNC_PREFIX: &str = "haven";
+
 pub struct BlobServer {
     endpoint: Endpoint,
+    secret: [u8; 32],
+    root: PathBuf,
 }
 
 impl BlobServer {
@@ -137,10 +166,44 @@ impl BlobServer {
             .bind()
             .await
             .ah()?;
-        let srv = Arc::new(Self { endpoint });
+        let srv = Arc::new(Self { endpoint, secret, root: root.clone() });
         let acc = srv.clone();
         tokio::spawn(async move { acc.accept_loop(root).await });
         Ok(srv)
+    }
+
+    /// Mesh anti-entropy: pull every sealed blob a PEER relay holds (under Haven's prefix)
+    /// that we lack, into our own store. Because keys are content-addressed and bodies are
+    /// E2E-sealed, this is an idempotent, conflict-free set-union — the relay never inspects
+    /// content, so replication discloses nothing a peer adopting the same relay didn't already
+    /// hold. Returns how many new blobs we pulled. Best-effort: a peer that's down is skipped.
+    ///
+    /// Run this against each sibling relay on a timer and the mailbox replicates across the
+    /// mesh: any relay can join (one pass makes it a full replica) or leave (peers already have
+    /// copies) freely, making the circle's mailbox far more resilient.
+    pub async fn sync_pull_from(self: &Arc<Self>, peer_node_hex: &str) -> Result<usize> {
+        let client = BlobClient::connect(self.secret, peer_node_hex).await?;
+        let mut pulled = 0usize;
+        let peer_keys = client.list(SYNC_PREFIX).await.unwrap_or_default();
+        for key in keys_to_pull(&self.root, &peer_keys) {
+            let Ok(local) = safe_path(&self.root, &key) else { continue };
+            // `get` caps the read at MAX_BLOB, so an oversized body can't blow up memory.
+            let Ok(Some(blob)) = client.get(&key).await else { continue };
+            if blob.is_empty() {
+                continue;
+            }
+            if let Some(parent) = local.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            let tmp = local.with_extension("part");
+            if std::fs::write(&tmp, &blob).and_then(|_| std::fs::rename(&tmp, &local)).is_ok() {
+                pulled += 1;
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        let _ = client.close().await;
+        Ok(pulled)
     }
 
     /// This store's node id (hex) — the `volunteer_node_id` for the circle's storage.
@@ -446,5 +509,25 @@ mod tests {
         assert!(safe_path(root, "ok").is_ok());
         let resolved = safe_path(root, "mailbox/fam/abc123").unwrap();
         assert!(resolved.starts_with(root));
+    }
+
+    #[test]
+    fn keys_to_pull_skips_local_and_unsafe() {
+        let dir = std::env::temp_dir().join(format!("haven-sync-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("haven/mailbox/fam")).unwrap();
+        // We already hold this one.
+        std::fs::write(dir.join("haven/mailbox/fam/have"), b"x").unwrap();
+
+        let peer = vec![
+            "haven/mailbox/fam/have".to_string(),   // already local → skip
+            "haven/mailbox/fam/missing".to_string(), // we lack it → pull
+            "haven/media/blob1".to_string(),         // we lack it → pull
+            "../etc/passwd".to_string(),             // path traversal → never
+            "/abs/evil".to_string(),                 // absolute → never
+        ];
+        let want = keys_to_pull(&dir, &peer);
+        assert_eq!(want, vec!["haven/mailbox/fam/missing".to_string(), "haven/media/blob1".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
