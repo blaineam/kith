@@ -48,6 +48,14 @@ struct DynState {
     started: bool,
     hosting: bool,
     foreground: bool,
+    /// Coalesces overlapping self-sync passes (the 15s loop must never run two at once).
+    self_syncing: bool,
+}
+
+/// Where a self-sync slot can be read/written: a Haven relay (by node hex) or the user's S3.
+enum SelfSyncTransport {
+    Relay(String),
+    S3(Arc<S3Mailbox>),
 }
 
 struct IncomingMedia {
@@ -287,6 +295,7 @@ impl Engine {
                 me.poll_mailbox().await;
                 me.fire_due_scheduled();
                 me.mesh_sync().await;
+                me.poll_self_sync().await;
             }
         });
     }
@@ -1451,6 +1460,181 @@ impl Engine {
     fn persist(&self) {
         if let Err(e) = store::write_state(&self.paths, &self.social.export_state()) {
             log::error!("persist failed: {e}");
+        }
+    }
+
+    // ---- multi-device self-sync (D16, Phase 3 — port of iOS SelfSync.swift) -------------
+
+    /// One full self-sync pass across the user's OWN devices: fold local changes into the base
+    /// CRDT with fresh stamps, merge every peer slot from every transport, apply the converged
+    /// result locally, persist, and re-publish our own sealed slot. Coalesces if already running.
+    /// No-op without any transport (a relay OR the user's S3 bucket).
+    pub async fn poll_self_sync(self: &Arc<Self>) {
+        use p2pcore::identity::Identity;
+        use p2pcore::selfsync::{slot_key, slot_prefix, AccountState, Stamp};
+
+        // Coalesce concurrent passes (the 15s loop must never overlap itself).
+        {
+            let mut st = self.dyn_state.lock().unwrap();
+            if st.self_syncing {
+                return;
+            }
+            st.self_syncing = true;
+        }
+        // Always clear the in-flight flag on the way out.
+        struct Guard<'a>(&'a Engine);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.dyn_state.lock().unwrap().self_syncing = false;
+            }
+        }
+        let _guard = Guard(self);
+
+        let account_hex = self.node_id_hex();
+        if account_hex.is_empty() {
+            return;
+        }
+        let transports = self.gather_self_sync_transports().await;
+        if transports.is_empty() {
+            return; // needs a relay OR an S3 bucket
+        }
+
+        let self_key = Identity::from_seed(&self.seed).self_sync_key();
+
+        // 1. Base = last converged state (or empty).
+        let mut base = match std::fs::read(self.paths.selfsync_state_file()) {
+            Ok(bytes) => AccountState::from_bytes(&bytes).unwrap_or_default(),
+            Err(_) => AccountState::default(),
+        };
+
+        // 2. Fold in whatever changed locally since last sync (stamp = now, this device). Only
+        //    stamp a key when its value actually differs from base, so stamps advance on real
+        //    change (otherwise two devices ping-pong).
+        let now = now_ms();
+        let device = crate::selfsync::device_id(&self.paths);
+        let stamp = Stamp::new(now, device);
+        let local = {
+            let prefs = self.prefs.lock().unwrap();
+            crate::selfsync::current_local(&prefs, &self.social)
+        };
+        for (key, value) in &local {
+            if base.get(key) != Some(value.as_slice()) {
+                base.set(key, value.clone(), stamp);
+            }
+        }
+        // Detect local removals in dynamic namespaces (a contact deleted, a peer unblocked) and
+        // tombstone them so the removal propagates instead of a peer device re-adding them.
+        let present_keys: Vec<String> = base.entries().map(|(k, _)| k.to_string()).collect();
+        for key in present_keys {
+            if crate::selfsync::DYNAMIC_PREFIXES.iter().any(|p| key.starts_with(p))
+                && !local.contains_key(&key)
+            {
+                base.remove(&key, stamp);
+            }
+        }
+
+        // Snapshot post-fold so we can tell whether the merge below actually brought anything new.
+        let pre_merge = base.to_bytes();
+
+        // 3. Pull + merge every peer slot from every relay/bucket.
+        let prefix = format!("haven/{}", slot_prefix(&account_hex));
+        let own_key = format!(
+            "haven/{}",
+            slot_key(&account_hex, &hex::encode(device))
+        );
+        for t in &transports {
+            let keys = self.self_sync_list(t, &prefix).await;
+            for key in keys {
+                if key == own_key {
+                    continue;
+                }
+                let Some(blob) = self.self_sync_fetch(t, &key).await else { continue };
+                if let Ok(peer) = AccountState::open(&self_key, &blob) {
+                    base.merge(&peer);
+                }
+            }
+        }
+
+        let changed = base.to_bytes() != pre_merge;
+
+        // 4. Apply the converged state locally + persist the new base.
+        let entries: Vec<(String, Vec<u8>)> =
+            base.entries().map(|(k, v)| (k.to_string(), v.to_vec())).collect();
+        let applied = {
+            let mut prefs = self.prefs.lock().unwrap();
+            let applied = crate::selfsync::apply_local(&entries, &mut prefs, &self.social);
+            if applied {
+                let _ = prefs.save(&self.paths);
+            }
+            applied
+        };
+        if applied {
+            self.persist();
+            self.emit_changed();
+        }
+        let _ = std::fs::write(self.paths.selfsync_state_file(), base.to_bytes());
+
+        // 5. Re-publish our own slot (sealed) to every relay/bucket for redundancy.
+        let sealed = base.seal(&self_key);
+        for t in &transports {
+            self.self_sync_put(t, &own_key, &sealed).await;
+        }
+
+        let _ = changed; // change-detection is folded into `applied`; kept for parity with iOS.
+    }
+
+    /// Every place this device can read/write its self-sync slots: all distinct configured relays
+    /// plus the user's OWN S3 bucket (so sync works with no relay at all — BYO storage is enough).
+    async fn gather_self_sync_transports(self: &Arc<Self>) -> Vec<SelfSyncTransport> {
+        let mut out: Vec<SelfSyncTransport> = vec![];
+        let relays: std::collections::BTreeSet<String> = {
+            let prefs = self.prefs.lock().unwrap();
+            prefs.relays.values().flatten().cloned().collect()
+        };
+        for node_hex in relays {
+            out.push(SelfSyncTransport::Relay(node_hex));
+        }
+        if let Some(s3) = self.s3_client().await {
+            out.push(SelfSyncTransport::S3(s3));
+        }
+        out
+    }
+
+    async fn self_sync_list(self: &Arc<Self>, t: &SelfSyncTransport, prefix: &str) -> Vec<String> {
+        match t {
+            SelfSyncTransport::Relay(node_hex) => {
+                let Some(client) = self.relay_client_for(node_hex).await else { return vec![] };
+                let keys = client.list(prefix.to_string()).await;
+                self.mark_relay_ok(node_hex);
+                keys
+            }
+            SelfSyncTransport::S3(c) => c.list(prefix).await.unwrap_or_default(),
+        }
+    }
+
+    async fn self_sync_fetch(self: &Arc<Self>, t: &SelfSyncTransport, key: &str) -> Option<Vec<u8>> {
+        match t {
+            SelfSyncTransport::Relay(node_hex) => {
+                let client = self.relay_client_for(node_hex).await?;
+                client.get(key.to_string()).await
+            }
+            SelfSyncTransport::S3(c) => c.get(key).await.ok().flatten(),
+        }
+    }
+
+    async fn self_sync_put(self: &Arc<Self>, t: &SelfSyncTransport, key: &str, data: &[u8]) {
+        match t {
+            SelfSyncTransport::Relay(node_hex) => {
+                if let Some(client) = self.relay_client_for(node_hex).await {
+                    match client.put(key.to_string(), data.to_vec()).await {
+                        Ok(()) => self.mark_relay_ok(node_hex),
+                        Err(_) => self.relay_failed(node_hex).await,
+                    }
+                }
+            }
+            SelfSyncTransport::S3(c) => {
+                let _ = c.put(key, data).await;
+            }
         }
     }
 

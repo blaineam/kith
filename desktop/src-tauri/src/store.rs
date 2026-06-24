@@ -57,6 +57,14 @@ impl Paths {
     pub fn media_dir(&self) -> PathBuf {
         self.root.join("media")
     }
+    /// Last-converged self-sync `AccountState` (binary CRDT blob) for change detection.
+    pub fn selfsync_state_file(&self) -> PathBuf {
+        self.root.join("selfsync-state.bin")
+    }
+    /// This device's stable 32-byte self-sync id (random, generated once, NEVER synced).
+    pub fn selfsync_device_file(&self) -> PathBuf {
+        self.root.join("selfsync-device.bin")
+    }
 }
 
 /// The user's chosen, signed-at-broadcast business card.

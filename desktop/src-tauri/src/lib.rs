@@ -9,6 +9,7 @@ mod localmedia;
 mod relayhealth;
 mod scheduled;
 mod secret;
+mod selfsync;
 mod store;
 mod wire;
 

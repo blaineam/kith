@@ -114,6 +114,7 @@ object HavenNet : InboundListener {
         LocalMedia.init(appContext)
         Presign.init(appContext)
         CircleLock.init(appContext)
+        SelfSyncCoordinator.init(appContext)
         restoreState()
         loadContacts()
         loadBlocked()
@@ -800,6 +801,10 @@ object HavenNet : InboundListener {
         }
         // Mesh: if we host a relay, pull from each adopted sibling so the mailbox self-replicates.
         meshSync()
+        // Multi-device self-sync: converge this user's OWN devices (profile/settings/contacts/
+        // blocked/circles) over the same relays. Has its own transport + in-flight guard, and a
+        // refresh trigger (selfSyncDidApply) when a peer device's state arrives.
+        runCatching { SelfSyncCoordinator.sync(social) }
         if (changed) {
             persist()
             withContext(Dispatchers.Main) { feedVersion.value++ }
@@ -1052,6 +1057,72 @@ object HavenNet : InboundListener {
     }
 
     val engine: HavenSocial get() = social
+
+    // ---- Self-sync (multi-device convergence) accessors ----------------------------------
+    //
+    // The SelfSyncCoordinator runs inside pollMailbox() and reaches the relay transport + the
+    // local stores through these. It is the Android counterpart of apple/HavenApp/SelfSync.swift;
+    // all the surfaces it needs (private clients/health/relay set) are exposed here so the
+    // coordinator stays a self-contained file.
+
+    /** This device's account seed + node id (for sealing/slot keys). */
+    val accountSeed: ByteArray get() = core.seed
+    val accountNodeHex: String get() = core.nodeIdHex
+
+    /** Every distinct adopted relay across all circles (public mirror of [allRelays]). */
+    fun selfSyncRelays(): List<String> = allRelays()
+
+    /** The relay node hexes that hold a given circle's mailbox (iOS RelayMailboxStore.relays(forCircle:)). */
+    fun relaysForCircle(circleId: String): List<String> = relaysFor(circleId)
+
+    /** Add a relay node to a circle's redundant set + persist (additive, never replaces). Used by self-sync. */
+    fun selfSyncAddRelay(circleId: String, nodeHex: String) {
+        val hex = nodeHex.trim().lowercase()
+        if (hex.length != 64) return
+        val list = relayNodes.getOrPut(circleId) { mutableListOf() }
+        if (!list.contains(hex)) { list.add(hex); saveRelayNodes() }
+    }
+
+    /** Connect (cached) to a relay, honoring backoff. Public wrapper so the coordinator can list/get/put. */
+    suspend fun selfSyncRelayClient(nodeHex: String): RelayClient? = relayClientFor(nodeHex)
+    suspend fun selfSyncRelayFailed(nodeHex: String) = relayFailed(nodeHex)
+    fun selfSyncRelayOk(nodeHex: String) = markRelayOk(nodeHex)
+
+    // ---- Local store mutation for self-sync apply() --------------------------------------
+
+    /** Upsert a contact from a converged self-sync entry (no networking). */
+    fun selfSyncUpsertContact(c: Contact) {
+        val idx = contacts.indexOfFirst { it.idHex == c.idHex }
+        if (idx >= 0) {
+            if (contacts[idx] != c) { contacts[idx] = c; saveContacts() }
+        } else {
+            contacts.add(c); saveContacts()
+        }
+    }
+
+    /** Remove a contact the converged state no longer holds (tombstoned on another device). */
+    fun selfSyncRemoveContact(idHex: String) {
+        if (contacts.removeAll { it.idHex == idHex }) saveContacts()
+    }
+
+    /** Block/unblock to reconcile the converged blocked set (no engine purge — pure list reconcile). */
+    fun selfSyncSetBlocked(idHex: String, blockedNow: Boolean) {
+        if (blockedNow) {
+            if (blocked.none { it == idHex }) { blocked.add(idHex); saveBlocked() }
+        } else {
+            if (blocked.removeAll { it == idHex }) saveBlocked()
+        }
+    }
+
+    /** A snapshot of contacts/blocked for the coordinator's currentLocal(). */
+    fun selfSyncContactsSnapshot(): List<Contact> = contacts.toList()
+    fun selfSyncBlockedSnapshot(): List<String> = blocked.toList()
+
+    /** Persist the engine state + recompose the feed/circle UI after self-sync applied changes. */
+    fun selfSyncDidApply() {
+        persist()
+        scope.launch(Dispatchers.Main) { feedVersion.value++; circlesVersion.value++ }
+    }
 
     // ---- Demo seeding support (DEBUG-only; see DemoSeed.kt) ------------------------------
     //
