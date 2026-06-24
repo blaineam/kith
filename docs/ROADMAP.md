@@ -87,7 +87,11 @@ signatures. 6 core tests green.
     commutative/associative/idempotent merge, self-encrypted via a seed-derived key only
     the user's devices can derive — concurrent edits provably converge. Unit-tested.
     Remaining: mailbox channel + sync loop + FFI + client wiring.
-  - ⏭️ Phase 2 enrollment + UI · Phase 4 live device-to-device delivery ·
+  - 🟡 **Phase 2: FFI export** done (`p2pcore-ffi::multidevice`): `issue/verify_device_credential`,
+    `sign/verify_device_list`, `device_list_is_authorized`, an `AccountStateHandle` object +
+    `seal/open_account_state` — device + self-sync types now callable from Swift/Kotlin/desktop.
+    Remaining: enrollment QR/verify flow + UI.
+  - ⏭️ Phase 3 finish (mailbox channel + client wiring) · Phase 4 live device-to-device delivery ·
     Phase 5 MLS leaf/commit hardening (forward + post-compromise secrecy; gated on MLS).
   - See `MULTI-DEVICE.md` → *Implementation phases*.
 - ⏭️ **Always-on device as personal store-and-forward** (ordered backlog cache; Phase 4).

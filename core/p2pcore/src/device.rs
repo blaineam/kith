@@ -207,6 +207,48 @@ impl DeviceList {
             false
         }
     }
+
+    /// Wire encoding: `account_id(32) ‖ version(8) ‖ updated_at(8) ‖ n_dev(4) ‖ dev*32 ‖
+    /// n_rev(4) ‖ rev*32 ‖ sig`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(32 + 16 + 8 + (self.devices.len() + self.revoked.len()) * 32 + self.sig.len());
+        v.extend_from_slice(&self.account_id);
+        v.extend_from_slice(&self.version.to_le_bytes());
+        v.extend_from_slice(&self.updated_at.to_le_bytes());
+        v.extend_from_slice(&(self.devices.len() as u32).to_le_bytes());
+        for d in &self.devices {
+            v.extend_from_slice(d);
+        }
+        v.extend_from_slice(&(self.revoked.len() as u32).to_le_bytes());
+        for d in &self.revoked {
+            v.extend_from_slice(d);
+        }
+        v.extend_from_slice(&self.sig);
+        v
+    }
+
+    /// Inverse of [`Self::to_bytes`].
+    pub fn from_bytes(b: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(b);
+        let account_id = r.array32()?;
+        let version = r.u64()?;
+        let updated_at = r.u64()?;
+        let n_dev = r.u32()? as usize;
+        let mut devices = Vec::with_capacity(n_dev);
+        for _ in 0..n_dev {
+            devices.push(r.array32()?);
+        }
+        let n_rev = r.u32()? as usize;
+        let mut revoked = Vec::with_capacity(n_rev);
+        for _ in 0..n_rev {
+            revoked.push(r.array32()?);
+        }
+        let sig = r.rest().to_vec();
+        if sig.is_empty() {
+            return Err(CoreError::Encoding("device list: missing signature"));
+        }
+        Ok(Self { account_id, version, updated_at, devices, revoked, sig })
+    }
 }
 
 /// Minimal length-prefixed byte reader for the wire formats above.
@@ -325,6 +367,18 @@ mod tests {
         // Splice in an extra device without re-signing → must fail.
         list.devices.push(id(6).public().node_id_bytes());
         assert!(list.verify(&account.public()).is_err(), "tampered roster must not verify");
+    }
+
+    #[test]
+    fn device_list_roundtrips_through_wire() {
+        let account = id(1);
+        let phone = id(2).public().node_id_bytes();
+        let mac = id(3).public().node_id_bytes();
+        let lost = id(4).public().node_id_bytes();
+        let list = DeviceList::signed(&account, 5, 999, vec![phone, mac], vec![lost]);
+        let back = DeviceList::from_bytes(&list.to_bytes()).expect("decode");
+        assert_eq!(list, back);
+        back.verify(&account.public()).expect("decoded list still verifies");
     }
 
     #[test]

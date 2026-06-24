@@ -21,6 +21,9 @@ use p2pcore::social::{
 
 uniffi::setup_scaffolding!();
 
+/// Multi-device (D16): device-credential + account-state self-sync FFI surface.
+mod multidevice;
+
 /// Android only: receive the app's `Context` (and, via it, the `JavaVM`) from Kotlin and hand
 /// both to `ndk-context`. iroh's TLS stack (rustls platform verifier) reads the system trust
 /// store through JNI, which panics with "android context was not initialized" if this isn't done.
