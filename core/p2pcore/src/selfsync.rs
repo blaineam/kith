@@ -210,6 +210,22 @@ impl AccountState {
     }
 }
 
+/// Canonical relay-mailbox key for **one device's** self-sync slot. Every client MUST use
+/// this exact layout so a user's devices converge cross-platform — each device owns its slot
+/// (keyed by its node id), and a puller merges all slots under [`slot_prefix`]. Keeping the
+/// scheme in shared core prevents the divergent-key bugs that silently break cross-device sync.
+///
+/// Layout: `self/<account-node-hex>/state/<device-node-hex>`.
+pub fn slot_key(account_node_hex: &str, device_node_hex: &str) -> String {
+    format!("self/{account_node_hex}/state/{device_node_hex}")
+}
+
+/// Canonical prefix listing **all** of an account's self-sync slots (for pull-and-merge):
+/// `self/<account-node-hex>/state/`.
+pub fn slot_prefix(account_node_hex: &str) -> String {
+    format!("self/{account_node_hex}/state/")
+}
+
 fn put_lp(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(&(b.len() as u32).to_le_bytes());
     out.extend_from_slice(b);
@@ -363,6 +379,15 @@ mod tests {
         assert_eq!(back.get("circle:home"), Some(&b"home"[..]));
         assert_eq!(back.get("contact:x"), None);
         assert_eq!(back.cursor("circle:home"), 555);
+    }
+
+    #[test]
+    fn canonical_slot_keys_are_stable_and_prefix_matches() {
+        let acct = "aabb";
+        let dev = "ccdd";
+        assert_eq!(slot_key(acct, dev), "self/aabb/state/ccdd");
+        assert_eq!(slot_prefix(acct), "self/aabb/state/");
+        assert!(slot_key(acct, dev).starts_with(&slot_prefix(acct)), "slot must live under prefix");
     }
 
     #[test]

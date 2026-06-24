@@ -33,9 +33,27 @@
 |---|---|---|---|
 | **1. Device-credential trust layer** | Per-device keys; account-signed `DeviceCredential`; versioned signed `DeviceList` (add/revoke, higher-version-wins, rollback defense); verify against the pinned account key. | `p2pcore::device` | **✅ core done & tested** |
 | **2. Enrollment & UI** | FFI export (done): `issue/verify_device_credential`, `sign/verify_device_list`, `device_list_is_authorized`, plus an `AccountStateHandle` object + `seal/open_account_state`. Ahead: QR/short-code link of a new device + out-of-band verification phrase; the authorizing device issues the credential and publishes a new `DeviceList`; "Blaine linked a new device" notice. Per-client (iOS → Android → desktop). | `p2pcore-ffi::multidevice` + clients | 🟡 **FFI export done**; enrollment QR/verify + UI ahead |
-| **3. Account-state self-sync** | A per-account state blob (roster, circles, contacts, profile, settings, blocked list, read state) **self-sealed to the account's own devices** and synced via the mailbox; CRDT/LWW merge so devices converge. Gives "my devices show the same thing." | `p2pcore::selfsync` + relay channel | 🟡 **CRDT core done & tested**; mailbox channel + FFI + client wiring ahead |
+| **3. Account-state self-sync** | A per-account state blob (roster, circles, contacts, profile, settings, blocked list, read state) **self-sealed to the account's own devices** and synced via the mailbox; CRDT/LWW merge so devices converge. Gives "my devices show the same thing." | `p2pcore::selfsync` + relay channel | 🟡 **CRDT core + channel contract done & tested**; per-client sync loop ahead |
 | **4. Live delivery + personal forwarder** | Real-time device-to-device push when both are online; an always-on device (Mac) as the user's ordered store-and-forward node, complementing the relay. | `haven-net` + clients | ⏭️ |
 | **5. MLS hardening** | Each device becomes an MLS leaf; Add/Remove **commits** give forward secrecy + post-compromise security on link/revoke. Gated on the separate MLS (D3) work. | `p2pcore` (mls-rs) | ⏭️ (after MLS) |
+
+### Self-sync mailbox channel (the recipe clients implement)
+
+The primitives are all shipped; a client's sync loop is just glue over them, using the **one
+canonical key layout** defined in core (`selfsync::slot_key`/`slot_prefix`, FFI
+`self_sync_slot_key`/`self_sync_slot_prefix`) so iOS/Android/desktop converge:
+
+```
+slot   = self/<account-node-hex>/state/<device-node-hex>   # this device owns its slot
+prefix = self/<account-node-hex>/state/                    # all the account's slots
+```
+
+- **Push** (on local change / periodically): `relay.put(slot, seal_account_state(seed, state))`.
+- **Pull + converge** (on a timer / push wake): for each key in `relay.list(prefix)`,
+  `open_account_state(seed, blob)` → `state.merge(that)`. Then re-push your own slot so the
+  merged view propagates. Because `merge` is commutative/associative/idempotent, order and
+  duplicate delivery don't matter; because each device owns its own slot, devices never clobber
+  each other. The relay only ever holds ciphertext.
 
 > **Honest dependency:** the *fully drawn* design (device = MLS leaf, revocation = MLS Remove
 > commit re-key) needs **MLS**, which is itself not yet built (the engine currently seals a

@@ -161,6 +161,23 @@ pub fn seal_account_state(account_seed: Vec<u8>, state: Arc<AccountStateHandle>)
     Ok(st.seal(&acct.self_sync_key()))
 }
 
+/// Canonical relay-mailbox key for this device's self-sync slot — `self/<account>/state/<device>`.
+/// Every client MUST use this so a user's devices converge cross-platform.
+///
+/// Push recipe: `relay.put(self_sync_slot_key(acct, dev), seal_account_state(seed, state))`.
+/// Pull recipe: for each key in `relay.list(self_sync_slot_prefix(acct))`, `open_account_state`
+/// the blob and `state.merge(...)` it; then re-push your own slot.
+#[uniffi::export]
+pub fn self_sync_slot_key(account_node_hex: String, device_node_hex: String) -> String {
+    p2pcore::selfsync::slot_key(&account_node_hex, &device_node_hex)
+}
+
+/// Canonical prefix to list all of an account's self-sync slots — `self/<account>/state/`.
+#[uniffi::export]
+pub fn self_sync_slot_prefix(account_node_hex: String) -> String {
+    p2pcore::selfsync::slot_prefix(&account_node_hex)
+}
+
 /// Open a blob produced by `seal_account_state` (fails on wrong account / tamper).
 #[uniffi::export]
 pub fn open_account_state(account_seed: Vec<u8>, sealed: Vec<u8>) -> Result<Arc<AccountStateHandle>, HavenError> {
