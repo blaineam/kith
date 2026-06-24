@@ -22,6 +22,7 @@
 //!   Trait-only for now; concrete impls (iroh, CoreBluetooth) land next.
 
 pub mod crypto;
+pub mod device;
 pub mod identity;
 pub mod link;
 pub mod social;
