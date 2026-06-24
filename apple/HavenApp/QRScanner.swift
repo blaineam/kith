@@ -75,8 +75,22 @@ final class ScannerVC: UIViewController, AVCaptureMetadataOutputObjectsDelegate 
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        if session.isRunning {
-            DispatchQueue.global(qos: .userInitiated).async { [session] in session.stopRunning() }
+        teardownSession()
+    }
+
+    // SwiftUI dismissing the sheet hosting this controller may not always route through
+    // viewWillDisappear, so also tear the session down on dealloc. Both paths are idempotent.
+    deinit { teardownSession() }
+
+    /// Fully stop + release the capture session so the iOS "in use" (green) indicator goes off.
+    private func teardownSession() {
+        let session = self.session
+        DispatchQueue.global(qos: .userInitiated).async {
+            if session.isRunning { session.stopRunning() }
+            session.beginConfiguration()
+            for input in session.inputs { session.removeInput(input) }
+            for output in session.outputs { session.removeOutput(output) }
+            session.commitConfiguration()
         }
     }
 
@@ -85,9 +99,7 @@ final class ScannerVC: UIViewController, AVCaptureMetadataOutputObjectsDelegate 
                         from connection: AVCaptureConnection) {
         guard let obj = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
               let value = obj.stringValue, !value.isEmpty else { return }
-        if session.isRunning {
-            DispatchQueue.global(qos: .userInitiated).async { [session] in session.stopRunning() }
-        }
+        teardownSession()
         onFound?(value)
     }
 }
@@ -189,6 +201,10 @@ final class ScannerNSView: NSView {
     func stop() {
         sessionQueue.async { [session] in
             if session.isRunning { session.stopRunning() }
+            session.beginConfiguration()
+            for input in session.inputs { session.removeInput(input) }
+            for output in session.outputs { session.removeOutput(output) }
+            session.commitConfiguration()
         }
     }
 

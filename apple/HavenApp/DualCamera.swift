@@ -75,7 +75,16 @@ final class DualCameraRecorder: NSObject, ObservableObject {
 
     func stop() {
         queue.async { [weak self] in
-            if self?.session.isRunning == true { self?.session.stopRunning() }
+            guard let self else { return }
+            if self.session.isRunning { self.session.stopRunning() }
+            // Fully tear the multi-cam session down so BOTH camera devices are released and the iOS
+            // "in use" (green) indicator goes off. With no-connection inputs/outputs we must also
+            // remove the connections we added.
+            self.session.beginConfiguration()
+            for conn in self.session.connections { self.session.removeConnection(conn) }
+            for input in self.session.inputs { self.session.removeInput(input) }
+            for output in self.session.outputs { self.session.removeOutput(output) }
+            self.session.commitConfiguration()
         }
     }
 

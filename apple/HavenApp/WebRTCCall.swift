@@ -291,7 +291,15 @@ final class WebRTCCall: NSObject {
     }
 
     func close() {
+        // Fully release the camera so the iOS "in use" (green) indicator goes off on hangup/decline.
+        // stopCapture tears down the capturer's internal AVCaptureSession; dropping our references
+        // releases the capturer + source + track so the device isn't retained.
+        videoTrack?.isEnabled = false
         capturer?.stopCapture()
+        capturer = nil
+        captureProxy = nil
+        videoTrack = nil
+        videoSource = nil
         screenTrack = nil
         screenSource = nil
         pc.close()

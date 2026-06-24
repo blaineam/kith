@@ -107,7 +107,17 @@ final class CameraModel: NSObject, ObservableObject {
 
     func stop() {
         queue.async { [weak self] in
-            if self?.session.isRunning == true { self?.session.stopRunning() }
+            guard let self else { return }
+            if self.movieOutput.isRecording { self.movieOutput.stopRecording() }
+            if self.session.isRunning { self.session.stopRunning() }
+            // Fully tear the session down so the camera device is released and the iOS "in use"
+            // (green) indicator goes off — stopRunning alone keeps inputs/outputs (and the device)
+            // attached. Removing inputs releases the underlying AVCaptureDevice.
+            self.session.beginConfiguration()
+            for input in self.session.inputs { self.session.removeInput(input) }
+            for output in self.session.outputs { self.session.removeOutput(output) }
+            self.session.commitConfiguration()
+            self.device = nil
         }
     }
 
@@ -134,12 +144,15 @@ final class CameraModel: NSObject, ObservableObject {
         Task { @MainActor in self.refreshLensPresets(position: position) }
     }
 
-    /// Orient (portrait) + mirror (front) the live-preview data-output connection. Safe to call
-    /// before the output is added (no connection yet → no-op).
+    /// Orient (portrait) + mirror (front) the live-preview data-output connection AND the still/movie
+    /// capture connections, so captured media isn't sideways and the front camera matches the
+    /// (mirrored) preview. Safe to call before an output is added (no connection yet → no-op).
     private func configurePreviewConnection(position: AVCaptureDevice.Position? = nil) {
-        guard let conn = videoDataOutput.connection(with: .video) else { return }
         let pos = position ?? self.position
-        conn.applyPreviewOrientation(angle: 90, mirroredFront: pos == .front)
+        let mirrorFront = pos == .front
+        videoDataOutput.connection(with: .video)?.applyPreviewOrientation(angle: 90, mirroredFront: mirrorFront)
+        photoOutput.connection(with: .video)?.applyPreviewOrientation(angle: 90, mirroredFront: mirrorFront)
+        movieOutput.connection(with: .video)?.applyPreviewOrientation(angle: 90, mirroredFront: mirrorFront)
     }
 
     private func hasUltraWide(_ position: AVCaptureDevice.Position) -> Bool {
@@ -297,7 +310,15 @@ final class CameraModel: NSObject, ObservableObject {
 
     func stop() {
         queue.async { [weak self] in
-            if self?.session.isRunning == true { self?.session.stopRunning() }
+            guard let self else { return }
+            if self.movieOutput.isRecording { self.movieOutput.stopRecording() }
+            if self.session.isRunning { self.session.stopRunning() }
+            // Fully release the capture device so the macOS camera indicator goes off.
+            self.session.beginConfiguration()
+            for input in self.session.inputs { self.session.removeInput(input) }
+            for output in self.session.outputs { self.session.removeOutput(output) }
+            self.session.commitConfiguration()
+            self.device = nil
         }
     }
 
