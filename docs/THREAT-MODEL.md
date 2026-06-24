@@ -23,8 +23,8 @@ What we guarantee instead, enforced by default config (see `RELAY-AND-DEPLOY.md`
 - **Never logged / never persisted** — RAM-only, no access logs, provider logging off.
 - **Never linked to your identity** — peers authenticate to each other E2E, never to
   the relay; the relay/mailbox sees opaque circle-sealed blobs, not your public key. The
-  storage mailbox is the user's own (iCloud/BYO bucket) or a volunteer's, so there is no
-  operator-funded quota to meter (per D15).
+  storage mailbox is a Haven relay (the user's own or a volunteer's) or the user's own
+  S3-compatible bucket, so there is no operator-funded quota to meter (per D15).
 - **Optionally fully hidden (planned, not yet shipped)** — an opt-in onion/proxy (Tor) mode for users who want a
   node to be unable to see their IP at all (off by default; latency cost).
 

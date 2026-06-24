@@ -111,8 +111,9 @@ On TestFlight and used device-to-device over the internet.
   circle-sealed media P2P.
 - ✅ **Chunked media transfer** (512 KB sealed chunks) — large videos send with flat
   memory; auto-optimize (1080p video / ≤2560px photos) vs. lossless toggle.
-- ⏭️ Fallback chain polish: group-gossip cache; **sender's own iCloud**
-  (private CloudKit + `CKShare`) for the Apple↔Apple path, see `RELAY-AND-DEPLOY.md`.
+- ⏭️ Fallback chain polish: group-gossip cache; **Haven relay mailbox** (in-app relay
+  or `haven-relay` daemon) or the user's **own S3-compatible bucket** for offline
+  delivery, see `RELAY-AND-DEPLOY.md`.
 - ⏭️ Opt-in onion/proxy mode for full IP hiding.
 - *(No quota/blind-token/subscription work — deleted per D15.)*
 

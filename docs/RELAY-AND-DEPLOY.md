@@ -87,29 +87,29 @@ iOS/Android, so it lands as a reviewed, cross-platform change — not a desktop-
 
 ## Storage model
 
-> **Updated per DECISIONS D15 (zero operator cost).** The default is the *sender's
-> own* storage; there is **no operator-funded bucket** and therefore **no quota
-> system, blind tokens, or storage subscription**. A shared/quota'd bucket is now
-> only a *voluntary, community-run* option, never something the operator must fund.
+> **Updated per DECISIONS D15 (zero operator cost).** Media lives on a **Haven relay
+> mailbox** or the user's **own S3-compatible bucket**; there is **no operator-funded
+> bucket** and therefore **no quota system, blind tokens, or storage subscription**.
+> A relay is the user's own or a *voluntary, community-run* node, never something the
+> operator must fund.
 
-1. **Sender's own iCloud (Apple-first default).** Blobs go in the sender's **private
-   CloudKit DB** (billed to the *user's* iCloud quota — $0 to the operator) and are
-   shared to other Apple users via **`CKShare`**. The sender funds their own sharing.
-2. **BYO bucket.** Any user can point Haven at their own S3 / R2 / B2 / NAS — their
-   storage, their cost. Needed for cross-platform offline delivery (a web/Android peer
-   can't read a sender's iCloud).
-3. **Voluntary community bucket (optional).** Any entity *may* run a shared bucket
-   others use, fronted by the thin stateless broker below. This is opt-in generosity,
-   not required infrastructure.
+1. **Haven relay mailbox (default).** Sealed blobs park on a **Haven relay's local
+   disk** — the in-app relay any official client can host, or the standalone
+   `haven-relay` daemon. The relay is run by the user or a community volunteer, so it
+   is $0 to the operator. Any client can pull from a relay mailbox, so it works
+   cross-platform.
+2. **BYO bucket.** Any user can point Haven at their own **S3-compatible bucket** (AWS
+   S3, Cloudflare R2, Backblaze B2, MinIO) — their storage, their cost. Also works for
+   cross-platform offline delivery.
 
 Blobs are E2E-encrypted and content-addressed (BLAKE3) before leaving the device, and
 get a **lifecycle expiry** (auto-delete after N days) so nothing lingers.
 
-**The broker (only for shared/BYO-served buckets).** You can't hand arbitrary clients
+**The broker (only for BYO-served buckets).** You can't hand arbitrary clients
 raw bucket credentials, so a **thin, stateless broker** mints **scoped presigned
 URLs** (PUT/GET for one content hash). It is small — but it is *the* component where
-the no-log discipline must be absolute (see below). For a sender's own iCloud, CloudKit
-*is* the broker, so none of this is needed in the Apple↔Apple path.
+the no-log discipline must be absolute (see below). A Haven relay serves its own
+mailbox directly, so the broker is only needed for the BYO-bucket path.
 
 ## IP privacy — what is and isn't guaranteed
 
@@ -123,9 +123,9 @@ claim it. What we *do* guarantee, enforced by the deploy tool's default config:
   never to the relay. The relay/broker sees opaque sealed frames addressed by
   **ephemeral rendezvous tokens**, not Haven public keys. A node that somehow logged
   an IP still could not tie it to a Haven identity.
-- **No operator-funded quota.** Storage is the user's own (iCloud/BYO bucket) or a
-  volunteer's, so there is no metered allotment to enforce (the earlier blind-signed
-  quota-token model was deleted per D15).
+- **No operator-funded quota.** Storage is a Haven relay mailbox (the user's own or a
+  volunteer's) or the user's own S3-compatible bucket, so there is no metered allotment
+  to enforce (the earlier blind-signed quota-token model was deleted per D15).
 - **Opt-in onion/proxy mode for true hiding (planned — not yet shipped; iroh is QUIC/UDP, which Tor's SOCKS can't carry, so this needs a TCP transport).** The only way a node genuinely cannot
   see your IP is to not connect to it directly. Haven ships an **optional** mode that
   routes relay + storage access through Tor or a user-chosen proxy. Off by default

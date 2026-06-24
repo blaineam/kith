@@ -51,7 +51,7 @@ requires an always-on device — which is why D16's always-on forwarder matters 
 - **Timezones:** store the schedule as an absolute instant (UTC) plus the intended
   timezone; fire at the instant.
 - **Privacy:** the scheduled queue is encrypted at rest and in device-to-device sync;
-  no relay/iCloud ever sees the plaintext or the schedule.
+  no relay or storage backend ever sees the plaintext or the schedule.
 
 ## Connections
 

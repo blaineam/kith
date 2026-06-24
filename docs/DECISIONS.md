@@ -213,11 +213,12 @@ for free and only write UI.
 
 **Decision:** Split "relay" into two roles (full detail in `RELAY-AND-DEPLOY.md`):
 - **Connection relay** — stateless live packet forwarder for NAT traversal.
-- **Storage relay ("mailbox")** — mostly object storage (S3/R2/B2/GCS) + a thin
-  stateless broker, for offline delivery and large/lossless files.
+- **Storage relay ("mailbox")** — sealed blobs on the relay's own local disk (the
+  in-app relay or `haven-relay` daemon), for offline delivery and large/lossless files.
 
-Storage is **BYO by default** (user's own iCloud/S3/NAS) or an optional **quota'd
-shared bucket** anyone can run — so there is no central service. A **deployment tool**
+Storage is a **Haven relay mailbox** or the user's **own S3-compatible bucket**
+(AWS S3, Cloudflare R2, Backblaze B2, MinIO) — so there is no central service. A
+**deployment tool**
 (`haven-relay`, OpenTofu + CLI) lets any entity stand up a compliant relay on AWS/GCP/
 Azure/Hetzner/Fly/DO/Cloudflare-R2/Oracle/bare-VPS in one command, with
 privacy-hardened defaults that are hard to disable.
@@ -237,12 +238,13 @@ Promise: **never logged, never linked to you, optionally fully hidden.**
 **Why:** Removes you as a central operator, lets the network be genuinely federated,
 and makes the strongest IP claim that is actually true rather than a comforting lie.
 
-## D15 — Zero operator cost: sender's own storage, free relays
+## D15 — Zero operator cost: relay-mailbox / BYO storage, free relays
 
 **Decision:** The operator pays **nothing monthly** and runs nothing required:
-- **Storage relay = the sender's own iCloud** (private CloudKit DB + `CKShare`,
-  billed to the *user's* iCloud quota) or a BYO S3/R2/NAS bucket. No operator-funded
-  bucket. "The sender funds the cost to share," literally.
+- **Storage = a Haven relay mailbox** (sealed blobs on a user/community-run relay's
+  own local disk — the in-app relay or `haven-relay` daemon) or the user's **own
+  S3-compatible bucket** (AWS S3, Cloudflare R2, Backblaze B2, MinIO). No
+  operator-funded bucket. "The user funds their own storage," literally.
 - **Connection relay** = iroh/n0 **free public relays** + community-run relays;
   hole-punching via **public STUN**; discovery via the **mainline DHT**.
 - **Hosting** = GitHub Pages (`blaineam.github.io`) for the invite-landing page, AASA,
@@ -258,9 +260,9 @@ self-host reliability layer, never required.
 **Trade-offs (dependency, not dollars):**
 - Connection relay depends on **best-effort free third-party relays** (no SLA);
   degradation hits hard-NAT links and live calls until community/self relays fill in.
-- **iCloud storage is clean Apple↔Apple only.** Cross-platform *offline* delivery
-  needs both-peers-online or a sender BYO bucket; a web/Android peer can't read a
-  sender's iCloud. Ship **Apple-first**.
+- **Offline delivery needs a reachable mailbox.** With neither peer online, delivery
+  needs a Haven relay mailbox or the sender's own S3-compatible bucket; either is
+  cross-platform, so any client can read it.
 
 **Why:** The user explicitly wants no monthly cost, not even $5/mo. Self-funded
 storage + free infrastructure achieves that and simplifies the product. See

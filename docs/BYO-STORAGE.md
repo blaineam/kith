@@ -1,4 +1,4 @@
-# Bring-your-own storage (S3 + cloud drives), no secrets you host
+# Bring-your-own storage (Haven relay or your own S3), no secrets you host
 
 Users can keep their media on **their own** storage — and you (the maker) never host
 an API key or client secret for any of it. This is core to the "clean hands" rule:
@@ -6,46 +6,31 @@ nothing you hold can be used to bypass a user's storage.
 
 ## Options (Settings → Storage)
 
+The only two media-storage backends are a **Haven relay mailbox** and the user's **own
+S3-compatible bucket**:
+
 | Option | How | What you host |
 |---|---|---|
-| **Your iCloud** (default) | private CloudKit / iCloud Drive, billed to the user's quota | nothing |
+| **Haven relay mailbox** (default) | sealed blobs park on a Haven relay's local disk — the in-app relay any official client can host, or the standalone `haven-relay` daemon | nothing (relay is user/community-run) |
 | **Custom S3 bucket** | user enters endpoint + region + bucket + access key + secret; stored only in the device **Keychain** | nothing |
-| **Google Drive / Dropbox** | **OAuth 2.0 + PKCE** — user signs in on the provider's page; Haven keeps only a token in the Keychain | nothing |
 
-Works with AWS S3, Cloudflare R2, Backblaze B2, rclone serve s3, etc. for the S3 path.
-
-## Why no secrets to host — PKCE
-
-Native apps use the **Authorization Code flow with PKCE** (RFC 7636). The app is a
-**public client**:
-
-- The **client ID is public** (embedded in the app) — it is *not* a secret.
-- Instead of a client secret, the app proves itself with a one-time
-  **code_verifier / code_challenge** pair generated on-device per login.
-- The user authenticates on the **provider's own page** (`ASWebAuthenticationSession`),
-  so Haven never sees their password; the redirect comes back to the app's URL scheme.
-- Haven stores only the resulting **access/refresh token**, in the Keychain.
-
-So there is **no client secret anywhere** — not in the app, and nothing you host on a
-server. You register a *public* OAuth client per provider (Google Cloud / Dropbox
-console) once; only the public client ID ships in the app.
+The S3 path works with **AWS S3, Cloudflare R2, Backblaze B2, MinIO**, rclone serve s3,
+etc.
 
 ## Security posture
 
 - Media is **end-to-end encrypted before it is stored** anywhere — the storage
-  provider (even the user's own bucket) only ever holds ciphertext.
-- S3 keys and OAuth tokens live **only in the device Keychain**
+  backend (a Haven relay or the user's own bucket) only ever holds ciphertext.
+- S3 keys live **only in the device Keychain**
   (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`), never synced to you.
 - You cannot read, enumerate, or revoke a user's storage — you hold no credentials.
 
 ## Status
 
 - ✅ Storage settings UI; **functional Custom S3 config** (saved to Keychain);
-  provider selection.
+  backend selection.
 - ✅ **Working S3 path**: a real SigV4 `S3Client` does encrypted-blob put/get/list against
   a BYO bucket; the per-circle mailbox uses **pre-signed URLs** (`PresignStore`) so members
   never hold the bucket credentials. Circle-sealed media is stored + re-served peer-to-peer.
-- ⏭️ **Cloud drives (Google Drive / Dropbox) not yet wired**: the `PKCE` helper in
-  `Storage.swift` is retained for a future build; live OAuth token exchange + drive
-  upload/download still need the per-provider public client IDs (registered by you, no
-  secret).
+- ✅ **Haven relay mailbox**: sealed blobs park on the relay's local disk (in-app
+  `RelayHost` or the standalone `haven-relay` daemon) and are pulled by other members.

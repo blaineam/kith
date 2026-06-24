@@ -63,8 +63,8 @@ as the user's **personal store-and-forward node**, advancing the $0 goal because
 infrastructure the user already owns:
 
 - It caches encrypted group traffic and **forwards it to the user's other devices**
-  when they come online — complementing or replacing iCloud/relay for *your own*
-  devices.
+  when they come online — complementing or replacing a Haven relay mailbox / BYO
+  S3 bucket for *your own* devices.
 - It forwards **ciphertext**; it doesn't need to decrypt to relay (though, being your
   device, it legitimately could read its own copy).
 
