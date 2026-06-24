@@ -116,8 +116,8 @@ object DemoSeeder {
         val valid = people.filter { it.engine != null && it.hex.isNotEmpty() }
         callParticipants = valid.take(3).map { it.hex }
 
-        // ── Demo media (abstract, unmistakably synthetic gradient "photos") ─────────────────
-        installPhotos()
+        // ── Demo media (the same real, PII-free photos iOS bundles) ─────────────────────────
+        installPhotos(context)
 
         // ── Stories tray (two friends + me) ─────────────────────────────────────────────────
         story(main, valid.getOrNull(0), listOf("img_demo_sunset"), "golden hour at the cove 🌅", mins(40))
@@ -311,12 +311,18 @@ object DemoSeeder {
         "img_demo_brunch" to (45f to 18f),    // golden crust
     )
 
-    /** Install the synthetic demo photos into LocalMedia under the fixed refs (idempotent). */
-    private fun installPhotos() {
+    /**
+     * Install the demo photos into LocalMedia under the fixed refs. Loads the SAME bundled,
+     * royalty-free, PII-free photos iOS uses (apple/HavenApp/DemoAssets → android debug
+     * assets/demo/), falling back to a synthetic gradient only if an asset is missing. Always
+     * (re)writes so it replaces any gradient from an older demo run.
+     */
+    private fun installPhotos(context: Context) {
         for ((ref, hues) in photoHues) {
-            if (LocalMedia.has(ref)) continue
-            val jpeg = gradientJpeg(hues.first, hues.second)
-            LocalMedia.storeUnderRef(DEFAULT_CIRCLE, ref, jpeg)
+            val asset = "demo/photo-" + ref.removePrefix("img_demo_") + ".jpg"
+            val bytes = runCatching { context.assets.open(asset).use { it.readBytes() } }.getOrNull()
+                ?: gradientJpeg(hues.first, hues.second)
+            LocalMedia.storeUnderRef(DEFAULT_CIRCLE, ref, bytes)
         }
     }
 
