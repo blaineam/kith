@@ -25,6 +25,7 @@ struct StoryViewer: View {
     @State private var replySent = false
     @State private var waitingMedia: String?   // a story whose bytes are still downloading
     @State private var retryCounter = 0
+    @State private var confirmDeleteStory = false   // confirm unsending your own story
     @FocusState private var replyFocused: Bool
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -175,12 +176,29 @@ struct StoryViewer: View {
                             .padding(.horizontal, 10).padding(.vertical, 5)
                             .background(.white.opacity(0.22), in: Capsule())
                     }
+                    // Unsend (delete) your own story — removes it everywhere it was shared.
+                    Button {
+                        paused = true; player?.pause(); confirmDeleteStory = true
+                    } label: {
+                        Image(systemName: "trash").font(.caption.weight(.semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(.white.opacity(0.22), in: Capsule())
+                    }
                 }
                 Button { dismiss() } label: {
                     Image(systemName: "xmark").font(.headline).foregroundStyle(.white)
                 }
             }
             .padding(.horizontal).padding(.top, 4)
+            .confirmationDialog("Delete this story?", isPresented: $confirmDeleteStory, titleVisibility: .visible) {
+                Button("Delete story", role: .destructive) {
+                    FeedStore.shared.unsend(s.id)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { paused = false; player?.play() }
+            } message: {
+                Text("It will be removed from your story and for everyone you shared it with.")
+            }
             Spacer()
             // Bottom controls sit over a fade-to-black scrim so the (white) song chip + reply
             // field stay legible even when the story image is near-white at the bottom.
