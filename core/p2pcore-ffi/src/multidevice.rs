@@ -86,6 +86,15 @@ pub fn device_list_is_authorized(list: Vec<u8>, device_id: Vec<u8>) -> Result<bo
 
 // ── Phase 3: account-state self-sync ─────────────────────────────────────────────────────
 
+/// One live record in an account state. Clients enumerate these (via
+/// [`AccountStateHandle::entries`]) to reconcile **set-like** state — e.g. contacts and the
+/// blocked list — where the keys aren't known ahead of time.
+#[derive(uniffi::Record)]
+pub struct SelfSyncEntry {
+    pub key: String,
+    pub value: Vec<u8>,
+}
+
 /// A mutable handle to a user's own [`AccountState`] CRDT. Build it up on a device, `seal` it
 /// for the mailbox, `open` peers' blobs, and `merge` them to converge.
 #[derive(uniffi::Object)]
@@ -149,6 +158,18 @@ impl AccountStateHandle {
     /// Plaintext wire bytes (for `from_bytes`; persist sealed via `seal_account_state`).
     pub fn to_bytes(&self) -> Vec<u8> {
         self.inner.lock().unwrap().to_bytes()
+    }
+
+    /// All live (non-tombstoned) records as `(key, value)` pairs, sorted by key. Lets a client
+    /// enumerate set-like state (e.g. every `contact:<hex>` / `blocked:<hex>`) to reconcile it
+    /// against the local stores after a merge.
+    pub fn entries(&self) -> Vec<SelfSyncEntry> {
+        self.inner
+            .lock()
+            .unwrap()
+            .entries()
+            .map(|(k, v)| SelfSyncEntry { key: k.to_string(), value: v.to_vec() })
+            .collect()
     }
 }
 

@@ -8,9 +8,11 @@ import Foundation
 // (`AccountStateHandle`, `sealAccountState`/`openAccountState`, `selfSyncSlotKey`). The relay
 // only ever holds ciphertext sealed with a key only this account's devices can derive.
 //
-// v1 scope: the user's PROFILE (name/emoji/bio/link) and GLOBAL SETTINGS. These are scalar
-// keys, so applying a merged state needs only `get(key:)` — no key enumeration. Contacts,
-// blocked list, and circles (set-like / engine-managed) follow once this round-trips on-device.
+// Scope: PROFILE (name/emoji/bio/link), GLOBAL SETTINGS, CONTACTS, and the BLOCKED LIST.
+// Scalar keys (profile/setting) apply via `get(key:)`; set-like state (contacts/blocked)
+// reconciles via `entries()`, with local removals propagated as tombstones. Circles stay out
+// for now: a device needs each member's public crypto bundle (held in the engine, not the
+// Contact struct) to actually participate, so circle sync is a separate engine-state piece.
 
 /// A stable **per-device** id. All of a user's devices share the account seed (same node id),
 /// so each physical device needs its own id to own a sync slot and to break LWW ties. Random
@@ -59,8 +61,18 @@ final class SelfSyncCoordinator {
         m["setting:autoOptimize"] = Data([s.autoOptimize ? 1 : 0])
         m["setting:silent"] = Data([s.silent ? 1 : 0])
         m["setting:retentionDays"] = withUnsafeBytes(of: Int32(s.retentionDays).littleEndian) { Data($0) }
+        // Roster: contacts (full card) + blocked list.
+        for c in ContactsStore.shared.contacts {
+            if let data = try? JSONEncoder().encode(c) { m["contact:\(c.idHex)"] = data }
+        }
+        for hex in ConnectionsStore.shared.blocked { m["blocked:\(hex)"] = Data([1]) }
         return m
     }
+
+    /// Namespaces whose keys are dynamic (set-like) — used to detect LOCAL removals so they
+    /// propagate as tombstones (unblock, delete contact). Scalar namespaces (profile/setting)
+    /// are always present, so they're never spuriously removed.
+    private static let dynamicPrefixes = ["contact:", "blocked:"]
 
     /// Write a merged state back into the local stores (only when a value actually differs, to
     /// avoid feedback loops through the stores' didSet broadcasts).
@@ -80,6 +92,28 @@ final class SelfSyncCoordinator {
             let n = Int(Int32(littleEndian: v.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }))
             if n != s.retentionDays { s.retentionDays = n }
         }
+
+        // Roster reconciliation (set-like — enumerate the converged state via entries()).
+        let live = h.entries()
+
+        // Contacts: upsert everything present; drop locals the converged state no longer has
+        // (a contact deleted on another device propagated as a tombstone).
+        var wantContacts: [String: Contact] = [:]
+        for e in live where e.key.hasPrefix("contact:") {
+            if let c = try? JSONDecoder().decode(Contact.self, from: e.value) { wantContacts[c.idHex] = c }
+        }
+        let cs = ContactsStore.shared
+        for c in wantContacts.values { cs.syncUpsert(c) }
+        for c in cs.contacts where wantContacts[c.idHex] == nil { cs.remove(c) }
+
+        // Blocked list: reconcile both directions.
+        var wantBlocked = Set<String>()
+        for e in live where e.key.hasPrefix("blocked:") {
+            wantBlocked.insert(String(e.key.dropFirst("blocked:".count)))
+        }
+        let conn = ConnectionsStore.shared
+        for hex in wantBlocked.subtracting(conn.blocked) { conn.block(hex) }
+        for hex in conn.blocked.subtracting(wantBlocked) { conn.unblock(hex) }
     }
 
     private func boolValue(_ h: AccountStateHandle, _ key: String) -> Bool? {
@@ -114,9 +148,17 @@ final class SelfSyncCoordinator {
         // 2. Fold in whatever changed locally since last sync (stamp = now, this device).
         let now = UInt64(Date().timeIntervalSince1970 * 1000)
         let device = SelfSyncDevice.id
-        for (key, value) in currentLocal() {
+        let local = currentLocal()
+        for (key, value) in local {
             if base.get(key: key) != value {
                 _ = try? base.set(key: key, value: value, ts: now, device: device)
+            }
+        }
+        // Detect local removals in dynamic namespaces (a contact deleted, a peer unblocked) and
+        // tombstone them so the removal propagates instead of a peer device re-adding them.
+        for e in base.entries() where Self.dynamicPrefixes.contains(where: { e.key.hasPrefix($0) }) {
+            if local[e.key] == nil {
+                _ = try? base.remove(key: e.key, ts: now, device: device)
             }
         }
 

@@ -126,6 +126,18 @@ final class ContactsStore: ObservableObject {
         save()
     }
 
+    /// Insert or replace a contact by node id — used by multi-device sync to apply a peer
+    /// device's roster. No-op if an identical contact already exists (avoids churn/loops).
+    func syncUpsert(_ contact: Contact) {
+        if let i = contacts.firstIndex(where: { $0.idHex == contact.idHex }) {
+            guard contacts[i] != contact else { return }
+            contacts[i] = contact
+        } else {
+            contacts.append(contact)
+        }
+        save()
+    }
+
     private func save() {
         if let data = try? JSONEncoder().encode(contacts) {
             UserDefaults.standard.set(data, forKey: key)
