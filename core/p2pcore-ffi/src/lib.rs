@@ -22,7 +22,9 @@ use p2pcore::social::{
 uniffi::setup_scaffolding!();
 
 /// Multi-device (D16): device-credential + account-state self-sync FFI surface.
-mod multidevice;
+/// `pub` so the desktop backend (which links this crate directly) can call the shared
+/// circle encoder + S3 helpers without going through UniFFI.
+pub mod multidevice;
 
 /// Android only: receive the app's `Context` (and, via it, the `JavaVM`) from Kotlin and hand
 /// both to `ndk-context`. iroh's TLS stack (rustls platform verifier) reads the system trust
