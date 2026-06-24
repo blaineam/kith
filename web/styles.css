@@ -364,19 +364,24 @@ a.inline:hover{text-decoration:underline}
 /* ── Magazine responsive ──────────────────────────────────────────────── */
 @media (max-width:920px){
   .mag-hero-grid{grid-template-columns:1fr;gap:30px}
-  .hero-renders{min-height:clamp(300px,80vw,460px);margin-top:8px}
+  /* Stacked hero: drop the overlapping absolute phones for ONE centered phone that
+     scales to the viewport (height-capped so tall renders never get cut off). */
+  .hero-renders{min-height:0;margin-top:8px;display:flex;justify-content:center;align-items:center}
+  .hero-renders .render{position:static}
+  .hero-renders .r-back{display:none}
+  .hero-renders .r-front{width:auto;max-width:300px;max-height:62vh;transform:none;top:auto;right:auto}
   .spread{grid-template-columns:1fr;gap:30px}
   .spread.flip .spread-art{order:0}
   .spread.flip .spread-copy{order:0}
-  .spread-art .render{width:56%;max-width:300px}
+  .spread-art .render{width:auto;max-width:300px;max-height:60vh;margin:0 auto}
   .showcase-grid{grid-template-columns:1fr;gap:28px}
+  .showcase .render{width:auto;max-width:100%;max-height:58vh;margin:0 auto;display:block}
   .statrow{grid-template-columns:1fr 1fr;gap:24px 18px}
 }
 @media (max-width:560px){
-  .hero-renders .render{width:66%}
   .gallery{grid-template-columns:1fr;gap:24px}
   .gallery .g-item.lift{transform:none}
-  .gallery .g-item .render{width:60%;max-width:260px;margin:0 auto}
+  .gallery .g-item .render{width:auto;max-width:240px;max-height:56vh;margin:0 auto}
   .render-slot{width:66%}
 }
 
