@@ -5,8 +5,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
-import android.net.Uri
-import android.widget.VideoView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -152,8 +150,8 @@ fun StoryEditor(ref: String, isVideo: Boolean, initialFilter: Int = 0, onClose: 
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black).onSizeChanged { boxSize = it }) {
-        // ── Media ────────────────────────────────────────────────────────────────────────
-        if (isVideo) EditorVideo(ref, Modifier.fillMaxSize())
+        // ── Media (photo + video both preview the live filter) ─────────────────────────────
+        if (isVideo) EditorVideo(ref, filter.spec, Modifier.fillMaxSize())
         else previewBmp?.let { Image(it.asImageBitmap(), "Story", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
 
         // ── Caption (lifts above the keyboard via imePadding) ──────────────────────────────
@@ -271,17 +269,17 @@ fun StoryEditor(ref: String, isVideo: Boolean, initialFilter: Int = 0, onClose: 
     }
 }
 
-/** Autoplaying, looping, chrome-free video preview (no MediaController → no clobbering controls). */
+/** Live filter-applied, autoplaying, looping, chrome-free video preview. */
 @Composable
-private fun EditorVideo(ref: String, modifier: Modifier) {
+private fun EditorVideo(ref: String, spec: FilterSpec, modifier: Modifier) {
     val file = remember(ref) { LocalMedia.videoFile(DEFAULT_CIRCLE, ref) }
     if (file == null) { Box(modifier.background(Color.Black)); return }
-    AndroidView(modifier = modifier, factory = { ctx ->
-        VideoView(ctx).apply {
-            setVideoURI(Uri.fromFile(file))
-            setOnPreparedListener { mp -> mp.isLooping = true; mp.setVolume(0f, 0f); start() }
-        }
-    })
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx -> FilteredVideoView(ctx).also { it.play(file); it.setFilter(spec) } },
+        update = { it.setFilter(spec) },
+        onRelease = { it.release() },
+    )
 }
 
 @Composable
