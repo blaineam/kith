@@ -524,9 +524,11 @@ haven-relay run --link "haven-relay://circle#…"</code></pre>
 
       var flat = pick(/\.flatpak$/i);
       var hasRelay = any(/^haven-relay-/i);
+      var apk = pick(/universal.*\.apk$/i) || pick(/\.apk$/i);
 
       grid.innerHTML = [
         appleCard(),
+        card("Android", "APK — sideload", [apk ? btn(apk, "Download APK", true) : btn(null)]),
         card("Windows", "x86-64", winBtns.length ? winBtns : [btn(null)]),
         card("Linux", "Ubuntu · Debian · Fedora · Arch", linuxBtns.length ? linuxBtns : [btn(null)]),
         card("SteamOS · Steam Deck", "Flatpak", [flat ? btn(flat, "Download Flatpak", true) : (rel.html_url ? btn(rel.html_url, "Get on GitHub", false) : btn(null))]),
