@@ -2275,15 +2275,7 @@ struct PostCard: View {
                     LinkedText(text: c.body, font: .caption)
                 }
                 if !c.unsent && !c.media.isEmpty { commentMediaRow(c.media) }
-                if !c.reactions.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(c.reactions, id: \.emoji) { r in
-                            Text("\(r.emoji)\(r.count > 1 ? " \(r.count)" : "")")
-                                .font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Color(.tertiarySystemFill), in: Capsule())
-                        }
-                    }
-                }
+                if !c.unsent { commentReactionsRow(c) }
             }
         }
         .contextMenu {
@@ -2304,6 +2296,30 @@ struct PostCard: View {
                 }
             }
         }
+    }
+
+    /// Reactions under a comment: existing reaction chips (tap to toggle your own, like the
+    /// post-level row) plus a small react button that opens the emoji picker. The core
+    /// `react`/`unreact` work on ANY event id, so a comment id is targeted exactly like a post.
+    @ViewBuilder private func commentReactionsRow(_ c: FeedCommentFfi) -> some View {
+        HStack(spacing: 4) {
+            ForEach(c.reactions, id: \.emoji) { r in
+                Text("\(r.emoji)\(r.count > 1 ? " \(r.count)" : "")")
+                    .font(.caption2).padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(r.mine ? AnyShapeStyle(HavenTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.tertiarySystemFill)), in: Capsule())
+                    .overlay(Capsule().strokeBorder(r.mine ? HavenTheme.pink.opacity(0.5) : .clear))
+                    .contentShape(Capsule())
+                    .onTapGesture {
+                        if r.mine { feed.unreact(c.id, r.emoji) }
+                        else { EmojiStore.shared.record(r.emoji); feed.react(c.id, r.emoji) }
+                    }
+            }
+            Button { commentReactTarget = CommentReactTarget(id: c.id) } label: {
+                Image(systemName: "face.smiling").font(.caption2).foregroundStyle(.secondary)
+            }
+            .buttonStyle(PressableStyle())
+        }
+        .animation(HavenTheme.bouncy, value: c.reactions.count)
     }
 
     /// A commenter's avatar — mine is my real photo/emoji; others use their synced photo/emoji.

@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// The little "now playing" pill shown near a post with attached music: artist + song
-/// title and a live audio-playing animation. Tap it to open the song in Apple Music
-/// (where adding it to your library is one tap).
+/// title and a live audio-playing animation. Tapping the chip toggles the app's global mute
+/// (post music + video audio); a small "open in Music" button at the trailing edge opens the
+/// song in Apple Music (where adding it to your library is one tap).
 struct NowPlayingPill: View {
     let track: TrackRefFfi
     var animating: Bool
     @Environment(\.openURL) private var openURL
+    @ObservedObject private var settings = SettingsStore.shared
 
     /// Apple Music deep link for the shared catalog song (nil for library-only items
     /// that have no store id).
@@ -16,28 +18,37 @@ struct NowPlayingPill: View {
     }
 
     var body: some View {
-        Button {
-            if let url = appleMusicURL { openURL(url) }
-        } label: {
-            HStack(spacing: 8) {
-                EqualizerBars(animating: animating)
-                Text("\(track.title) · \(track.artist)")
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if appleMusicURL != nil {
+        HStack(spacing: 8) {
+            EqualizerBars(animating: animating && !settings.silent)
+            Text("\(track.title) · \(track.artist)")
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+            // A muted-speaker glyph makes it clear the chip is the mute control.
+            Image(systemName: settings.silent ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            // "Open in Music" is now a SMALL, explicit element within the chip — not the whole
+            // chip's tap target — so a stray tap mutes rather than yanking the user into Music.
+            if let url = appleMusicURL {
+                Button { openURL(url) } label: {
                     Image(systemName: "arrow.up.forward.app")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(HavenTheme.pink)
+                        .padding(4)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open in Music")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(HavenTheme.pink.opacity(0.35)))
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
-        .disabled(appleMusicURL == nil)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(HavenTheme.pink.opacity(0.35)))
+        .contentShape(Capsule())
+        // Tapping the chip toggles the global mute (post music + video audio).
+        .onTapGesture { settings.silent.toggle() }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(track.title) by \(track.artist). \(settings.silent ? "Unmute" : "Mute") sound")
     }
 }
 

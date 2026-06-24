@@ -194,7 +194,14 @@ final class MacCameraEngine: NSObject, ObservableObject {
     }
 
     func stop() {
-        queue.async { [session] in if session.isRunning { session.stopRunning() } }
+        queue.async { [session] in
+            if session.isRunning { session.stopRunning() }
+            // Release the camera device so the macOS camera indicator goes off.
+            session.beginConfiguration()
+            for input in session.inputs { session.removeInput(input) }
+            for output in session.outputs { session.removeOutput(output) }
+            session.commitConfiguration()
+        }
     }
 
     func capturePhoto(_ completion: @escaping (PlatformImage?) -> Void) {
@@ -388,7 +395,27 @@ final class CameraViewController: UIViewController,
     }
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        if session.isRunning { session.stopRunning() }
+        teardownSession()
+    }
+
+    // Belt-and-suspenders: SwiftUI dismissing the fullScreenCover/sheet hosting this controller may
+    // not always route through viewWillDisappear, so also tear the session down on dealloc. Both
+    // paths are idempotent.
+    deinit { teardownSession() }
+
+    /// Fully stop the capture session and release the camera device so the iOS "in use" (green)
+    /// indicator goes off — not just stopRunning, which keeps inputs/outputs (and the device) bound.
+    private func teardownSession() {
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
+        let session = self.session
+        DispatchQueue.global(qos: .userInitiated).async {
+            if session.isRunning { session.stopRunning() }
+            session.beginConfiguration()
+            for input in session.inputs { session.removeInput(input) }
+            for output in session.outputs { session.removeOutput(output) }
+            session.commitConfiguration()
+        }
     }
 
     private func configure() {
@@ -425,10 +452,15 @@ final class CameraViewController: UIViewController,
         DispatchQueue.global(qos: .userInitiated).async { self.session.startRunning() }
     }
 
-    /// Orient + mirror the data-output connection so the Metal preview matches reality.
+    /// Orient + mirror the data-output (preview) connection AND the still/movie capture connections
+    /// so the Metal preview matches reality and captured media isn't sideways. The front camera is
+    /// mirrored so the selfie matches the (mirrored) live preview.
     private func configurePreviewConnection() {
-        guard let conn = videoDataOutput.connection(with: .video) else { return }
-        conn.applyPreviewOrientation(angle: havenPreviewRotationAngle(), mirroredFront: position == .front)
+        let angle = havenPreviewRotationAngle()
+        let mirrorFront = position == .front
+        videoDataOutput.connection(with: .video)?.applyPreviewOrientation(angle: angle, mirroredFront: mirrorFront)
+        photoOutput.connection(with: .video)?.applyPreviewOrientation(angle: angle, mirroredFront: mirrorFront)
+        movieOutput.connection(with: .video)?.applyPreviewOrientation(angle: angle, mirroredFront: mirrorFront)
     }
 
     @objc private func orientationChanged() {
