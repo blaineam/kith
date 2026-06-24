@@ -709,6 +709,9 @@ final class FeedStore: ObservableObject {
     /// were offline. This is what delivers posts without both ends being online at once.
     func pollMailboxNow() {
         guard let social else { return }
+        // Multi-device self-sync runs on every poll, independent of per-circle mailboxes — it has
+        // its own transport (any configured relay OR the user's S3 bucket). (D16 Phase 3.)
+        Task { @MainActor in await SelfSyncCoordinator.shared.sync() }
         let ids = circles.map { $0.id }
         guard ids.contains(where: { SharedStore.hasMailbox($0) }) else { return }   // relay or S3
         Task { @MainActor in
@@ -722,9 +725,6 @@ final class FeedStore: ObservableObject {
                 }
             }
             if changed { persist(); refresh(); requestMissingMedia() }
-            // Multi-device: converge this device's account state (profile/settings) with the
-            // user's other devices via the same relay mailbox (D16 Phase 3).
-            await SelfSyncCoordinator.shared.sync()
         }
     }
 

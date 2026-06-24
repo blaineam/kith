@@ -91,14 +91,15 @@ final class SelfSyncCoordinator {
 
     /// One full sync pass: fold local changes into the base with fresh stamps, merge every peer
     /// slot, apply the converged result locally, persist, and re-publish our own slot. Safe to
-    /// call on a timer; coalesces if already running. No-op without an account or any relay.
+    /// call on a timer; coalesces if already running. No-op without an account or any sync
+    /// target (a relay or the user's S3 bucket — either works, no relay required).
     func sync() async {
         guard !inFlight else { return }
         guard let seed = AccountStore.storedSeed() else { return }
         let accountHex = AccountStore.currentNodeHex()
         guard !accountHex.isEmpty else { return }
-        let relays = RelayMailboxStore.shared.allRelays()
-        guard !relays.isEmpty else { return }   // self-sync needs at least one relay mailbox
+        let transports = gatherTransports()
+        guard !transports.isEmpty else { return }   // needs a relay OR an S3 bucket (either works)
         inFlight = true
         defer { inFlight = false }
 
@@ -122,11 +123,10 @@ final class SelfSyncCoordinator {
         // 3. Pull + merge every peer slot from every relay.
         let prefix = "haven/" + selfSyncSlotPrefix(accountNodeHex: accountHex)
         let ownKey = "haven/" + selfSyncSlotKey(accountNodeHex: accountHex, deviceNodeHex: SelfSyncDevice.hex)
-        for node in relays {
-            guard let c = await RelayClients.client(node) else { continue }
-            let keys = await c.list(prefix: prefix)
+        for t in transports {
+            let keys = await tList(t, prefix)
             for key in keys where key != ownKey {
-                guard let blob = await c.get(key: key) else { continue }
+                guard let blob = await tFetch(t, key) else { continue }
                 if let peer = try? openAccountState(accountSeed: seed, sealed: blob) {
                     base.merge(other: peer)
                 }
@@ -139,10 +139,49 @@ final class SelfSyncCoordinator {
 
         // 5. Re-publish our own slot (sealed) to every relay for redundancy.
         guard let sealed = try? sealAccountState(accountSeed: seed, state: base) else { return }
-        for node in relays {
-            guard let c = await RelayClients.client(node) else { continue }
-            do { try await c.put(key: ownKey, data: sealed); RelayHealth.shared.recordSuccess(node) }
-            catch { RelayHealth.shared.recordFailure(node) }
+        for t in transports { _ = await tUpload(t, ownKey, sealed) }
+    }
+
+    // MARK: transports (relay + S3 — self-sync works with either, or both)
+
+    private enum Transport { case relay(String); case s3(S3Client) }
+
+    /// Every place this device can read/write its self-sync slots: all configured relays plus
+    /// the user's OWN S3 bucket (so sync works with no relay at all — BYO storage is enough).
+    private func gatherTransports() -> [Transport] {
+        var ts: [Transport] = RelayMailboxStore.shared.allRelays().map { .relay($0) }
+        if let s3 = SharedStore.ownerS3() { ts.append(.s3(s3)) }
+        return ts
+    }
+
+    private func tList(_ t: Transport, _ prefix: String) async -> [String] {
+        switch t {
+        case .relay(let node):
+            guard let c = await RelayClients.client(node) else { return [] }
+            return await c.list(prefix: prefix)
+        case .s3(let c):
+            return (try? await c.listKeys(prefix: prefix)) ?? []
+        }
+    }
+
+    private func tFetch(_ t: Transport, _ key: String) async -> Data? {
+        switch t {
+        case .relay(let node):
+            guard let c = await RelayClients.client(node) else { return nil }
+            return await c.get(key: key)
+        case .s3(let c):
+            return try? await c.getObject(key: key)
+        }
+    }
+
+    private func tUpload(_ t: Transport, _ key: String, _ data: Data) async -> Bool {
+        switch t {
+        case .relay(let node):
+            guard let c = await RelayClients.client(node) else { return false }
+            do { try await c.put(key: key, data: data); RelayHealth.shared.recordSuccess(node); return true }
+            catch { RelayHealth.shared.recordFailure(node); return false }
+        case .s3(let c):
+            do { try await c.putObject(key: key, data: data); return true } catch { return false }
         }
     }
 }
