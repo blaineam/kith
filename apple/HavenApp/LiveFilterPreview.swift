@@ -64,11 +64,12 @@ final class LiveFrameTap: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 final class MetalCameraPreview: MTKView {
     /// The look to apply to every frame. Set instantly when the user taps a swatch.
     var filter: HavenFilter = .original
-    /// Mirror the frame horizontally (front/selfie camera). Done here in the render — NOT via
-    /// `isVideoMirrored` on the data-output connection, which composes badly with
-    /// `videoRotationAngle` and left the selfie preview rotated 90°. The data output is
-    /// rotate-only (the path the back camera already proves upright); we flip the selfie here.
-    var mirrored = false
+    /// How to orient each native (landscape) camera buffer so it displays upright (and mirrored
+    /// for the selfie). Applied here in the render — `videoRotationAngle`/`isVideoMirrored` on a
+    /// **data-output** connection do NOT reliably rotate the delivered buffers (only the file
+    /// outputs do), which is why earlier fixes left the preview sideways. `.oriented()` is
+    /// deterministic. Default `.right` = back camera, portrait.
+    var orientation: CGImagePropertyOrientation = .right
 
     private let tap: LiveFrameTap
     private let commandQueue: MTLCommandQueue?
@@ -116,9 +117,9 @@ final class MetalCameraPreview: MTKView {
               let input = tap.latest else { return }
 
         let filtered = (filter == .original) ? input : FilterEngine.apply(filter.spec, to: input)
-        // Mirror the selfie here (horizontal flip, stays upright) rather than on the capture
-        // connection. `.upMirrored` resets the extent origin so the aspect-fill math below holds.
-        let look = mirrored ? filtered.oriented(.upMirrored) : filtered
+        // Orient the native landscape buffer upright (+ mirror for the selfie). `.oriented()`
+        // normalizes the extent so the aspect-fill math below still holds.
+        let look = filtered.oriented(orientation)
 
         // Aspect-fill the frame into the drawable: scale to cover, then center.
         let dst = CGRect(origin: .zero, size: drawableSize)
@@ -145,21 +146,21 @@ final class MetalCameraPreview: MTKView {
 struct FilteredCameraPreview: UIViewRepresentable {
     let tap: LiveFrameTap
     var filter: HavenFilter
-    /// Mirror the preview for the front/selfie camera (flip done in render, not on the connection).
-    var mirrored: Bool = false
+    /// How to orient the preview (upright + selfie mirror) — see `havenCameraOrientation`.
+    var orientation: CGImagePropertyOrientation = .right
     var onThumbnail: ((PlatformImage) -> Void)? = nil
 
     func makeUIView(context: Context) -> MetalCameraPreview {
         let view = MetalCameraPreview(tap: tap, device: MTLCreateSystemDefaultDevice())
         view.filter = filter
-        view.mirrored = mirrored
+        view.orientation = orientation
         tap.onThumbnail = onThumbnail
         return view
     }
 
     func updateUIView(_ view: MetalCameraPreview, context: Context) {
         view.filter = filter
-        view.mirrored = mirrored
+        view.orientation = orientation
         tap.onThumbnail = onThumbnail
     }
 }
@@ -185,6 +186,20 @@ extension AVCaptureConnection {
             automaticallyAdjustsVideoMirroring = false
             isVideoMirrored = mirroredFront
         }
+    }
+}
+
+/// The `CGImagePropertyOrientation` that makes a **native (landscape) camera buffer** display
+/// upright for the current device orientation + camera — used by the Metal preview, since
+/// `videoRotationAngle` on a data-output connection doesn't reliably rotate delivered buffers.
+/// Portrait: back = `.right`, front (mirrored selfie) = `.leftMirrored` — the standard mapping.
+func havenCameraOrientation(position: AVCaptureDevice.Position) -> CGImagePropertyOrientation {
+    let front = position == .front
+    switch UIDevice.current.orientation {
+    case .portraitUpsideDown: return front ? .rightMirrored : .left
+    case .landscapeLeft:      return front ? .downMirrored : .up
+    case .landscapeRight:     return front ? .upMirrored : .down
+    default:                  return front ? .leftMirrored : .right   // portrait + face up/down/unknown
     }
 }
 

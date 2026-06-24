@@ -38,20 +38,8 @@ final class SelfSyncCoordinator {
 
     private var inFlight = false
 
-    /// Deterministic JSON (sorted keys) so equal state encodes to identical bytes — otherwise the
-    /// change-detection diff would re-stamp every sync and the devices would ping-pong.
-    private static let encoder: JSONEncoder = {
-        let e = JSONEncoder(); e.outputFormatting = [.sortedKeys]; return e
-    }()
-
-    /// A circle's portable structure: its name, every member's public bundle (base64), and the
-    /// relay nodes that hold its mailbox — enough for another device to reconstruct it and seal
-    /// to all members. Member bundles are public keys; the blob is sealed to the user's devices.
-    private struct CircleSync: Codable, Equatable {
-        var name: String
-        var members: [String]   // base64 member bundles, sorted
-        var relays: [String]    // relay node hexes, sorted
-    }
+    // Circle records are encoded/decoded by the shared FFI `encodeCircleSync`/`decodeCircleSync`
+    // so iOS/desktop/Android emit byte-identical bytes (no per-platform JSON/base64 drift).
 
     /// Last converged state, persisted so we can detect what changed locally (LWW only advances
     /// a key's stamp when its value actually changes — otherwise two devices would ping-pong).
@@ -86,10 +74,11 @@ final class SelfSyncCoordinator {
         // circle and seal to every member. (Additive in v1 — member/circle removal is a follow-up.)
         if let social = social {
             for ci in social.circles() {
-                let members = social.circleMemberBundles(circleId: ci.id).map { $0.base64EncodedString() }.sorted()
-                let relays = RelayMailboxStore.shared.relays(forCircle: ci.id).sorted()
-                let cs = CircleSync(name: ci.name, members: members, relays: relays)
-                if let data = try? Self.encoder.encode(cs) { m["circle:\(ci.id)"] = data }
+                // Shared FFI encoder → byte-identical circle records across iOS/desktop/Android.
+                m["circle:\(ci.id)"] = encodeCircleSync(
+                    name: ci.name,
+                    memberBundles: social.circleMemberBundles(circleId: ci.id),
+                    relays: RelayMailboxStore.shared.relays(forCircle: ci.id))
             }
         }
         return m
@@ -98,7 +87,7 @@ final class SelfSyncCoordinator {
     /// Namespaces whose keys are dynamic (set-like) — used to detect LOCAL removals so they
     /// propagate as tombstones (unblock, delete contact). Scalar namespaces (profile/setting)
     /// are always present, so they're never spuriously removed.
-    private static let dynamicPrefixes = ["contact:", "blocked:"]
+    private static let dynamicPrefixes = ["contact:", "blocked:", "circle:"]
 
     /// Write a merged state back into the local stores (only when a value actually differs, to
     /// avoid feedback loops through the stores' didSet broadcasts).
@@ -145,19 +134,30 @@ final class SelfSyncCoordinator {
         // (so this device can seal to them), and record its relay mailbox(es). Additive in v1.
         if let social = social {
             let existing = social.circles()
+            var wantCircleIds = Set<String>()
             for e in live where e.key.hasPrefix("circle:") {
                 let id = String(e.key.dropFirst("circle:".count))
-                guard let c = try? JSONDecoder().decode(CircleSync.self, from: e.value) else { continue }
-                social.createCircle(id: id, name: c.name)   // no-op if it already exists
-                if let cur = existing.first(where: { $0.id == id }), cur.name != c.name {
-                    social.renameCircle(id: id, name: c.name)
+                guard let rec = decodeCircleSync(bytes: e.value) else { continue }
+                wantCircleIds.insert(id)
+                social.createCircle(id: id, name: rec.name)   // no-op if it already exists
+                if let cur = existing.first(where: { $0.id == id }), cur.name != rec.name {
+                    social.renameCircle(id: id, name: rec.name)
                 }
-                for b64 in c.members {
-                    if let bundle = Data(base64Encoded: b64) {
-                        _ = try? social.addContactBundle(circleId: id, bundle: bundle)
-                    }
+                // Members are authoritative: register each synced member (addContactBundle returns
+                // their hex), then remove any local member not in the synced set.
+                var wanted = Set<String>()
+                for bundle in rec.memberBundles {
+                    if let hex = try? social.addContactBundle(circleId: id, bundle: bundle) { wanted.insert(hex) }
                 }
-                for node in c.relays { RelayMailboxStore.shared.add(circleId: id, nodeHex: node) }
+                for existingHex in social.contactNodeIds(circleId: id) where !wanted.contains(existingHex) {
+                    social.removeFromCircle(circleId: id, nodeHex: existingHex)
+                }
+                for node in rec.relays { RelayMailboxStore.shared.add(circleId: id, nodeHex: node) }
+            }
+            // Circle left on another device (tombstoned → absent from the converged set) is left
+            // here too. Skip the default circle + DM pseudo-circles.
+            for ci in existing where !wantCircleIds.contains(ci.id) && ci.id != "default" && !ci.id.hasPrefix("dm:") {
+                social.leaveCircle(id: ci.id)
             }
         }
     }

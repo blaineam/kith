@@ -150,11 +150,9 @@ final class CameraModel: NSObject, ObservableObject {
     private func configurePreviewConnection(position: AVCaptureDevice.Position? = nil) {
         let pos = position ?? self.position
         let mirrorFront = pos == .front
-        // Preview (data output): rotate ONLY — never mirror here. `isVideoMirrored` on a data-output
-        // connection composes badly with `videoRotationAngle` and left the selfie preview rotated 90°;
-        // the Metal preview mirrors the selfie in render (FilteredCameraPreview.mirrored). The file
-        // outputs mirror normally so captured media stays correct.
-        videoDataOutput.connection(with: .video)?.applyPreviewOrientation(angle: 90, mirroredFront: false)
+        // FILE outputs honor rotation+mirror (captured media upright). The PREVIEW data output does
+        // NOT reliably rotate its buffers, so the Metal preview orients the CIImage via `.oriented()`
+        // (FilteredCameraPreview.orientation = havenCameraOrientation). Leave the data output alone.
         photoOutput.connection(with: .video)?.applyPreviewOrientation(angle: 90, mirroredFront: mirrorFront)
         movieOutput.connection(with: .video)?.applyPreviewOrientation(angle: 90, mirroredFront: mirrorFront)
     }
@@ -548,7 +546,7 @@ struct StoryCameraView: View {
                 DualCameraPreview(recorder: dual, corner: pipCorner).ignoresSafeArea()
             } else {
                 FilteredCameraPreview(tap: cam.frameTap, filter: liveFilter,
-                                      mirrored: cam.position == .front,
+                                      orientation: havenCameraOrientation(position: cam.position),
                                       onThumbnail: { liveThumb = $0 }).ignoresSafeArea()
                     // Pinch anywhere on the preview to zoom.
                     .simultaneousGesture(MagnificationGesture()
