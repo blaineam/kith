@@ -995,6 +995,10 @@ struct StoryComposerView: View {
     @State private var mediaBaseOffY: CGFloat = 0
     @FocusState private var captionFocused: Bool
 
+    /// The highlight style hugs the text with a colored background — but only once there's text
+    /// to hug. Empty + the hug layout = the broken full-height white bar, so gate on non-empty.
+    private var highlightActive: Bool { StoryCaptions.bgColor(captionSpec) != nil && !caption.isEmpty }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -1035,11 +1039,13 @@ struct StoryComposerView: View {
                         .modifier(CaptionStyleEffect(spec: captionSpec))
                         .tint(.white)
                         // With a highlight background, hug the text width (like the final caption)
-                        // instead of stretching full-width while editing.
-                        .fixedSize(horizontal: StoryCaptions.bgColor(captionSpec) != nil, vertical: false)
-                        .padding(.horizontal, StoryCaptions.bgColor(captionSpec) == nil ? 0 : 12)
-                        .padding(.vertical, StoryCaptions.bgColor(captionSpec) == nil ? 0 : 6)
-                        .background { if let bg = StoryCaptions.bgColor(captionSpec) { RoundedRectangle(cornerRadius: 8).fill(bg) } }
+                        // instead of stretching full-width while editing. Only once there's text:
+                        // a vertical-axis TextField with `fixedSize(horizontal:)` + an empty string
+                        // stretches its background to full height (the broken full-screen white bar).
+                        .fixedSize(horizontal: highlightActive, vertical: false)
+                        .padding(.horizontal, highlightActive ? 12 : 0)
+                        .padding(.vertical, highlightActive ? 6 : 0)
+                        .background { if highlightActive, let bg = StoryCaptions.bgColor(captionSpec) { RoundedRectangle(cornerRadius: 8).fill(bg) } }
                         .padding(.horizontal, 24)
                         .onAppear {
                             // Focus must be set *after* the field is in the hierarchy.
