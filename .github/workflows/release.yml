@@ -179,7 +179,7 @@ jobs:
       - name: Stamp version
         shell: bash
         run: |
-          node -e "const f='desktop/src-tauri/tauri.conf.json';const c=require('fs');const j=JSON.parse(c.readFileSync(f));j.version='${{ needs.meta.outputs.version }}';c.writeFileSync(f,JSON.stringify(j,null,2));"
+          node -e "const f='desktop/src-tauri/tauri.conf.json';const c=require('fs');const j=JSON.parse(c.readFileSync(f));j.version='${{ needs.meta.outputs.version }}'.split('-')[0];c.writeFileSync(f,JSON.stringify(j,null,2));"
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
       - name: Build
@@ -205,6 +205,10 @@ jobs:
   macos-dmg:
     needs: meta
     runs-on: macos-latest
+    # The Mac ships via App Store Connect / TestFlight; this downloadable .dmg is a
+    # beta-tester convenience. Without code-signing secrets it can't sign, so it must
+    # never block the release — publish proceeds with the Win/Linux/relay/Flatpak assets.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -215,7 +219,7 @@ jobs:
           workspaces: desktop/src-tauri
       - name: Stamp version
         run: |
-          node -e "const f='desktop/src-tauri/tauri.conf.json';const c=require('fs');const j=JSON.parse(c.readFileSync(f));j.version='${{ needs.meta.outputs.version }}';c.writeFileSync(f,JSON.stringify(j,null,2));"
+          node -e "const f='desktop/src-tauri/tauri.conf.json';const c=require('fs');const j=JSON.parse(c.readFileSync(f));j.version='${{ needs.meta.outputs.version }}'.split('-')[0];c.writeFileSync(f,JSON.stringify(j,null,2));"
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
       - name: Build .dmg (signed + notarized if Apple secrets are present)
