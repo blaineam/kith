@@ -333,52 +333,17 @@ jobs:
             -exportPath "$RUNNER_TEMP/export"
           APP="$(/usr/bin/find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.app' | head -1)"
           echo "exported app: $APP"
-          # Assemble a STYLED drag-to-Applications .dmg (brand background + icon layout, parity
-          # with Blip / Enter Space Helper). The osascript styling is tolerated (|| true) in case
-          # the runner lacks a Finder session — the dmg still ships, just without the decoration.
-          APP_NAME="$(basename "$APP")"
-          VOLNAME="Haven"
+          # Build a STYLED drag-to-Applications .dmg with dmgbuild (brand background + icon layout,
+          # parity with Blip / Enter Space Helper). dmgbuild writes the volume's .DS_Store directly,
+          # so the styling actually applies on a headless CI runner — a Finder AppleScript silently
+          # no-ops there, which is why earlier releases shipped an unstyled dmg. Verified locally.
           mkdir -p "$RUNNER_TEMP/out"
           DMG="$RUNNER_TEMP/out/Haven-${VERSION}-macOS.dmg"
-          DMG_TMP="$RUNNER_TEMP/haven-rw.dmg"
-          hdiutil create -size 300m -fs HFS+ -volname "$VOLNAME" -ov "$DMG_TMP"
-          ATTACH="$(hdiutil attach "$DMG_TMP" -readwrite -noverify -noautoopen)"
-          DEV="$(echo "$ATTACH" | head -1 | awk '{print $1}')"
-          MOUNT="/Volumes/$VOLNAME"
-          cp -R "$APP" "$MOUNT/"
-          ln -s /Applications "$MOUNT/Applications"
-          mkdir -p "$MOUNT/.background"
-          cp "Scripts/dmg-background.png" "$MOUNT/.background/background.png"
-          osascript <<APPLESCRIPT || true
-          tell application "Finder"
-            tell disk "$VOLNAME"
-              open
-              set current view of container window to icon view
-              set toolbar visible of container window to false
-              set statusbar visible of container window to false
-              set the bounds of container window to {100, 100, 760, 500}
-              set theViewOptions to icon view options of container window
-              set arrangement of theViewOptions to not arranged
-              set icon size of theViewOptions to 100
-              try
-                set background picture of theViewOptions to file ".background:background.png"
-              end try
-              try
-                set position of item "$APP_NAME" of container window to {165, 195}
-              end try
-              try
-                set position of item "Applications" of container window to {495, 195}
-              end try
-              update without registering applications
-              close
-            end tell
-          end tell
-          APPLESCRIPT
-          sync
-          hdiutil detach "$DEV" -force 2>/dev/null || true
-          sleep 2
-          hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG" -ov
-          rm -f "$DMG_TMP"
+          python3 -m venv "$RUNNER_TEMP/dmgvenv"
+          "$RUNNER_TEMP/dmgvenv/bin/pip" install --quiet dmgbuild
+          "$RUNNER_TEMP/dmgvenv/bin/dmgbuild" -s Scripts/dmg_settings.py \
+            -D app="$APP" -D bg="$PWD/Scripts/dmg-background.png" \
+            "Haven" "$DMG"
           # Notarize the dmg (notarizes the app inside) + staple the ticket.
           xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" --wait
