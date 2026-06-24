@@ -52,6 +52,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     var confirmReset by remember { mutableStateOf(false) }
     var showTransfer by remember { mutableStateOf(false) }
     var showRestore by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<uniffi.haven_ffi.SelfTestReport?>(null) }
+    val core = remember { com.blaineam.haven.core.HavenCore.get(context) }
 
     val options = listOf(0 to "Keep forever", 7 to "After 1 week", 30 to "After 1 month", 90 to "After 3 months", 365 to "After 1 year")
 
@@ -205,6 +207,42 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            // Under the hood (identity hex + safety words + crypto) — nested here, like iOS.
+            Spacer(Modifier.height(16.dp))
+            Column(Modifier.fillMaxWidth().havenCard().padding(16.dp)) {
+                Text("Under the hood", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Your id", color = HavenTheme.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(core.nodeIdHex.take(24) + "…", color = Color.White, fontSize = 13.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Safety words", color = HavenTheme.textSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(com.blaineam.haven.core.SafetyWords.phrase(core.verificationHex), color = Color.White, fontSize = 13.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Haven uses hybrid post-quantum encryption (X25519 + ML-KEM-768, Ed25519 + ML-DSA). Your keys never leave this device.",
+                    color = HavenTheme.textSecondary, fontSize = 12.sp)
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Column(Modifier.fillMaxWidth().havenCard().padding(16.dp)) {
+                BrandButton(text = "Run privacy check") { report = core.runSelfTest() }
+                report?.let { r ->
+                    Spacer(Modifier.height(14.dp))
+                    SettingsCheck("Identity is yours", r.identityOk)
+                    SettingsCheck("Your stuff is locked (seal → open)", r.hybridKemOk)
+                    SettingsCheck("Messages are signed", r.signatureOk)
+                    SettingsCheck("Invite links are safe", r.linkOk)
+                    Spacer(Modifier.height(8.dp))
+                    Text(r.summary, color = if (r.allOk) Color(0xFF34D399) else Color(0xFFF87171),
+                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                }
+            }
+
             // Identity — move to another device / restore here.
             Spacer(Modifier.height(16.dp))
             Column(Modifier.fillMaxWidth().havenCard().padding(16.dp)) {
@@ -283,3 +321,13 @@ private fun Modifier.androidxRing(on: Boolean): Modifier =
     this.border(2.dp, if (on) HavenTheme.pink else HavenTheme.textSecondary, CircleShape)
 
 private fun Modifier.androidxFill(): Modifier = this.background(HavenTheme.pink)
+
+@Composable
+private fun SettingsCheck(title: String, ok: Boolean) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(if (ok) "✓" else "✗", color = if (ok) Color(0xFF34D399) else Color(0xFFF87171),
+            fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.size(10.dp))
+        Text(title, color = Color.White, fontSize = 14.sp)
+    }
+}

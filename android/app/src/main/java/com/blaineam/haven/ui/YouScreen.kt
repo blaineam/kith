@@ -132,37 +132,7 @@ fun YouScreen(onAddFriend: () -> Unit) {
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
-            Card {
-                Text("Under the hood", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                Spacer(Modifier.height(10.dp))
-                KeyVal("Your id", core.nodeIdHex.take(24) + "…")
-                Spacer(Modifier.height(6.dp))
-                KeyVal("Safety words", com.blaineam.haven.core.SafetyWords.phrase(core.verificationHex))
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "Haven uses hybrid post-quantum encryption (X25519 + ML-KEM-768, Ed25519 + ML-DSA). Your keys never leave this device.",
-                    color = HavenTheme.textSecondary, fontSize = 12.sp,
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Card {
-                BrandButton(text = "Run privacy check") { report = core.runSelfTest() }
-                report?.let { r ->
-                    Spacer(Modifier.height(14.dp))
-                    CheckRow("Identity is yours", r.identityOk)
-                    CheckRow("Your stuff is locked (seal → open)", r.hybridKemOk)
-                    CheckRow("Messages are signed", r.signatureOk)
-                    CheckRow("Invite links are safe", r.linkOk)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        r.summary,
-                        color = if (r.allOk) Color(0xFF34D399) else Color(0xFFF87171),
-                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
-                    )
-                }
-            }
+            // (Under the hood + privacy check moved into Settings — nested where iOS keeps them.)
             Spacer(Modifier.height(24.dp))
         }
     }
