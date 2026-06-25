@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use haven_net::Node;
 use haven_net::blobstore::{BlobClient, BlobServer};
@@ -18,6 +18,15 @@ use p2pcore::social::{
     build_feed, open_bytes, open_event, seal_bytes, seal_event, Event, EventKind, FeedPoll, Group,
     SealedEnvelope, TrackRef,
 };
+use p2pcore::groupkey::{
+    new_epoch_key, open_event_in_epoch, open_key_commit, seal_event_in_epoch, seal_key_commit,
+    EpochEnvelope,
+};
+
+/// Wire tags prefixed to an envelope so `receive` can route it. Legacy (untagged) envelopes are raw
+/// JSON beginning with `{` (0x7b), so any tag byte we choose that isn't `{` is unambiguous.
+const TAG_EPOCH_EVENT: u8 = 0x02; // an EpochEnvelope (event sealed under a circle epoch key)
+const TAG_KEY_COMMIT: u8 = 0x03; // a SealedEnvelope carrying a circle epoch key (KeyCommit)
 
 uniffi::setup_scaffolding!();
 
@@ -737,13 +746,63 @@ fn map_feed(events: Vec<Event>, me: &str, now_ms: u64, viewer_retention_secs: Op
         .collect()
 }
 
-/// One circle: its own membership, event log, and dedup set.
+/// One circle: its own membership, event log, and dedup set, plus the **sender-keys** epoch ratchet
+/// (see `docs/GROUP-KEYING.md`). Each member runs their OWN epoch sequence: I seal my posts under my
+/// current key (`my_epoch` / `my_epoch_keys`) and distribute it in a key commit; I store each PEER's
+/// keys by `(author_hex, epoch)` so I can open their epoch events. Removing a member rotates MY epoch
+/// (the new commit excludes them), so my future posts are unreadable to them. `pending_epoch` buffers
+/// epoch events that arrived before their author's key commit (eventual consistency).
 struct Circle {
     id: String,
     name: String,
     members: Vec<HavenId>,
     events: Vec<Event>,
     seen: HashSet<String>,
+    my_epoch: u64,
+    my_epoch_keys: HashMap<u64, [u8; 32]>,
+    peer_epoch_keys: HashMap<(String, u64), [u8; 32]>,
+    pending_epoch: Vec<Vec<u8>>,
+}
+
+impl Circle {
+    fn bare(id: String, name: String) -> Self {
+        Circle {
+            id,
+            name,
+            members: vec![],
+            events: vec![],
+            seen: HashSet::new(),
+            my_epoch: 0,
+            my_epoch_keys: HashMap::new(),
+            peer_epoch_keys: HashMap::new(),
+            pending_epoch: vec![],
+        }
+    }
+    /// Ensure I have a current epoch key for my own posts (bootstrap epoch 0 the first time).
+    fn ensure_epoch(&mut self) {
+        if self.my_epoch_keys.is_empty() {
+            self.my_epoch = 0;
+            self.my_epoch_keys.insert(0, new_epoch_key());
+        }
+    }
+    /// Advance MY epoch on a membership change — my next key commit seals only to the remaining
+    /// members, so a removed node can't read my future posts.
+    fn rotate_epoch(&mut self) {
+        self.ensure_epoch();
+        self.my_epoch += 1;
+        self.my_epoch_keys.insert(self.my_epoch, new_epoch_key());
+    }
+    fn current_key(&self) -> Option<[u8; 32]> {
+        self.my_epoch_keys.get(&self.my_epoch).copied()
+    }
+    /// The epoch key to open an event authored by `author_hex` at `epoch` — mine or a stored peer's.
+    fn key_for(&self, me_hex: &str, author_hex: &str, epoch: u64) -> Option<[u8; 32]> {
+        if author_hex == me_hex {
+            self.my_epoch_keys.get(&epoch).copied()
+        } else {
+            self.peer_epoch_keys.get(&(author_hex.to_string(), epoch)).copied()
+        }
+    }
 }
 
 struct NetState {
@@ -776,7 +835,14 @@ fn event_target(kind: &EventKind) -> Option<&str> {
 /// of these orphan events, and keeping its id in `seen` makes `receive` drop it instead of
 /// resurrecting the fragment.
 fn purge_member_from_circle(c: &mut Circle, node_hex: &str) {
+    let was_member = c.members.iter().any(|m| hex(&m.node_id_bytes()) == node_hex);
     c.members.retain(|m| hex(&m.node_id_bytes()) != node_hex);
+    // Removing a member advances the circle to a fresh epoch whose key is sealed (in the next key
+    // commit) only to the REMAINING members — so the removed node can never open content posted
+    // afterward. This is the cryptographic revocation the audit required.
+    if was_member {
+        c.rotate_epoch();
+    }
     let mut doomed: HashSet<String> = c
         .events
         .iter()
@@ -804,6 +870,107 @@ fn purge_member_from_circle(c: &mut Circle, node_hex: &str) {
         }
     }
     c.events.retain(|e| !doomed.contains(&e.id));
+}
+
+/// Apply a received key commit: store the epoch key (if new) and unlock any buffered events.
+fn receive_key_commit(st: &mut NetState, idx: usize, body: &[u8]) -> Result<bool, HavenError> {
+    let env = SealedEnvelope::from_bytes(body)
+        .map_err(|e| HavenError::Invalid { msg: format!("bad commit: {e}") })?;
+    let sender_hex = env.sender_hex();
+    let me_hex = hex(&st.me.public().node_id_bytes());
+    let committer = if sender_hex == me_hex {
+        Some(st.me.public()) // my own re-synced commit (e.g. multi-device / backfill)
+    } else {
+        st.circles[idx].members.iter().find(|m| hex(&m.node_id_bytes()) == sender_hex).cloned()
+    };
+    let Some(committer) = committer else { return Ok(false) };
+    let opened = match open_key_commit(&st.me, &committer, &env) {
+        Ok(o) => o,
+        Err(_) => return Ok(false), // not addressed to me, or I was excluded from this epoch
+    };
+    let is_new;
+    {
+        let c = &mut st.circles[idx];
+        if sender_hex == me_hex {
+            is_new = !c.my_epoch_keys.contains_key(&opened.epoch);
+            c.my_epoch_keys.entry(opened.epoch).or_insert(opened.epoch_key);
+            if opened.epoch > c.my_epoch {
+                c.my_epoch = opened.epoch;
+            }
+        } else {
+            let key = (sender_hex.clone(), opened.epoch);
+            is_new = !c.peer_epoch_keys.contains_key(&key);
+            c.peer_epoch_keys.entry(key).or_insert(opened.epoch_key);
+        }
+    }
+    if is_new {
+        drain_pending(st, idx); // a newly-learned key may unlock events that arrived early
+    }
+    Ok(is_new)
+}
+
+/// Apply (or buffer, if its epoch key hasn't arrived yet) an epoch-sealed event.
+fn receive_epoch_event(st: &mut NetState, idx: usize, body: &[u8]) -> Result<bool, HavenError> {
+    let env = EpochEnvelope::from_bytes(body)
+        .map_err(|e| HavenError::Invalid { msg: format!("bad epoch envelope: {e}") })?;
+    let sender_hex = env.sender_hex();
+    let me_hex = hex(&st.me.public().node_id_bytes());
+    let sender = st.circles[idx]
+        .members
+        .iter()
+        .find(|m| hex(&m.node_id_bytes()) == sender_hex)
+        .cloned();
+    let Some(sender) = sender else { return Ok(false) }; // unknown / removed sender → drop
+    let Some(key) = st.circles[idx].key_for(&me_hex, &sender_hex, env.epoch) else {
+        // Epoch key not learned yet — buffer (capped + de-duped); a later key commit unlocks it.
+        let c = &mut st.circles[idx];
+        if c.pending_epoch.len() < 512 && !c.pending_epoch.iter().any(|p| p == body) {
+            c.pending_epoch.push(body.to_vec());
+        }
+        return Ok(false);
+    };
+    let event = match open_event_in_epoch(&sender, &key, &env) {
+        Ok(e) => e,
+        Err(_) => return Ok(false),
+    };
+    let c = &mut st.circles[idx];
+    if c.seen.contains(&event.id) {
+        return Ok(false);
+    }
+    c.seen.insert(event.id.clone());
+    c.events.push(event);
+    Ok(true)
+}
+
+/// Legacy per-recipient envelope (read-path compatibility while older clients/posts migrate).
+fn receive_legacy(st: &mut NetState, idx: usize, body: &[u8]) -> Result<bool, HavenError> {
+    let env = SealedEnvelope::from_bytes(body)
+        .map_err(|e| HavenError::Invalid { msg: format!("bad envelope: {e}") })?;
+    let sender_hex = env.sender_hex();
+    let sender = st.circles[idx]
+        .members
+        .iter()
+        .find(|m| hex(&m.node_id_bytes()) == sender_hex)
+        .cloned();
+    let Some(sender) = sender else { return Ok(false) };
+    let event = open_event(&st.me, &sender, &env)
+        .map_err(|e| HavenError::Invalid { msg: format!("open failed: {e}") })?;
+    let c = &mut st.circles[idx];
+    if c.seen.contains(&event.id) {
+        return Ok(false);
+    }
+    c.seen.insert(event.id.clone());
+    c.events.push(event);
+    Ok(true)
+}
+
+/// Re-process buffered epoch events after learning a new epoch key (single pass; still-locked
+/// events return to the buffer).
+fn drain_pending(st: &mut NetState, idx: usize) {
+    let pending = std::mem::take(&mut st.circles[idx].pending_epoch);
+    for raw in pending {
+        let _ = receive_epoch_event(st, idx, &raw);
+    }
 }
 
 /// A circle summary for the UI.
@@ -835,6 +1002,13 @@ struct PersistCircle {
     /// Members as their public-bundle bytes (HavenId isn't directly Serialize).
     members: Vec<Vec<u8>>,
     events: Vec<Event>,
+    /// Sender-keys epoch ratchet (defaulted so pre-epoch state files still load → bootstrap on next post).
+    #[serde(default)]
+    my_epoch: u64,
+    #[serde(default)]
+    my_epoch_keys: Vec<(u64, [u8; 32])>,
+    #[serde(default)]
+    peer_epoch_keys: Vec<(String, u64, [u8; 32])>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PersistState {
@@ -866,13 +1040,7 @@ impl HavenSocial {
         Ok(Arc::new(Self {
             state: Mutex::new(NetState {
                 me: Identity::from_seed(&seed),
-                circles: vec![Circle {
-                    id: DEFAULT_CIRCLE.to_string(),
-                    name: "My Circle".to_string(),
-                    members: vec![],
-                    events: vec![],
-                    seen: HashSet::new(),
-                }],
+                circles: vec![Circle::bare(DEFAULT_CIRCLE.to_string(), "My Circle".to_string())],
             }),
         }))
     }
@@ -890,7 +1058,7 @@ impl HavenSocial {
     pub fn create_circle(&self, id: String, name: String) {
         let mut st = self.state.lock().unwrap();
         if !st.circles.iter().any(|c| c.id == id) {
-            st.circles.push(Circle { id, name, members: vec![], events: vec![], seen: HashSet::new() });
+            st.circles.push(Circle::bare(id, name));
         }
     }
 
@@ -1125,59 +1293,58 @@ impl HavenSocial {
     /// member who wasn't online when I sent them can't fetch them. The app uploads each envelope
     /// to the new mailbox; envelopes are content-addressed, so re-uploading is idempotent.
     pub fn export_my_envelopes(&self, circle_id: String) -> Vec<Vec<u8>> {
-        let st = self.state.lock().unwrap();
-        let me_hex = hex(&st.me.public().node_id_bytes());
-        let Some(idx) = st.circles.iter().position(|c| c.id == circle_id) else { return vec![]; };
-        let mut members = vec![st.me.public()];
-        members.extend(st.circles[idx].members.iter().cloned());
-        let group = Group::new(circle_id.clone(), members);
-        st.circles[idx]
-            .events
-            .iter()
-            .filter(|e| e.author == me_hex)
-            .filter_map(|e| seal_event(&st.me, &group, e).ok().map(|env| env.to_bytes()))
-            .collect()
+        self.epoch_sync_bundle(&circle_id)
     }
 
-    /// Ingest a sealed envelope received from the network. Opens it against the known
-    /// sender contact, dedups by event id, records it. Returns true if it was new.
-    pub fn receive(&self, circle_id: String, envelope: Vec<u8>) -> Result<bool, HavenError> {
-        let env = SealedEnvelope::from_bytes(&envelope)
-            .map_err(|e| HavenError::Invalid { msg: format!("bad envelope: {e}") })?;
-        let sender_hex = env.sender_hex();
+    /// Everything a freshly-synced peer (or the relay mailbox) needs to read my contributions to a
+    /// circle: the current epoch **key commit** (so they can open my epoch events) followed by my own
+    /// events re-sealed under that epoch. Tagged for `receive`'s router. This is the *only* transport
+    /// the key commits need — they ride the same sync/backfill path as events, so no platform
+    /// networking change is required.
+    fn epoch_sync_bundle(&self, circle_id: &str) -> Vec<Vec<u8>> {
         let mut st = self.state.lock().unwrap();
-        let Some(idx) = st.circles.iter().position(|c| c.id == circle_id) else { return Ok(false) };
-        let sender = st.circles[idx]
-            .members
-            .iter()
-            .find(|c| hex(&c.node_id_bytes()) == sender_hex)
-            .cloned();
-        let Some(sender) = sender else { return Ok(false) };
-        let event = open_event(&st.me, &sender, &env)
-            .map_err(|e| HavenError::Invalid { msg: format!("open failed: {e}") })?;
-        if st.circles[idx].seen.contains(&event.id) {
+        let me_hex = hex(&st.me.public().node_id_bytes());
+        let Some(idx) = st.circles.iter().position(|c| c.id == circle_id) else { return vec![] };
+        st.circles[idx].ensure_epoch();
+        let epoch = st.circles[idx].my_epoch;
+        let Some(key) = st.circles[idx].current_key() else { return vec![] };
+        let mut members = vec![st.me.public()];
+        members.extend(st.circles[idx].members.iter().cloned());
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        if let Ok(commit) = seal_key_commit(&st.me, &members, circle_id, epoch, &key) {
+            out.push(tagged(TAG_KEY_COMMIT, &commit.to_bytes()));
+        }
+        let my_events: Vec<Event> =
+            st.circles[idx].events.iter().filter(|e| e.author == me_hex).cloned().collect();
+        for e in &my_events {
+            if let Ok(env) = seal_event_in_epoch(&st.me, circle_id, epoch, &key, e) {
+                out.push(tagged(TAG_EPOCH_EVENT, &env.to_bytes()));
+            }
+        }
+        out
+    }
+
+    /// Ingest a sealed envelope received from the network. Routes by wire tag: a key commit (stores
+    /// the circle epoch key, then unlocks any buffered events), an epoch-sealed event, or a legacy
+    /// per-recipient envelope (read-path compatibility during migration). Returns true if it changed
+    /// state (a new event, or a newly-learned epoch key).
+    pub fn receive(&self, circle_id: String, envelope: Vec<u8>) -> Result<bool, HavenError> {
+        if envelope.is_empty() {
             return Ok(false);
         }
-        st.circles[idx].seen.insert(event.id.clone());
-        st.circles[idx].events.push(event);
-        Ok(true)
+        let mut st = self.state.lock().unwrap();
+        let Some(idx) = st.circles.iter().position(|c| c.id == circle_id) else { return Ok(false) };
+        match envelope[0] {
+            TAG_KEY_COMMIT => receive_key_commit(&mut st, idx, &envelope[1..]),
+            TAG_EPOCH_EVENT => receive_epoch_event(&mut st, idx, &envelope[1..]),
+            _ => receive_legacy(&mut st, idx, &envelope), // untagged JSON `{…}` = legacy envelope
+        }
     }
 
     /// Re-seal everything **I** authored to a circle — to sync a peer that just
     /// connected. Only my own events (relaying others' would forge authorship).
     pub fn sync_envelopes(&self, circle_id: String) -> Vec<Vec<u8>> {
-        let st = self.state.lock().unwrap();
-        let me_hex = hex(&st.me.public().node_id_bytes());
-        let Some(circle) = st.circles.iter().find(|c| c.id == circle_id) else { return vec![] };
-        let mut members = vec![st.me.public()];
-        members.extend(circle.members.iter().cloned());
-        let group = Group::new(circle_id, members);
-        circle
-            .events
-            .iter()
-            .filter(|e| e.author == me_hex)
-            .filter_map(|e| seal_event(&st.me, &group, e).ok().map(|env| env.to_bytes()))
-            .collect()
+        self.epoch_sync_bundle(&circle_id)
     }
 
     pub fn feed(&self, circle_id: String, now_ms: u64, viewer_retention_secs: Option<u64>) -> Vec<FeedItemFfi> {
@@ -1272,6 +1439,9 @@ impl HavenSocial {
                 name: c.name.clone(),
                 members: c.members.iter().map(|m| m.to_bytes()).collect(),
                 events: c.events.clone(),
+                my_epoch: c.my_epoch,
+                my_epoch_keys: c.my_epoch_keys.iter().map(|(e, k)| (*e, *k)).collect(),
+                peer_epoch_keys: c.peer_epoch_keys.iter().map(|((a, e), k)| (a.clone(), *e, *k)).collect(),
             }).collect(),
         };
         serde_json::to_vec(&ps).unwrap_or_default()
@@ -1292,6 +1462,9 @@ impl HavenSocial {
                 name: "My Circle".to_string(),
                 members: old.contacts,
                 events: old.events,
+                my_epoch: 0,
+                my_epoch_keys: vec![],
+                peer_epoch_keys: vec![],
             });
         }
     }
@@ -1302,13 +1475,7 @@ impl HavenSocial {
         let idx = match st.circles.iter().position(|c| c.id == pc.id) {
             Some(i) => i,
             None => {
-                st.circles.push(Circle {
-                    id: pc.id.clone(),
-                    name: pc.name.clone(),
-                    members: vec![],
-                    events: vec![],
-                    seen: HashSet::new(),
-                });
+                st.circles.push(Circle::bare(pc.id.clone(), pc.name.clone()));
                 st.circles.len() - 1
             }
         };
@@ -1325,6 +1492,17 @@ impl HavenSocial {
                 st.circles[idx].events.push(e);
             }
         }
+        // Union epoch keys + keep the highest epoch (multi-device sync / reload must not lose any key
+        // or we'd be unable to open content sealed under an epoch another device advanced to).
+        for (e, k) in pc.my_epoch_keys {
+            st.circles[idx].my_epoch_keys.entry(e).or_insert(k);
+        }
+        if pc.my_epoch > st.circles[idx].my_epoch {
+            st.circles[idx].my_epoch = pc.my_epoch;
+        }
+        for (a, e, k) in pc.peer_epoch_keys {
+            st.circles[idx].peer_epoch_keys.entry((a, e)).or_insert(k);
+        }
     }
 
     fn author(&self, circle_id: &str, created_at: u64, kind: EventKind) -> Result<Vec<u8>, HavenError> {
@@ -1334,20 +1512,39 @@ impl HavenSocial {
         let Some(idx) = st.circles.iter().position(|c| c.id == circle_id) else {
             return Err(HavenError::Invalid { msg: "unknown circle".into() });
         };
-        let mut members = vec![me_pub];
-        members.extend(st.circles[idx].members.iter().cloned());
-        let group = Group::new(circle_id.to_string(), members);
-        let env = seal_event(&st.me, &group, &event)
+        // Seal under the circle's CURRENT epoch key (bootstrapping epoch 0 the first time). The key
+        // commit that lets members open it rides `sync_envelopes`/`export_my_envelopes` (no separate
+        // transport needed). Removed members lack the current epoch key → can't open this.
+        st.circles[idx].ensure_epoch();
+        let epoch = st.circles[idx].my_epoch;
+        let key = st.circles[idx].current_key().expect("epoch key exists after ensure_epoch");
+        let env = seal_event_in_epoch(&st.me, circle_id, epoch, &key, &event)
             .map_err(|e| HavenError::Invalid { msg: format!("seal failed: {e}") })?;
         st.circles[idx].seen.insert(event.id.clone());
         st.circles[idx].events.push(event);
-        Ok(env.to_bytes())
+        Ok(tagged(TAG_EPOCH_EVENT, &env.to_bytes()))
     }
+}
+
+/// Prepend a 1-byte wire tag so `receive` can route an envelope. Legacy envelopes are untagged JSON.
+fn tagged(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(1 + body.len());
+    v.push(tag);
+    v.extend_from_slice(body);
+    v
 }
 
 #[cfg(test)]
 mod net_tests {
     use super::*;
+
+    /// Deliver everything `from` authored in a circle (its key commit + epoch events) to `to`, the
+    /// way the platform's sync/hello does — the commit teaches `to` the sender's epoch key.
+    fn sync(from: &HavenSocial, to: &HavenSocial, cid: &str) {
+        for env in from.sync_envelopes(cid.to_string()) {
+            let _ = to.receive(cid.to_string(), env);
+        }
+    }
 
     #[test]
     fn two_socials_exchange_a_post() {
@@ -1362,10 +1559,12 @@ mod net_tests {
         assert_eq!(bob_id, bob.my_node_hex());
         assert_eq!(alice_id, alice.my_node_hex());
 
-        // Alice posts → envelope → Bob receives and opens it.
+        // Alice posts. The live epoch envelope can't open until Bob has Alice's epoch key → it buffers.
         let env = alice.post(cid.clone(), "hi mom 💜".into(), vec![], None, None, false, false, 1_000).unwrap();
-        assert!(bob.receive(cid.clone(), env.clone()).unwrap(), "new on first receive");
-        assert!(!bob.receive(cid.clone(), env).unwrap(), "deduped on second receive");
+        assert!(!bob.receive(cid.clone(), env.clone()).unwrap(), "epoch event buffers until its key commit");
+        // Alice's sync delivers the key commit (+ her events) → Bob learns the key, drains the buffer.
+        sync(&alice, &bob, &cid);
+        assert!(!bob.receive(cid.clone(), env).unwrap(), "deduped after the key arrives");
 
         let feed = bob.feed(cid.clone(), 2_000, None);
         assert_eq!(feed.len(), 1);
@@ -1422,8 +1621,8 @@ mod net_tests {
         alice.add_contact_bundle("fam".into(), bob.my_bundle()).unwrap();
         bob.create_circle("fam".into(), "Family".into());
         bob.add_contact_bundle("fam".into(), alice.my_bundle()).unwrap();
-        let fam_env = alice.post("fam".into(), "just family".into(), vec![], None, None, false, false, 3_000).unwrap();
-        assert!(bob.receive("fam".into(), fam_env).unwrap());
+        alice.post("fam".into(), "just family".into(), vec![], None, None, false, false, 3_000).unwrap();
+        sync(&alice, &bob, "fam");
         assert_eq!(bob.feed("fam".into(), 4_000, None).len(), 1, "fam post lands in fam circle");
         assert_eq!(bob.feed(cid, 4_000, None).len(), 1, "default circle is unchanged");
         assert_eq!(alice.circles().len(), 2, "alice now has two circles");
@@ -1442,16 +1641,15 @@ mod net_tests {
         bob.add_contact_bundle(cid.clone(), alice.my_bundle()).unwrap();
         carol.add_contact_bundle(cid.clone(), alice.my_bundle()).unwrap();
 
-        // Bob posts; Alice receives it.
-        let post_env = bob.post(cid.clone(), "bob's photo".into(), vec![], None, None, false, false, 1_000).unwrap();
-        assert!(alice.receive(cid.clone(), post_env).unwrap());
+        // Bob posts; Alice receives it (via Bob's sync = key commit + his events).
+        bob.post(cid.clone(), "bob's photo".into(), vec![], None, None, false, false, 1_000).unwrap();
+        sync(&bob, &alice, &cid);
         let post_id = alice.feed(cid.clone(), 5_000, None)[0].id.clone();
 
         // Carol (a different, still-present member) comments on + reacts to Bob's post.
-        let c_env = carol.comment(cid.clone(), post_id.clone(), "nice!".into(), vec![], 1_100).unwrap();
-        assert!(alice.receive(cid.clone(), c_env).unwrap());
-        let r_env = carol.react(cid.clone(), post_id.clone(), "❤️".into(), 1_200).unwrap();
-        assert!(alice.receive(cid.clone(), r_env).unwrap());
+        carol.comment(cid.clone(), post_id.clone(), "nice!".into(), vec![], 1_100).unwrap();
+        carol.react(cid.clone(), post_id.clone(), "❤️".into(), 1_200).unwrap();
+        sync(&carol, &alice, &cid);
 
         let feed = alice.feed(cid.clone(), 5_000, None);
         assert_eq!(feed.len(), 1);
@@ -1467,5 +1665,44 @@ mod net_tests {
         let members = alice.contact_node_ids(cid.clone());
         assert!(members.contains(&carol.my_node_hex()), "carol remains a member");
         assert!(!members.contains(&bob_hex), "bob is removed");
+    }
+
+    #[test]
+    fn removed_member_cannot_read_posts_after_removal() {
+        let alice = HavenSocial::new([20u8; 32].to_vec()).unwrap();
+        let bob = HavenSocial::new([21u8; 32].to_vec()).unwrap(); // gets removed
+        let carol = HavenSocial::new([22u8; 32].to_vec()).unwrap(); // stays
+        let cid = DEFAULT_CIRCLE.to_string();
+
+        // Everyone in the circle, mutual membership so each can open the others' commits + events.
+        let bob_hex = alice.add_contact_bundle(cid.clone(), bob.my_bundle()).unwrap();
+        alice.add_contact_bundle(cid.clone(), carol.my_bundle()).unwrap();
+        bob.add_contact_bundle(cid.clone(), alice.my_bundle()).unwrap();
+        carol.add_contact_bundle(cid.clone(), alice.my_bundle()).unwrap();
+
+        // Epoch 0: Alice posts; Bob and Carol both read it.
+        alice.post(cid.clone(), "before".into(), vec![], None, None, false, false, 1_000).unwrap();
+        sync(&alice, &bob, &cid);
+        sync(&alice, &carol, &cid);
+        assert_eq!(bob.feed(cid.clone(), 2_000, None).len(), 1, "bob reads the pre-removal post");
+        assert_eq!(carol.feed(cid.clone(), 2_000, None).len(), 1, "carol reads it too");
+
+        // Alice removes Bob → her epoch rotates; the next key commit is sealed only to Carol (+ Alice).
+        alice.remove_from_circle(cid.clone(), bob_hex.clone());
+        alice.post(cid.clone(), "after".into(), vec![], None, None, false, false, 3_000).unwrap();
+        sync(&alice, &carol, &cid); // Carol is still a member → gets epoch 1 + the post
+        sync(&alice, &bob, &cid); // Bob: Alice's commit isn't sealed to him → he can't learn the key
+
+        // Carol reads the post-removal post; Bob CANNOT (he never learns epoch 1's key).
+        assert_eq!(
+            carol.feed(cid.clone(), 4_000, None).iter().filter(|i| i.body == "after").count(),
+            1,
+            "carol reads the post-removal post"
+        );
+        assert_eq!(
+            bob.feed(cid.clone(), 4_000, None).iter().filter(|i| i.body == "after").count(),
+            0,
+            "removed bob cannot read content posted after his removal (cryptographic revocation)"
+        );
     }
 }

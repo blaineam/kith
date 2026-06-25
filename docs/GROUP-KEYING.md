@@ -78,17 +78,23 @@ delivery model admits without breaking offline use.
 
 ## Rollout (increments)
 
-1. **Core `groupkey` module + tests** ← *this increment.* Epoch-key generation, KeyCommit seal/open
-   (revocation proven by test), per-event key derivation, seal/open-under-epoch. Additive; nothing wired
-   yet, so existing behavior is unchanged.
-2. **Engine integration** (`p2pcore-ffi`): per-circle epoch-key store; `create_circle`/`add`/`remove`/
-   `block` emit KeyCommits + rotate; `post`/`receive` use epoch sealing; history-share re-seals epochs.
-3. **Wire/migration:** envelopes gain a version tag; circles bootstrap epoch 0 on first post under the
-   new scheme; old envelopes still open (read-path compatibility) during migration.
-4. **FFI + platforms:** the FFI surface change (if any) flows to iOS/macOS/Android/desktop — most call
-   sites are unchanged because the engine hides epochs; new surface only for "rotate now".
-5. **Relay:** unaffected (still ciphertext-only); KeyCommits ride the same transports as events.
-6. **FS scheduling + retention-bounded key deletion**, then remove the legacy per-recipient event path.
+1. ✅ **Core `groupkey` module + tests.** Epoch-key generation, KeyCommit seal/open (revocation proven),
+   per-event key derivation, seal/open-under-epoch.
+2. ✅ **Engine integration** (`p2pcore-ffi`). Implemented as **sender keys**: each member runs their own
+   epoch sequence (`my_epoch`/`my_epoch_keys`) and stores peers' keys by `(author, epoch)`. `post` seals
+   under my current epoch; `remove`/`block` rotate my epoch (next commit excludes the removed node);
+   `receive` routes tagged envelopes (key commit / epoch event / legacy) with a pending buffer for
+   out-of-order delivery. Engine test proves a removed member can't read post-removal content.
+3. ✅ **Wire/migration (read path).** 1-byte wire tag (`0x02` epoch event, `0x03` key commit; untagged
+   `{…}` = legacy). Circles bootstrap epoch 0 on first post; legacy envelopes still open. *Alpha cutover:*
+   new posts are epoch-sealed, so peers must be on a build that understands the tags — acceptable for alpha.
+4. ✅ **FFI + platforms — no change required.** The FFI surface is unchanged and key commits ride the
+   existing `sync_envelopes`/`export_my_envelopes` channel (delivered as ordinary event frames + via the
+   relay mailbox), so iOS/macOS/Android/desktop inherit this through the shared core with **zero**
+   networking changes. (Validation: rebuild bindings + smoke-test each platform.)
+5. ✅ **Relay:** unaffected (still ciphertext-only); KeyCommits ride the same transports as events.
+6. ⏳ **FS scheduling + retention-bounded key deletion**, plus a "share history → re-seal prior epochs to
+   a new member" path and retiring the legacy per-recipient event path. *Remaining.*
 
 ## Test obligations (per increment)
 
