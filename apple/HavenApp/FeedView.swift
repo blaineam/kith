@@ -389,7 +389,11 @@ final class FeedStore: ObservableObject {
     }
     private func persist() {
         guard !DemoEnv.isDemo, let social else { return }
-        try? social.exportState().write(to: stateURL, options: .atomic)
+        // The exported state holds DECRYPTED content + contacts + derived key material. Protect it at
+        // rest to match the in-transit E2EE — readable only after first unlock (so the NSE/background
+        // can still reach it), never in a locked-device forensic image / unencrypted backup.
+        try? social.exportState().write(to: stateURL,
+                                        options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     private func bringOnline(seed: Data) {

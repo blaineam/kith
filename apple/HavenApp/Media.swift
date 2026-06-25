@@ -240,7 +240,18 @@ final class MediaStore: ObservableObject {
     private var dir: URL {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("haven-media", isDirectory: true)
+        // Protect media at rest to match the in-transit E2EE: files created here inherit
+        // "until first user authentication" (so the NSE/background can still read), not the weaker
+        // process default. Re-applied each access so an already-existing dir gets upgraded too.
+        #if os(iOS)
+        try? FileManager.default.createDirectory(
+            at: d, withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: d.path)
+        #else
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        #endif
         return d
     }
     private func fileURL(_ ref: String) -> URL? {

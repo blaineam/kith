@@ -74,6 +74,12 @@ final class AccountStore: ObservableObject {
         SharedSeed.write(fresh.secretSeed())
         account = fresh
         ProfileStore.shared.reloadForCurrentIdentity()   // a fresh identity starts with its own blank profile
+        // Tear down the old engine + its on-disk social state so the new identity starts genuinely
+        // clean — otherwise it inherits the previous identity's contacts, circles, DMs and posts.
+        // (A user "starting over" to escape a compromise must not stay wired to the old social graph.)
+        FeedStore.shared.reconfigure(seed: fresh.secretSeed())
+        _ = SharedInbox.drain()          // discard the old identity's queued sealed push envelopes
+        SharedLockedCircles.write([])     // old circle ids are meaningless (and leaky) to the new identity
     }
 
     // MARK: - Multi-device: iCloud Keychain sync
@@ -120,10 +126,15 @@ final class AccountStore: ObservableObject {
         let body = String(trimmed.dropFirst(prefix.count))
         guard let seed = Self.base64urlDecode(body), seed.count == 32,
               let restored = try? Account.fromSeed(seed: seed) else { return false }
+        Self.archive(account.secretSeed())   // keep the currently-active identity rollback-able first
         Self.deleteSeed()
         Self.saveSeed(seed, synced: Self.iCloudSyncEnabled)
         SharedSeed.write(seed)
         account = restored
+        // Load THIS identity's world, not whatever the previous identity left in the engine/state file.
+        FeedStore.shared.reconfigure(seed: seed)
+        _ = SharedInbox.drain()
+        SharedLockedCircles.write([])
         return true
     }
 
