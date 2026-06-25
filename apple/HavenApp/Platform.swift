@@ -144,6 +144,21 @@ enum PlatformPasteboard {
             #endif
         }
     }
+
+    /// Copy a SECRET (e.g. the identity transfer code, which IS the full identity). Local to THIS
+    /// device only — never synced to other devices via Universal Clipboard — and auto-expiring so it
+    /// doesn't linger on the pasteboard for other apps to read.
+    static func setSecret(_ value: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.setItems(
+            [["public.utf8-plain-text": value]],
+            options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(60)])
+        #else
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(value, forType: .string)
+        #endif
+    }
 }
 
 // MARK: - Idle timer (prevent display sleep during playback / capture)

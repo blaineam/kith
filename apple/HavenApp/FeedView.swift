@@ -1340,6 +1340,12 @@ final class FeedStore: ObservableObject {
         let inbound = messages(in: circleId).filter { !$0.isMe && !$0.unsent }
         guard let newest = inbound.max(by: { $0.createdAt < $1.createdAt }) else { return }
         let name = ContactsStore.shared.name(forNodePrefix: newest.authorShort) ?? "Someone"
+        // A biometric-locked circle must not spill its content (or even who/where) onto the lock
+        // screen — mirror the NSE's redaction for this in-process notification path too.
+        if CircleSettingsStore.shared.biometricRequired(circleId) {
+            NotificationManager.shared.notify(title: "Haven", body: "New activity", dedupeKey: newest.id)
+            return
+        }
         let body = newest.story ? "shared a story" : (newest.body.isEmpty ? "sent you media" : newest.body)
         let title = circleId.hasPrefix("dm:") ? name : "\(name) in your circle"
         NotificationManager.shared.notify(title: title, body: body, dedupeKey: newest.id)

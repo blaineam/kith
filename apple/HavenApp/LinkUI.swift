@@ -56,7 +56,9 @@ struct WebView: UIViewRepresentable {
     @ObservedObject var model: WebViewModel
 
     func makeUIView(context: Context) -> WKWebView {
-        let web = WKWebView()
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()   // ephemeral: no cookies/cache/localStorage on disk
+        let web = WKWebView(frame: .zero, configuration: config)
         web.allowsBackForwardNavigationGestures = true
         web.navigationDelegate = context.coordinator
         model.bind(web)
@@ -80,7 +82,9 @@ struct WebView: NSViewRepresentable {
     @ObservedObject var model: WebViewModel
 
     func makeNSView(context: Context) -> WKWebView {
-        let web = WKWebView()
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()   // ephemeral: no cookies/cache/localStorage on disk
+        let web = WKWebView(frame: .zero, configuration: config)
         web.allowsBackForwardNavigationGestures = true
         web.navigationDelegate = context.coordinator
         model.bind(web)

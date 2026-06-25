@@ -32,7 +32,7 @@ struct TransferIdentityView: View {
                                 .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 16))
                         }
                         Button {
-                            PlatformPasteboard.string = code
+                            PlatformPasteboard.setSecret(code)   // local-only + expiring (it's the full identity)
                             copied = true
                         } label: {
                             Label(copied ? "Copied" : "Copy transfer code", systemImage: copied ? "checkmark" : "doc.on.doc")
