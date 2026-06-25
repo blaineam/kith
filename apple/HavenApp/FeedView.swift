@@ -309,6 +309,9 @@ final class FeedStore: ObservableObject {
                 sendIroh(1, eventPayload("default", env), to: req.idHex)
                 Task { await SharedStore.uploadEvent(circleId: "default", env: env) }
             }
+            // Make sure the relay also holds the MEDIA for that history ASAP, so the new member can
+            // pull it from the relay if the direct transfer doesn't reach them — no fragmented posts.
+            backfillMailboxMedia(circleIds: ["default"])
         }
         ConnectionsStore.shared.removePending(req.idHex)
         refresh()
@@ -461,6 +464,10 @@ final class FeedStore: ObservableObject {
         syncTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.syncWithContacts()
+                // Persistently retry any media an interrupted nearby/iroh transfer left incomplete —
+                // re-request direct from contacts AND pull from the circle relay if one exists. Keeps
+                // going every tick until nothing is missing, so posts never stay fragmented.
+                self?.requestMissingMedia()
                 RelayHost.shared.meshSyncTick()   // if we host a relay, pull from sibling relays
             }
         }
@@ -893,6 +900,25 @@ final class FeedStore: ObservableObject {
         }
     }
 
+    /// Push every media blob I hold for a circle to its relay/mailbox, so a member pulling EVENTS
+    /// from the relay can also pull the MEDIA (instead of receiving fragmented posts). No-op without
+    /// a mailbox. Used when sharing history with a new member and when a new relay is adopted.
+    func backfillMailboxMedia(circleIds: [String]) {
+        guard let social else { return }
+        for cid in circleIds where SharedStore.hasMailbox(cid) {
+            let feed = social.feed(circleId: cid, nowMs: now(),
+                                   viewerRetentionSecs: CircleSettingsStore.shared.retentionSecs(cid))
+            var refs = Set<String>()
+            for item in feed {
+                refs.formUnion(item.media)
+                for c in item.comments { refs.formUnion(c.media) }
+            }
+            for ref in refs where MediaStore.shared.has(ref) {
+                Task { await SharedStore.backup(ref: ref, circleId: cid, social: social) }
+            }
+        }
+    }
+
     /// Apply a relay to every circle + make it the default (used by the in-app RelayHost).
     func broadcastRelayNode(_ nodeHex: String) {
         adoptRelayNode(nodeHex, circleIds: circles.map(\.id), setDefault: true)
@@ -911,7 +937,10 @@ final class FeedStore: ObservableObject {
         // members automatically pool relays (more redundancy, no manual setup) — desktop parity.
         let wasNew = !RelayMailboxStore.shared.relays(forCircle: circleId).contains(nodeHex.lowercased())
         RelayMailboxStore.shared.add(circleId: circleId, nodeHex: nodeHex)
-        if wasNew { backfillMailbox(circleIds: [circleId]) }   // mirror my past posts to the new relay
+        if wasNew {
+            backfillMailbox(circleIds: [circleId])        // mirror my past posts to the new relay…
+            backfillMailboxMedia(circleIds: [circleId])   // …and their media, so it's a complete fallback
+        }
         Task { await BackgroundUploader.shared.flush() }   // deliver posts we couldn't send before
         pollMailboxNow()
     }
