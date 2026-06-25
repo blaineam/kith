@@ -50,8 +50,11 @@ targets:
       - target: HavenBroadcast
         platformFilter: iOS
       # Share Extension: accept text/links/photos/videos from other apps → DM / post / story.
-      - target: HavenShareExtension
-        platformFilter: iOS
+      # DISABLED until its App ID (com.blaineam.kith.ShareExtension) is registered in the Apple
+      # Developer portal with the App Groups capability + group.com.blaineam.kith — auto-provisioning
+      # can't create that. Re-enable this dependency once the App ID exists. (Target def kept below.)
+      # - target: HavenShareExtension
+      #   platformFilter: iOS
       # WebRTC for E2EE audio/video calls (media is P2P DTLS-SRTP; signaling over our channel).
       - package: WebRTC
     info:
