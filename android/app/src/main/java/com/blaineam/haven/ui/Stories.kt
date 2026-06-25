@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
@@ -151,10 +152,24 @@ fun StoryViewer(groups: List<StoryGroup>, startGroup: Int, onClose: () -> Unit) 
         if (mediaId != null) {
             MediaImage(DEFAULT_CIRCLE, mediaId, Modifier.fillMaxSize())
         }
-        if (item.body.isNotBlank()) {
+        // Decode the iOS-authored caption (was shown raw → gibberish): position + colour it, with
+        // a highlight pill if that's the style.
+        val decoded = StoryCaptions.decode(item.body)
+        if (decoded.text.isNotBlank()) {
+            val spec = decoded.spec
+            val isHl = spec.style == StoryCaptions.CapStyle.HIGHLIGHT
+            val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+            val w = cfg.screenWidthDp.dp; val h = cfg.screenHeightDp.dp
             androidx.compose.material3.Text(
-                item.body, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.align(Alignment.Center).padding(28.dp),
+                decoded.text,
+                color = if (isHl) StoryCaptions.highlightTextColor(spec.colorIdx) else StoryCaptions.color(spec.colorIdx),
+                fontSize = (28 * spec.size).sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.align(Alignment.Center)
+                    .offset(x = w * (spec.x - 0.5f), y = h * (spec.y - 0.5f))
+                    .then(if (isHl) Modifier.clip(RoundedCornerShape(8.dp)).background(StoryCaptions.color(spec.colorIdx)) else Modifier)
+                    .padding(horizontal = if (isHl) 10.dp else 24.dp, vertical = if (isHl) 3.dp else 0.dp),
             )
         }
         // Progress bars (one per story in this group).
