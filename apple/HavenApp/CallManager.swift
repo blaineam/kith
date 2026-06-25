@@ -48,6 +48,8 @@ final class CallManager: NSObject, ObservableObject {
     @Published private(set) var ringing = false
     @Published private(set) var speakerOn = false
     @Published private(set) var muted = false
+    /// Collapsed to a floating pill so the user can use the rest of the app mid-call.
+    @Published var minimized = false
     /// Per-peer remote video tracks for the grid (nil tile = audio-only / no camera).
     @Published private(set) var remoteVideoTracks: [String: RTCVideoTrack] = [:]
     /// Per-peer remote SCREEN-share tracks (a peer's second video track, `screen0`). When non-empty
@@ -921,7 +923,7 @@ final class CallManager: NSObject, ObservableObject {
         #endif
         remoteVideoTracks.removeAll(); remoteScreenTracks.removeAll(); participants = []
         localVideoTrack = nil; videoOn = false; screenShareOn = false
-        ringing = false; speakerOn = false; muted = false
+        ringing = false; speakerOn = false; muted = false; minimized = false
         isCaller = false; mediaStarted = false
         active = false; inCall = false; connecting = false; peerName = ""
         sessionId = ""; roster.removeAll()
@@ -1120,7 +1122,40 @@ struct CallOverlay: View {
     @ObservedObject private var call = CallManager.shared
     var body: some View {
         if call.ringing { incoming }
-        else if call.inCall || call.connecting { active }
+        else if call.inCall || call.connecting {
+            if call.minimized { minimizedPill } else { active }
+        }
+    }
+
+    /// Collapsed call: a floating pill at the top. The rest of the overlay is empty so touches pass
+    /// straight through to the app — the user can browse the feed, open a DM, etc., mid-call.
+    private var minimizedPill: some View {
+        VStack {
+            HStack(spacing: 10) {
+                Image(systemName: call.videoOn ? "video.fill" : "phone.fill")
+                    .font(.subheadline).foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(call.peerName.isEmpty ? "On call" : call.peerName)
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                    Text(statusText).font(.caption2).foregroundStyle(.white.opacity(0.85))
+                }
+                Spacer(minLength: 8)
+                Button { CallManager.shared.endCall() } label: {
+                    Image(systemName: "phone.down.fill").font(.subheadline).foregroundStyle(.white)
+                        .frame(width: 34, height: 34).background(Color.red, in: Circle())
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(HavenTheme.brand.opacity(0.96), in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+            .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+            .padding(.horizontal, 12).padding(.top, 8)
+            .contentShape(Capsule())
+            .onTapGesture { call.minimized = false }   // tap the pill to return to the call
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private var incoming: some View {
@@ -1192,6 +1227,15 @@ struct CallOverlay: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
+        .overlay(alignment: .topLeading) {
+            // Minimize to the floating pill so the rest of Haven is usable mid-call.
+            Button { call.minimized = true } label: {
+                Image(systemName: "chevron.down")
+                    .font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    .frame(width: 44, height: 44).background(.black.opacity(0.3), in: Circle())
+            }
+            .padding(.top, 50).padding(.leading, 14)
+        }
         .transition(.move(edge: .bottom))
         #if targetEnvironment(macCatalyst) || os(macOS)
         .sheet(isPresented: Binding(get: { call.showScreenPicker },

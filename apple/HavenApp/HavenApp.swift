@@ -295,6 +295,7 @@ struct RootView: View {
                 .animation(HavenTheme.smooth, value: CallManager.shared.connecting)
                 .animation(HavenTheme.smooth, value: CallManager.shared.inCall)
                 .animation(HavenTheme.smooth, value: CallManager.shared.ringing)
+                .animation(HavenTheme.smooth, value: CallManager.shared.minimized)
         }
         // Manual "add a friend" (onboarding / the + button) — no incoming link.
         .sheet(isPresented: $showConnect) {
