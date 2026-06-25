@@ -126,6 +126,8 @@ struct HavenApp: App {
                 CaptionHarness()
             } else if ProcessInfo.processInfo.environment["HAVEN_SCRIM_HARNESS"] == "1" {
                 ScrimHarness()
+            } else if ProcessInfo.processInfo.environment["HAVEN_OG_HARNESS"] == "1" {
+                OGHarness()
             } else {
                 mainRoot
             }

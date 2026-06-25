@@ -212,6 +212,7 @@ struct LinkPreviewCard: View {
         Button { LinkPresenter.shared.open(url.absoluteString) } label: {
             LinkPreviewRepresentable(url: url)
                 .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 12))   // never bleed past the bubble edge
         }
         .buttonStyle(.plain)
     }
@@ -223,6 +224,10 @@ private struct LinkPreviewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> LPLinkView {
         let view = LPLinkView(url: url)
+        // LPLinkView reports a large intrinsic width and otherwise ignores the SwiftUI frame, so it
+        // bled past the bubble/screen edge. Let it yield horizontally to the proposed width.
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         // Show a fast placeholder, then fetch real Open Graph metadata on-device.
         let provider = LPMetadataProvider()
         provider.startFetchingMetadata(for: url) { metadata, _ in
@@ -235,6 +240,16 @@ private struct LinkPreviewRepresentable: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: LPLinkView, context: Context) {}
+
+    /// Constrain the card to the proposed width (the caller's `.frame(maxWidth:)`) and compute the
+    /// matching height — without this LPLinkView lays out at its full intrinsic width and overflows.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: LPLinkView, context: Context) -> CGSize? {
+        let width = proposal.width ?? uiView.intrinsicContentSize.width
+        let fitted = uiView.systemLayoutSizeFitting(
+            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+        return CGSize(width: width, height: max(fitted.height, 1))
+    }
 }
 #else
 private struct LinkPreviewRepresentable: NSViewRepresentable {
@@ -242,6 +257,8 @@ private struct LinkPreviewRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LPLinkView {
         let view = LPLinkView(url: url)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         // Show a fast placeholder, then fetch real Open Graph metadata on-device.
         let provider = LPMetadataProvider()
         provider.startFetchingMetadata(for: url) { metadata, _ in
@@ -254,6 +271,13 @@ private struct LinkPreviewRepresentable: NSViewRepresentable {
         return view
     }
     func updateNSView(_ view: LPLinkView, context: Context) {}
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: LPLinkView, context: Context) -> CGSize? {
+        let width = proposal.width ?? nsView.intrinsicContentSize.width
+        let fitted = nsView.fittingSize
+        let ratio = fitted.width > 0 ? fitted.height / fitted.width : 0.6
+        return CGSize(width: width, height: max(width * ratio, 1))
+    }
 }
 #endif
 

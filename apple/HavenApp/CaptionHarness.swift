@@ -1,6 +1,30 @@
 #if DEBUG
 import SwiftUI
 
+/// Debug-only check that the Open Graph link card stays inside the DM bubble / screen edge (it kept
+/// bleeding off the right because LPLinkView ignores the SwiftUI frame). A red strip marks the right
+/// screen edge — the card must not touch it. Launch with `HAVEN_OG_HARNESS=1`.
+struct OGHarness: View {
+    private let url = URL(string: "https://wemiller.com/apps/haven/")!
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Color.black.ignoresSafeArea()
+            VStack(alignment: .trailing, spacing: 8) {
+                Spacer()
+                LinkPreviewCard(url: url)
+                    .frame(maxWidth: 260)
+                    .padding(8)
+                    .background(HavenTheme.brand, in: RoundedRectangle(cornerRadius: 18))
+                Text("wemiller.com").font(.caption2).foregroundStyle(.white.opacity(0.6))
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, 12)
+            Rectangle().fill(.red).frame(width: 3).ignoresSafeArea()   // right screen-edge marker
+        }
+    }
+}
+
 /// Debug-only check that the story bottom scrim covers the FULL bottom of a near-white image
 /// (down through the home-indicator strip). Launch with `HAVEN_SCRIM_HARNESS=1`.
 struct ScrimHarness: View {
