@@ -39,6 +39,12 @@ for entry in "${scenes[@]}"; do
 done
 "$ADB" -s "$DEV" shell am force-stop "$PKG" >/dev/null 2>&1
 
-# Frame every raw capture in the Pixel 7 Pro device frame.
-node "$MONKR" render --device pixel-7-pro --out "$OUT" --screenshots "$RAW"
-echo "✓ framed Play screenshots → $OUT"
+# Play screenshots: use the full-bleed raw captures (always valid, crisp). They're the cleanest set
+# unless the capture device's aspect matches the Pixel frame.
+cp "$RAW"/*.png "$OUT"/
+echo "✓ Play screenshots (full-bleed) → $OUT"
+
+# Also render Monkr Pixel-7-Pro-framed versions into framed/ — these look best when captured on a
+# Pixel-class device/emulator (matching the frame's tall aspect); a 16:9 phone letterboxes in them.
+node "$MONKR" render --device pixel-7-pro --out "$OUT/../framed" --screenshots "$RAW" >/dev/null 2>&1 \
+  && echo "✓ Monkr-framed (for Pixel-aspect sources) → $OUT/../framed"
