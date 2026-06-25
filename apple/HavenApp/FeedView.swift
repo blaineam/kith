@@ -1342,6 +1342,7 @@ struct FeedView: View {
     @State private var showRequests = false
     @ObservedObject private var connections = ConnectionsStore.shared
     @FocusState private var composeFocused: Bool
+    @State private var commentingActive = false   // a post's comment field is focused → hide composer
 
     struct TrimTarget: Identifiable { let id = UUID(); let ref: String }
 
@@ -1380,9 +1381,13 @@ struct FeedView: View {
                                 },
                                 onEdit: { b in withAnimation(HavenTheme.smooth) { store.edit(item.id, b) } },
                                 onUnsend: { withAnimation(HavenTheme.smooth) { store.unsend(item.id) } },
-                                onCommentFocus: {
-                                    // Lift the focused post's reply field above the keyboard.
-                                    withAnimation(HavenTheme.smooth) { proxy.scrollTo(item.id, anchor: .bottom) }
+                                onCommentFocus: { focused in
+                                    // Hide the feed composer while commenting (it overlapped the
+                                    // comment), and lift the focused post above the keyboard.
+                                    commentingActive = focused
+                                    if focused {
+                                        withAnimation(HavenTheme.smooth) { proxy.scrollTo(item.id, anchor: .bottom) }
+                                    }
                                 }
                             )
                             .background(GeometryReader { geo in
@@ -1406,7 +1411,9 @@ struct FeedView: View {
                     AudioCoordinator.shared.center(nearest?.key)
                 }
                 }   // ScrollViewReader
-                composerBar
+                // Hide the "Share something" composer while a comment field is focused so it
+                // doesn't float over the comment you're writing.
+                if !commentingActive { composerBar }
             }
             .overlay {
                 // Biometric-locked circle: cover its feed until Face ID unlocks it. The toolbar
@@ -1824,7 +1831,7 @@ struct PostCard: View {
     var expandAllComments = false
     /// Called when the "Add a reply…" field gains focus so the enclosing scroll view (which owns
     /// the ScrollViewReader proxy) can lift this post above the keyboard.
-    var onCommentFocus: (() -> Void)? = nil
+    var onCommentFocus: ((Bool) -> Void)? = nil
 
     @ObservedObject private var audio = AudioCoordinator.shared
     @ObservedObject private var profile = ProfileStore.shared
@@ -2402,20 +2409,12 @@ struct PostCard: View {
                     .font(.caption).padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .focused($commentFieldFocused)
-                    // A keyboard Done button so the field can always be dismissed (the You-tab
-                    // scroll wasn't reliably dismissing it).
-                    .toolbar {
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") { commentFieldFocused = false }
-                        }
-                    }
-                    // When the field gains focus, ask the enclosing scroll view to lift this post
-                    // above the keyboard so the text being typed is visible.
+                    // Report focus up so the feed lifts this post above the keyboard AND hides the
+                    // "Share something" composer (which otherwise floats over the comment). The
+                    // keyboard dismisses by dragging the feed (scrollDismissesKeyboard) — no toolbar
+                    // Done, which was duplicating once per visible post.
                     .onChange(of: commentFieldFocused) { _, focused in
-                        if focused {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { onCommentFocus?() }
-                        }
+                        onCommentFocus?(focused)
                     }
                 Button { sendComment() } label: {
                     Image(systemName: "arrow.up.circle.fill").imageScale(.large).foregroundStyle(HavenTheme.pink)
@@ -2477,9 +2476,9 @@ struct PostCommentsSheet: View {
                         PostCard(item: live, friendName: friendName,
                                  onReact: onReact, onUnreact: onUnreact, onComment: onComment, onEdit: onEdit, onUnsend: onUnsend,
                                  expandAllComments: true,
-                                 onCommentFocus: {
+                                 onCommentFocus: { focused in
                                      // Lift the reply field above the keyboard so typing is visible.
-                                     withAnimation(HavenTheme.smooth) { proxy.scrollTo(live.id, anchor: .bottom) }
+                                     if focused { withAnimation(HavenTheme.smooth) { proxy.scrollTo(live.id, anchor: .bottom) } }
                                  })
                             .id(live.id)
                             .padding(16)

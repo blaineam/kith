@@ -26,6 +26,7 @@ struct StoryViewer: View {
     @State private var waitingMedia: String?   // a story whose bytes are still downloading
     @State private var retryCounter = 0
     @State private var confirmDeleteStory = false   // confirm unsending your own story
+    @State private var heldPaused = false            // press-and-hold pauses the timer + video
     @FocusState private var replyFocused: Bool
     private let tick = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -61,6 +62,13 @@ struct StoryViewer: View {
                     else { withAnimation(.spring()) { dragOffset = 0 } }
                 }
         )
+        // Press-and-hold anywhere to pause the timer + the video (Instagram-style); release resumes.
+        // A quick tap still navigates via the prev/next zones (the brief pause is imperceptible).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in if !heldPaused { heldPaused = true; player?.pause() } }
+                .onEnded { _ in if heldPaused { heldPaused = false; player?.play() } }
+        )
         .onAppear { loadCurrent() }
         .onDisappear { teardown() }
         .onReceive(tick) { _ in
@@ -70,7 +78,7 @@ struct StoryViewer: View {
                 else { retryCounter += 1; if retryCounter % 40 == 0 { FeedStore.shared.requestMedia(ref) } }
                 return
             }
-            guard !paused, !replyFocused else { return }
+            guard !paused, !heldPaused, !replyFocused else { return }
             progress += 0.05 / slideDuration
             if progress >= 1 { next() }
         }
