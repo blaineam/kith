@@ -122,6 +122,18 @@ impl Account {
         self.inner.public().to_bytes()
     }
 
+    /// Sign a push-registration challenge so the blind push worker can verify a registration really
+    /// comes from this identity (audit F5) — stops anyone registering their device token under another
+    /// node id (token hijack / eviction). Domain-separated + purpose-specific (NOT a raw signing
+    /// oracle). Returns the Ed25519 signature (the worker verifies it against the node id, which IS
+    /// the Ed25519 public key) over a message binding the node id, the token, and a timestamp.
+    pub fn sign_push_registration(&self, token: String, ts_secs: u64) -> Vec<u8> {
+        let node_hex = hex(&self.inner.public().node_id_bytes());
+        let msg = format!("haven-push-register-v1:{node_hex}:{token}:{ts_secs}");
+        let sig = self.inner.sign(msg.as_bytes());
+        sig[..64.min(sig.len())].to_vec() // the Ed25519 half — what the worker can verify
+    }
+
     // NOTE: a raw `sign(msg)` was deliberately removed (audit H3). Exposing an unrestricted hybrid
     // signing oracle over the FFI let any caller obtain a signature over chosen bytes, which could be
     // replayed into a domain that expects a signature of the same shape. Signing now happens only

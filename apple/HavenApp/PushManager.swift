@@ -50,7 +50,7 @@ final class PushManager: NSObject, ObservableObject {
 
     func registerVoip(_ tokenHex: String) {
         guard let nodeId = myNodeId() else { return }
-        post("/register-voip", ["nodeId": nodeId, "token": tokenHex, "sandbox": isSandbox])
+        post("/register-voip", ["nodeId": nodeId, "token": tokenHex, "sandbox": isSandbox].merging(signedReg(token: tokenHex)) { $1 })
     }
 
     /// Wake a peer for an incoming call (VoIP push). `ciphertext` = caller name sealed to them.
@@ -71,7 +71,7 @@ final class PushManager: NSObject, ObservableObject {
         #else
         let platform = "ios"
         #endif
-        post("/register", ["nodeId": nodeId, "token": hex, "sandbox": isSandbox, "platform": platform])
+        post("/register", ["nodeId": nodeId, "token": hex, "sandbox": isSandbox, "platform": platform].merging(signedReg(token: hex)) { $1 })
     }
 
     /// Register as an S3-bucket owner so the worker's cron can send a silent push to re-mint
@@ -79,7 +79,7 @@ final class PushManager: NSObject, ObservableObject {
     /// launch + a local reminder covers it.)
     func registerStorageOwner() {
         guard !lastToken.isEmpty, let nodeId = myNodeId() else { return }
-        post("/register-owner", ["nodeId": nodeId, "token": lastToken, "sandbox": isSandbox])
+        post("/register-owner", ["nodeId": nodeId, "token": lastToken, "sandbox": isSandbox].merging(signedReg(token: lastToken)) { $1 })
     }
 
     /// Ask the relay to wake a (possibly offline) peer. `ciphertext` is the base64 of a blob
@@ -115,6 +115,16 @@ final class PushManager: NSObject, ObservableObject {
     private func myNodeId() -> String? {
         guard let seed = AccountStore.storedSeed(), let acct = try? Account.fromSeed(seed: seed) else { return nil }
         return acct.nodeIdHex()
+    }
+
+    /// Signed registration fields (audit F5): a timestamp + the identity's Ed25519 signature over
+    /// (nodeId, token, ts), so the worker can confirm the registration is genuinely ours and reject a
+    /// token-hijack attempt registering under our node id.
+    private func signedReg(token: String) -> [String: Any] {
+        guard let seed = AccountStore.storedSeed(), let acct = try? Account.fromSeed(seed: seed) else { return [:] }
+        let ts = UInt64(Date().timeIntervalSince1970)
+        let sig = acct.signPushRegistration(token: token, tsSecs: ts)
+        return ["ts": ts, "sig": sig.base64EncodedString()]
     }
 
     private func post(_ path: String, _ body: [String: Any]) {

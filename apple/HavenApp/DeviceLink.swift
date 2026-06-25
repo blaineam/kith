@@ -30,6 +30,7 @@ struct TransferIdentityView: View {
                             Image(platformImage: img).interpolation(.none).resizable().scaledToFit()
                                 .frame(width: 240, height: 240)
                                 .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                                .screenshotProtected()   // the QR encodes the full identity — keep it out of screenshots/recordings (H2)
                         }
                         Button {
                             PlatformPasteboard.setSecret(code)   // local-only + expiring (it's the full identity)
@@ -85,6 +86,7 @@ struct LinkDeviceView: View {
                             Image(platformImage: img).interpolation(.none).resizable().scaledToFit()
                                 .frame(width: 240, height: 240)
                                 .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                                .screenshotProtected()   // the QR encodes the full identity (H2)
                         }
                         Button {
                             PlatformPasteboard.string = code

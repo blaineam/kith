@@ -22,8 +22,11 @@ export default {
       if (url.pathname === "/register") {
         // A node id can have MULTIPLE devices (multi-device / linked devices) — keep a list of
         // tokens, not one, so a push reaches every device on that identity.
-        const { nodeId, token, sandbox, platform } = await request.json();
+        const { nodeId, token, sandbox, platform, ts, sig } = await request.json();
         if (!nodeId || !token) return json({ error: "nodeId + token required" }, 400);
+        // The registration must be signed by the identity (audit F5) — stops anyone registering
+        // their token under someone else's node id (token hijack / eviction of the real device).
+        if (!(await verifyReg(nodeId, token, ts, sig))) return json({ error: "unauthorized" }, 401);
         const rec = (await env.TOKENS.get(nodeId, "json")) || { tokens: [] };
         const tokens = (rec.tokens || (rec.token ? [{ token: rec.token, sandbox: rec.sandbox }] : []))
           .filter((t) => t.token !== token);
@@ -38,8 +41,9 @@ export default {
       if (url.pathname === "/register-owner") {
         // A member who shares an S3 bucket as their circle's mailbox registers here, so the cron
         // can nudge them (silently) to re-mint fresh pre-signed URLs before the old ones expire.
-        const { nodeId, token, sandbox } = await request.json();
+        const { nodeId, token, sandbox, ts, sig } = await request.json();
         if (!nodeId || !token) return json({ error: "nodeId + token required" }, 400);
+        if (!(await verifyReg(nodeId, token, ts, sig))) return json({ error: "unauthorized" }, 401);
         await env.TOKENS.put(`owner:${nodeId}`, JSON.stringify({ token, sandbox: !!sandbox }));
         return json({ ok: true });
       }
@@ -47,8 +51,9 @@ export default {
       if (url.pathname === "/register-voip") {
         // PushKit VoIP token (separate from the regular APNs token) so calls can ring from a
         // fully-killed/locked device. One token per node id.
-        const { nodeId, token, sandbox } = await request.json();
+        const { nodeId, token, sandbox, ts, sig } = await request.json();
         if (!nodeId || !token) return json({ error: "nodeId + token required" }, 400);
+        if (!(await verifyReg(nodeId, token, ts, sig))) return json({ error: "unauthorized" }, 401);
         await env.TOKENS.put(`voip:${nodeId}`, JSON.stringify({ token, sandbox: !!sandbox }));
         return json({ ok: true });
       }
@@ -183,6 +188,39 @@ export default {
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
+}
+
+/// Verify a signed registration (audit F5): the node id IS the identity's Ed25519 public key, so the
+/// worker checks the Ed25519 signature over `haven-push-register-v1:<nodeId>:<token>:<ts>` and a 5-min
+/// freshness window. A forger who doesn't hold the identity key can't register under that node id.
+async function verifyReg(nodeId, token, ts, sigB64) {
+  try {
+    if (!ts || !sigB64) return false;
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - Number(ts)) > 300) return false;
+    const pub = hexToBytes(nodeId);
+    const sig = base64ToBytes(sigB64);
+    if (pub.length !== 32 || sig.length !== 64) return false;
+    const msg = new TextEncoder().encode(`haven-push-register-v1:${nodeId}:${token}:${ts}`);
+    const key = await crypto.subtle.importKey("raw", pub, { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.verify("Ed25519", key, sig, msg);
+  } catch {
+    return false;
+  }
+}
+
+function hexToBytes(h) {
+  if (typeof h !== "string" || h.length % 2) return new Uint8Array();
+  const out = new Uint8Array(h.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.substr(i * 2, 2), 16);
+  return out;
+}
+
+function base64ToBytes(b) {
+  const bin = atob(b);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 /// Soft per-source-IP rate limit (audit F6) so the blind doorbell can't be used to push-spam, ring,
