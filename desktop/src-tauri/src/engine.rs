@@ -948,9 +948,27 @@ impl Engine {
         let node_hex = handle.node_id_hex();
         *self.relay_host.lock().unwrap() = Some(handle);
         self.dyn_state.lock().unwrap().hosting = true;
+        // Lock the mailbox to circle members before announcing it (audit transport-F4).
+        self.authorize_membership();
         self.adopt_relay(node_hex.clone()).await;
         self.emit_changed();
         Ok(node_hex)
+    }
+
+    /// Push current circle membership to the in-process relay so each circle's mailbox is served ONLY
+    /// to its members (+ sibling relays for mesh sync) — a stranger who learns the relay id gets
+    /// nothing (audit transport-F4). Idempotent; call on host start and whenever membership changes.
+    pub fn authorize_membership(self: &Arc<Self>) {
+        let Some(handle) = self.relay_host.lock().unwrap().clone() else { return };
+        let me = self.social.my_node_hex();
+        for c in self.social.circles() {
+            let mut members = self.social.contact_node_ids(c.id.clone());
+            if !me.is_empty() && !members.contains(&me) {
+                members.push(me.clone());
+            }
+            let relays = self.relays_for(&c.id);
+            handle.authorize_circle(c.id.clone(), members, relays);
+        }
     }
 
     pub fn stop_hosting(self: &Arc<Self>) {

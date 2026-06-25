@@ -58,6 +58,11 @@ pub async fn run(cfg: Config) -> Result<()> {
             );
             println!("  storage node id (volunteer_node_id): {}", blob.node_id_hex());
 
+            // Lock the mailbox to the circle's members (+ sibling relays) so only members can read or
+            // enumerate it — a stranger who learns this relay's node id gets nothing (audit
+            // transport-F4). The link the operator pasted defines the membership.
+            blob.authorize(&cfg.link.circle, cfg.link.members.clone(), cfg.peers.clone());
+
             // Mesh replication: pull from each sibling relay every 30s so the mailbox
             // self-heals across the mesh (peers do the same in reverse → eventual set-union).
             if !cfg.peers.is_empty() {

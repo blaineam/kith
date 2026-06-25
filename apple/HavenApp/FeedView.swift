@@ -954,6 +954,17 @@ final class FeedStore: ObservableObject {
     // MARK: - Pre-signed S3 pool (advanced mailbox without sharing credentials)
 
     func memberHexes(circleId: String) -> [String] { social?.contactNodeIds(circleId: circleId) ?? [] }
+
+    /// (circleId, all member hexes incl. me) for every circle — the relay's membership allow-list
+    /// (audit transport-F4). `social` is private, so RelayHost gets the data through this accessor.
+    func circleMemberships() -> [(String, [String])] {
+        guard let social else { return [] }
+        return social.circles().map { c in
+            var m = memberHexes(circleId: c.id)
+            if !myNodeHex.isEmpty, !m.contains(myNodeHex) { m.append(myNodeHex) }
+            return (c.id, m)
+        }
+    }
     func sealCirclePresign(circleId: String, data: Data) -> Data? { try? social?.sealCircleMedia(circleId: circleId, data: data) }
     func openCirclePresign(circleId: String, sealed: Data) -> Data? { social?.openCircleMedia(circleId: circleId, sealed: sealed) }
 

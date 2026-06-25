@@ -34,8 +34,9 @@
 //!  └──────────────┘                        └──────────────────────────────┘
 //! ```
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Result};
 use iroh::{
@@ -152,10 +153,24 @@ const MAX_SYNC_PULL: usize = 20_000;
 /// non-empty root is also required by the wire protocol.
 const SYNC_PREFIX: &str = "haven";
 
+/// Per-circle authorization for the mailbox (audit transport-F4). When a host populates this (the
+/// Haven apps do, from each circle's known membership), the relay serves a circle's mailbox keys ONLY
+/// to that circle's members — a stranger who merely learns the relay's node id can no longer enumerate
+/// or fetch a circle's blobs. Sibling relays are allowed broad LIST so mesh anti-entropy still works.
+/// An EMPTY map means "unconfigured" → fully permissive (a standalone/self-host relay is unchanged).
+#[derive(Default)]
+struct RelayAuth {
+    /// circleId → authorized member node hexes.
+    members: HashMap<String, HashSet<String>>,
+    /// Sibling relay node hexes allowed to replicate via broad LIST (mesh anti-entropy).
+    relays: HashSet<String>,
+}
+
 pub struct BlobServer {
     endpoint: Endpoint,
     secret: [u8; 32],
     root: PathBuf,
+    auth: Arc<Mutex<RelayAuth>>,
 }
 
 impl BlobServer {
@@ -170,10 +185,28 @@ impl BlobServer {
             .bind()
             .await
             .ah()?;
-        let srv = Arc::new(Self { endpoint, secret, root: root.clone() });
+        let srv = Arc::new(Self { endpoint, secret, root: root.clone(), auth: Arc::new(Mutex::new(RelayAuth::default())) });
         let acc = srv.clone();
         tokio::spawn(async move { acc.accept_loop(root).await });
         Ok(srv)
+    }
+
+    /// Authorize a circle's mailbox to exactly `members` (their node hexes), plus the circle's sibling
+    /// `relays` (allowed to replicate). Idempotent; call again on any membership change to update the
+    /// set. Once ANY circle is authorized, the relay enforces membership on every mailbox request (and
+    /// rejects strangers); before that it stays permissive for backward compatibility (audit
+    /// transport-F4).
+    pub fn authorize(&self, circle_id: &str, members: Vec<String>, relays: Vec<String>) {
+        let mut a = self.auth.lock().unwrap();
+        a.members.insert(circle_id.to_string(), members.into_iter().collect());
+        for r in relays {
+            a.relays.insert(r);
+        }
+    }
+
+    /// Forget a circle's authorization (e.g., we stopped serving it / left it).
+    pub fn deauthorize(&self, circle_id: &str) {
+        self.auth.lock().unwrap().members.remove(circle_id);
     }
 
     /// Mesh anti-entropy: pull every sealed blob a PEER relay holds (under Haven's prefix)
@@ -231,21 +264,24 @@ impl BlobServer {
     async fn accept_loop(self: Arc<Self>, root: PathBuf) {
         while let Some(incoming) = self.endpoint.accept().await {
             let root = root.clone();
+            let auth = self.auth.clone();
             tokio::spawn(async move {
                 let Ok(connecting) = incoming.accept() else { return };
                 let Ok(conn) = connecting.await else { return };
                 // The verified iroh node id of the peer — used to enforce per-account self-sync slot
-                // ownership (audit F3). Equals the peer's Haven node hex (same key).
+                // ownership and circle-membership authorization (audit F3/transport-F4). Equals the
+                // peer's Haven node hex (same key).
                 let peer = hex(conn.remote_id().as_bytes());
                 loop {
                     match conn.accept_bi().await {
                         Ok((send, recv)) => {
                             let root = root.clone();
                             let peer = peer.clone();
+                            let auth = auth.clone();
                             tokio::spawn(async move {
                                 // A handler error must never poison the connection; just
                                 // drop the stream. Nothing is logged (no-log posture).
-                                let _ = handle_request(root, peer, send, recv).await;
+                                let _ = handle_request(root, peer, auth, send, recv).await;
                             });
                         }
                         Err(_) => break,
@@ -256,11 +292,46 @@ impl BlobServer {
     }
 }
 
+/// The circle id in a `haven/mailbox/<circle>/...` key, or None for non-mailbox / too-broad keys.
+fn mailbox_circle(key: &str) -> Option<&str> {
+    let rest = key.strip_prefix("haven/mailbox/")?;
+    let circle = rest.split('/').next().unwrap_or("");
+    (!circle.is_empty()).then_some(circle)
+}
+
+/// A LIST prefix that spans more than one circle's mailbox — mesh-sync territory (sibling relays only).
+fn is_broad_mailbox_prefix(key: &str) -> bool {
+    matches!(key, "haven" | "haven/" | "haven/mailbox" | "haven/mailbox/")
+}
+
+/// Circle-membership authorization (audit transport-F4). Returns true if `peer` may NOT touch `key`.
+/// Permissive while no circle is authorized; once the host configures membership, a mailbox key is
+/// served only to that circle's members (or a sibling relay replicating); a broad cross-circle LIST is
+/// restricted to sibling relays; `self/` and content-addressed `media`/other keys are handled elsewhere
+/// / left permissive (media refs are opaque content hashes, self slots are owner-gated above).
+fn mailbox_forbidden(auth: &Arc<Mutex<RelayAuth>>, peer: &str, verb: u8, key: &str) -> bool {
+    let a = auth.lock().unwrap();
+    if a.members.is_empty() {
+        return false; // unconfigured / standalone relay → unchanged behavior
+    }
+    if a.relays.contains(peer) {
+        return false; // sibling relay → may sync freely (mesh anti-entropy)
+    }
+    if verb == VERB_LIST && is_broad_mailbox_prefix(key) {
+        return true; // a non-relay may not enumerate across circles
+    }
+    match mailbox_circle(key) {
+        Some(circle) => !a.members.get(circle).map(|m| m.contains(peer)).unwrap_or(false),
+        None => false, // not a circle mailbox key
+    }
+}
+
 /// Serve one request stream against the on-disk store. Pure ciphertext I/O — the body is
 /// stored and returned verbatim, never inspected.
 async fn handle_request(
     root: PathBuf,
     peer: String,
+    auth: Arc<Mutex<RelayAuth>>,
     mut send: iroh::endpoint::SendStream,
     mut recv: iroh::endpoint::RecvStream,
 ) -> Result<()> {
@@ -292,6 +363,15 @@ async fn handle_request(
             let _ = send.finish();
             return Ok(());
         }
+    }
+
+    // Circle-membership authorization: once the host configures any circle's membership, only that
+    // circle's members (or a sibling relay) may touch its mailbox; strangers are refused (audit
+    // transport-F4). No-op while unconfigured.
+    if mailbox_forbidden(&auth, &peer, verb, &key) {
+        let _ = send.write_all(b"ERR forbidden").await;
+        let _ = send.finish();
+        return Ok(());
     }
 
     match verb {
@@ -550,5 +630,35 @@ mod tests {
         let want = keys_to_pull(&dir, &peer);
         assert_eq!(want, vec!["haven/mailbox/fam/missing".to_string(), "haven/media/blob1".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn membership_auth_gates_strangers_but_allows_members_and_relays() {
+        let auth: Arc<Mutex<RelayAuth>> = Arc::new(Mutex::new(RelayAuth::default()));
+        let member = "aa".repeat(32);
+        let stranger = "bb".repeat(32);
+        let sibling = "cc".repeat(32);
+        let mbkey = format!("haven/mailbox/fam/{}", "00".repeat(32));
+
+        // Unconfigured relay → permissive for everyone (standalone/self-host unchanged).
+        assert!(!mailbox_forbidden(&auth, &stranger, VERB_GET, &mbkey));
+
+        // Configure circle 'fam' with one member + one sibling relay.
+        auth.lock().unwrap().members.insert("fam".into(), [member.clone()].into_iter().collect());
+        auth.lock().unwrap().relays.insert(sibling.clone());
+
+        // The member may read their circle; a stranger may not (read, nor scoped enumerate).
+        assert!(!mailbox_forbidden(&auth, &member, VERB_GET, &mbkey));
+        assert!(mailbox_forbidden(&auth, &stranger, VERB_GET, &mbkey));
+        assert!(mailbox_forbidden(&auth, &stranger, VERB_LIST, "haven/mailbox/fam/"));
+
+        // A stranger can't enumerate across circles; a sibling relay can (mesh anti-entropy).
+        assert!(mailbox_forbidden(&auth, &stranger, VERB_LIST, "haven/"));
+        assert!(!mailbox_forbidden(&auth, &sibling, VERB_LIST, "haven/"));
+        assert!(!mailbox_forbidden(&auth, &sibling, VERB_GET, &mbkey));
+
+        // Content-addressed media (opaque hash) stays permissive; an unknown circle is refused.
+        assert!(!mailbox_forbidden(&auth, &stranger, VERB_GET, "haven/media/blob1"));
+        assert!(mailbox_forbidden(&auth, &stranger, VERB_GET, "haven/mailbox/other/xyz"));
     }
 }

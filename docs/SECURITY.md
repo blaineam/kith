@@ -30,11 +30,16 @@ This document records what Haven protects, how, and the limits — including the
 
 - **Cannot** read content, contacts, keys, or notification text — everything it stores or forwards is
   sealed; the push worker only forwards opaque ciphertext.
-- **Can** see **metadata**: connection timing, IP↔node-id mappings (via the iroh/n0 public discovery
-  the app uses for NAT traversal), and the random circle UUIDs in mailbox key paths. Self-sync slots
-  are access-controlled to their owning account. A user with a stricter threat model can run their own
-  relay/discovery. *(Tracked hardening: opaque/HMAC'd mailbox key prefixes; per-circle membership auth
-  on the mailbox.)*
+- **Cannot be enumerated by strangers**: the relay enforces **circle-membership authorization** — a
+  circle's mailbox (read, write, and list) is served only to that circle's members (and its sibling
+  relays, for replication). A node that merely learns the relay's id can no longer fetch or enumerate a
+  circle's blobs. Self-sync slots are likewise access-controlled to their owning account. (Standalone
+  self-host relays stay permissive until configured; the apps configure membership automatically.)
+- **Can** see **limited metadata**: connection timing, IP↔node-id mappings (via the iroh/n0 public
+  discovery the app uses for NAT traversal), and — for a member-run relay, which knows its own circle's
+  config anyway — the random circle UUIDs in key paths. Content, contacts, and keys remain sealed. A
+  user with a stricter threat model can run their own relay/discovery. *(Core groundwork also exists for
+  opaque/HMAC'd per-member key prefixes, for the case of a non-member-operated relay.)*
 
 ## Identity & control
 

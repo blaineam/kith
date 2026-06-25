@@ -682,7 +682,28 @@ object HavenNet : InboundListener {
             withContext(Dispatchers.Main) { hosting.value = true }
             val nodeHex = h.nodeIdHex()
             Log.i(TAG, "hosting circle relay: ${nodeHex.take(8)}")
-            adoptRelay(nodeHex)   // use it + tell contacts via frame 19
+            authorizeMembership()   // lock the mailbox to circle members before announcing it
+            adoptRelay(nodeHex)     // use it + tell contacts via frame 19
+        }
+    }
+
+    /**
+     * Lock each circle's relay mailbox to its members (+ sibling relays) so only members can read or
+     * enumerate it — a stranger who learns the relay id gets nothing (audit transport-F4). Called on
+     * host start and on membership refresh. Invoked reflectively because the committed bindings
+     * (haven_ffi.kt) predate `authorizeCircle`; it activates once android/build-rust.sh regenerates
+     * them and no-ops harmlessly until then (parity with meshSync's reflective syncFrom).
+     */
+    private fun authorizeMembership() {
+        val host = relayHost ?: return
+        val authorize = runCatching {
+            host.javaClass.methods.firstOrNull { it.name == "authorizeCircle" && it.parameterTypes.size == 3 }
+        }.getOrNull() ?: return
+        val me = runCatching { social.myNodeHex() }.getOrNull() ?: ""
+        for (c in runCatching { social.circles() }.getOrNull().orEmpty()) {
+            val members = social.contactNodeIds(c.id).toMutableList()
+            if (me.isNotEmpty() && !members.contains(me)) members.add(me)
+            runCatching { authorize.invoke(host, c.id, members, relaysFor(c.id)) }
         }
     }
 
@@ -704,6 +725,7 @@ object HavenNet : InboundListener {
      */
     private suspend fun meshSync() {
         val host = relayHost ?: return
+        authorizeMembership()   // keep the allow-list fresh as membership / relays change
         val myHex = runCatching { host.nodeIdHex() }.getOrNull() ?: return
         val syncFrom = runCatching {
             host.javaClass.methods.firstOrNull {

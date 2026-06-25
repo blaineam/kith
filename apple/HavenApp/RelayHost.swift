@@ -67,6 +67,8 @@ final class RelayHost: ObservableObject {
                 handle = h
                 nodeId = h.nodeIdHex()
                 serving = true
+                // Lock the mailbox down to circle members before announcing it (audit transport-F4).
+                authorizeMembership()
                 // Tell my circles to use this device as their mailbox.
                 FeedStore.shared.broadcastRelayNode(nodeId)
             } catch {
@@ -86,8 +88,21 @@ final class RelayHost: ObservableObject {
     /// we lack, so the circle's mailbox self-replicates across relays (any relay can join/leave
     /// without losing data). Health-aware — relays in backoff are skipped, and a successful pull
     /// clears their backoff. Mirrors the desktop `mesh_sync`; driven on FeedStore's sync timer.
+    /// Push current circle membership to the in-process relay so each circle's mailbox is served ONLY
+    /// to its members (+ sibling relays for mesh sync) — a stranger who learns the relay id gets
+    /// nothing (audit transport-F4). Idempotent; safe to call on start and whenever membership or the
+    /// relay set changes. The relay stays permissive until the first circle is authorized here.
+    func authorizeMembership() {
+        guard let handle, serving else { return }
+        for (cid, members) in FeedStore.shared.circleMemberships() {
+            let relays = RelayMailboxStore.shared.relays(forCircle: cid)
+            handle.authorizeCircle(circleId: cid, members: members, relays: relays)
+        }
+    }
+
     func meshSyncTick() {
         guard let handle, serving else { return }
+        authorizeMembership() // keep the allow-list fresh as membership / relays change
         let myHex = nodeId
         // Every distinct adopted relay (≠ self) that isn't currently backed off.
         let peers = RelayMailboxStore.shared.allRelays()

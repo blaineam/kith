@@ -417,6 +417,18 @@ impl RelayServerHandle {
         self.inner.node_id_hex()
     }
 
+    /// Authorize a circle's mailbox to exactly `members` (node hexes) + its sibling `relays` (audit
+    /// transport-F4). Call on relay start and on every membership change. Once any circle is authorized
+    /// the relay refuses mailbox access to non-members; before that it stays permissive.
+    pub fn authorize_circle(&self, circle_id: String, members: Vec<String>, relays: Vec<String>) {
+        self.inner.authorize(&circle_id, members, relays);
+    }
+
+    /// Stop serving a circle's mailbox (we left it / no longer host it).
+    pub fn deauthorize_circle(&self, circle_id: String) {
+        self.inner.deauthorize(&circle_id);
+    }
+
     /// Mesh anti-entropy: pull every sealed blob a SIBLING relay holds that we lack, so the
     /// mailbox self-replicates across relays. Call on a timer for each peer relay (≠ this one).
     /// Returns the number of new blobs pulled (0 if the peer is unreachable). Safe set-union —
