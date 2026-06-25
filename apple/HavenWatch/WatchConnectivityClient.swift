@@ -43,22 +43,25 @@ final class WatchConnectivityClient: NSObject, ObservableObject {
             WatchMessage(id: "m2", author: "You", isMe: true, body: "Cool, door's open", timestamp: now - 180_000, hasMedia: false, reactions: ""),
             WatchMessage(id: "m3", author: "Ari", isMe: false, body: "On my way 🚲", timestamp: now - 90_000, hasMedia: false, reactions: "❤️2"),
             WatchMessage(id: "m4", author: "Ari", isMe: false, body: "Made it to the top!", timestamp: now - 60_000, hasMedia: true,
-                         reactions: "🔥3", thumbnail: Self.demoThumb(), isVideo: false),
+                         reactions: "🔥3", media: Self.demoMedia()),
         ])
         reachable = true
         lastSyncedAt = now
         return true
     }
 
-    /// A small synthetic gradient JPEG standing in for a real post photo in the demo harness
-    /// (ImageRenderer is the watchOS-available way to rasterize a view; UIGraphicsImageRenderer isn't).
-    @MainActor private static func demoThumb() -> Data? {
-        let view = LinearGradient(colors: [WTheme.pink, WTheme.violet],
-                                  startPoint: .topLeading, endPoint: .bottomTrailing)
-            .frame(width: 120, height: 100)
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
-        return renderer.uiImage?.jpegData(compressionQuality: 0.6)
+    /// Synthetic gradient "photos" standing in for real post media in the demo harness — two with
+    /// different aspect ratios so the carousel + true-aspect rendering are exercised. (ImageRenderer is
+    /// the watchOS-available rasterizer; UIGraphicsImageRenderer isn't.)
+    @MainActor private static func demoMedia() -> [WatchMedia] {
+        func gradient(_ a: Color, _ b: Color, _ w: Int, _ h: Int) -> WatchMedia? {
+            let view = LinearGradient(colors: [a, b], startPoint: .topLeading, endPoint: .bottomTrailing)
+                .frame(width: CGFloat(w), height: CGFloat(h))
+            let r = ImageRenderer(content: view); r.scale = 2
+            return r.uiImage?.jpegData(compressionQuality: 0.6).map { WatchMedia(thumbnail: $0, w: w, h: h, isVideo: false) }
+        }
+        return [gradient(WTheme.pink, WTheme.violet, 160, 120),
+                gradient(WTheme.violet, WTheme.amber, 120, 150)].compactMap { $0 }
     }
 
     // MARK: - Requests to the phone
@@ -87,11 +90,11 @@ final class WatchConnectivityClient: NSObject, ObservableObject {
         })
     }
 
-    func sendReply(threadId: String, body: String) {
+    func sendReply(threadId: String, body: String, targetId: String? = nil) {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, activated else { return }
         loadingThread = true
-        let payload = WatchCodec.encode(.quickReply, WatchReply(threadId: threadId, body: trimmed))
+        let payload = WatchCodec.encode(.quickReply, WatchReply(threadId: threadId, body: trimmed, targetId: targetId))
         if session.isReachable {
             session.sendMessage(payload, replyHandler: { [weak self] reply in
                 Task { @MainActor in self?.ingest(reply) }

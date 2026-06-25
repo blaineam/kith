@@ -56,15 +56,16 @@ final class WatchSessionManager: NSObject, WCSessionDelegate {
         let store = FeedStore.shared
         var threads: [WatchThread] = []
         for c in store.dmCircles {
-            let last = store.messages(in: c.id).last
+            // feed() is newest-first, so the latest message is `.first` (was `.last` → showed the oldest).
+            let latest = store.messages(in: c.id).first
             threads.append(WatchThread(id: c.id, title: store.dmPartnerName(c.id),
-                                       subtitle: preview(last), timestamp: last?.createdAt ?? 0,
+                                       subtitle: preview(latest), timestamp: latest?.createdAt ?? 0,
                                        isDM: true, unread: 0))
         }
         for c in store.feedCircles {
-            let last = store.messages(in: c.id).last
+            let latest = store.messages(in: c.id).first
             threads.append(WatchThread(id: c.id, title: c.name,
-                                       subtitle: preview(last), timestamp: last?.createdAt ?? 0,
+                                       subtitle: preview(latest), timestamp: latest?.createdAt ?? 0,
                                        isDM: false, unread: 0))
         }
         threads.sort { $0.timestamp > $1.timestamp }
@@ -76,36 +77,53 @@ final class WatchSessionManager: NSObject, WCSessionDelegate {
         let isDM = threadId.hasPrefix("dm:")
         let title = isDM ? store.dmPartnerName(threadId)
                          : (store.circles.first { $0.id == threadId }?.name ?? "Circle")
-        let items = Array(store.messages(in: threadId).suffix(40))
-        // Thumbnail only the most recent media-bearing messages so the WCSession payload stays small.
-        let thumbIds = Set(items.filter { !$0.media.isEmpty }.suffix(12).map { $0.id })
-        let messages = items.map { item -> WatchMessage in
-            let (thumb, isVideo) = thumbIds.contains(item.id) ? watchThumbnail(item.media) : (nil, false)
-            return WatchMessage(id: item.id,
-                                author: item.isMe ? "You" : item.authorShort,
-                                isMe: item.isMe,
-                                body: item.unsent ? "Message unsent" : item.body,
-                                timestamp: item.createdAt,
-                                hasMedia: !item.media.isEmpty,
-                                reactions: reactionSummary(item.reactions),
-                                thumbnail: thumb,
-                                isVideo: isVideo)
+        // feed() is newest-first. DMs read as a chat (oldest→newest, scrolled to bottom); a circle reads
+        // as a feed (newest→oldest). Cap the count either way.
+        let feed = store.messages(in: threadId)
+        let ordered: [FeedItemFfi] = isDM ? Array(feed.reversed().suffix(60)) : Array(feed.prefix(60))
+        // Assign real media thumbnails to the most RECENT items first, within a WCSession byte budget;
+        // older media-bearing items still flag hasMedia (the watch shows a light placeholder).
+        var budget = 150_000
+        var mediaById: [String: [WatchMedia]] = [:]
+        let recentFirst = isDM ? Array(ordered.reversed()) : ordered   // newest-first for budgeting
+        for item in recentFirst where !item.media.isEmpty {
+            let m = watchMedia(item.media, budget: &budget)
+            if !m.isEmpty { mediaById[item.id] = m }
+        }
+        let messages = ordered.map { item -> WatchMessage in
+            WatchMessage(id: item.id,
+                         author: authorName(item),
+                         isMe: item.isMe,
+                         body: item.unsent ? "Message unsent" : item.body,
+                         timestamp: item.createdAt,
+                         hasMedia: !item.media.isEmpty,
+                         reactions: reactionSummary(item.reactions),
+                         media: mediaById[item.id] ?? [],
+                         isStory: item.story)
         }
         return WatchThreadDetail(threadId: threadId, title: title, isDM: isDM, messages: messages)
     }
 
-    /// A tiny JPEG thumbnail (+ isVideo flag) of a post's first renderable media, for the Watch — so
-    /// posts show the actual photo instead of a generic "Attachment" row. Kept small (≤120px, low
-    /// quality ≈ a few KB) to stay well under the WCSession message cap.
-    @MainActor private static func watchThumbnail(_ refs: [String]) -> (Data?, Bool) {
-        for ref in refs {
-            guard let item = MediaStore.shared.item(ref), let img = item.image else { continue }
-            let small = MediaStore.downscale(img, maxDimension: 120)
-            if let data = small.jpegData(compressionQuality: 0.5) {
-                return (data, item.kind == .video)
-            }
+    /// The resolved display name for a post/message author — a contact's name/nickname, never the raw
+    /// node-id prefix (the Watch was showing the prefix). "You" for our own items.
+    @MainActor private static func authorName(_ item: FeedItemFfi) -> String {
+        if item.isMe { return "You" }
+        return ContactsStore.shared.name(forNodePrefix: item.authorShort) ?? item.authorShort
+    }
+
+    /// Build the Watch's media carousel for a post: up to 4 items, each a ~300px JPEG (sharp on the
+    /// watch, not the old pixelated 120px) carrying the SOURCE pixel size so the watch renders the true
+    /// aspect ratio. Stops once the running `budget` is exhausted so the WCSession payload stays bounded.
+    @MainActor private static func watchMedia(_ refs: [String], budget: inout Int) -> [WatchMedia] {
+        var out: [WatchMedia] = []
+        for ref in refs.prefix(4) {
+            guard budget > 0, let item = MediaStore.shared.item(ref), let img = item.image else { continue }
+            let small = MediaStore.downscale(img, maxDimension: 300)
+            guard let data = small.jpegData(compressionQuality: 0.68), data.count <= budget else { continue }
+            budget -= data.count
+            out.append(WatchMedia(thumbnail: data, w: Int(img.size.width), h: Int(img.size.height), isVideo: item.kind == .video))
         }
-        return (nil, false)
+        return out
     }
 
     private static func preview(_ item: FeedItemFfi?) -> String {
@@ -135,7 +153,11 @@ final class WatchSessionManager: NSObject, WCSessionDelegate {
             }
         case .quickReply:
             if let r = WatchCodec.decode(WatchReply.self, from: message) {
-                FeedStore.shared.sendMessage(to: r.threadId, r.body)
+                if let postId = r.targetId {
+                    FeedStore.shared.commentMessage(in: r.threadId, postId, r.body)   // circle: comment on a post
+                } else {
+                    FeedStore.shared.sendMessage(to: r.threadId, r.body)              // DM / thread message
+                }
                 reply?(WatchCodec.encode(.thread, Self.buildThread(r.threadId)))
             }
         case .react:

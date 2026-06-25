@@ -49,26 +49,41 @@ public struct WatchSnapshot: Codable, Hashable {
     }
 }
 
+/// One piece of post media, framed for the Watch: a JPEG thumbnail plus the ORIGINAL pixel
+/// dimensions so the watch renders it at the real aspect ratio (not a forced square), and an
+/// is-video flag for the play badge. `w`/`h` are the source size in pixels (0 if unknown → square).
+public struct WatchMedia: Codable, Hashable {
+    public var thumbnail: Data
+    public var w: Int
+    public var h: Int
+    public var isVideo: Bool
+    public init(thumbnail: Data, w: Int, h: Int, isVideo: Bool) {
+        self.thumbnail = thumbnail; self.w = w; self.h = h; self.isVideo = isVideo
+    }
+    /// Source aspect ratio (width / height), clamped to a sane range; 1 when unknown.
+    public var aspect: Double { (w > 0 && h > 0) ? max(0.5, min(2.0, Double(w) / Double(h))) : 1 }
+}
+
 /// One message/post inside a thread, flattened for the Watch.
 public struct WatchMessage: Codable, Identifiable, Hashable {
     public var id: String
-    public var author: String
+    public var author: String           // the resolved DISPLAY NAME (or "You"), never a node-id prefix
     public var isMe: Bool
     public var body: String
     public var timestamp: UInt64
     public var hasMedia: Bool
-    public var reactions: String   // compact summary, e.g. "❤️2 👍1"
-    /// A small JPEG thumbnail of the post's first photo (or a video's poster frame), generated
-    /// phone-side and downscaled so it's cheap over the WCSession link. nil = no renderable media.
-    public var thumbnail: Data?
-    /// The thumbnail is a video poster (show a play badge) rather than a still photo.
-    public var isVideo: Bool
+    public var reactions: String        // compact summary, e.g. "❤️2 👍1"
+    /// All of the post's media (a swipeable carousel on the watch), each at its true aspect ratio.
+    /// May be empty even when `hasMedia` is true (the thumbnails were over the WCSession byte budget).
+    public var media: [WatchMedia]
+    /// This item is a 24-hour STORY (rendered as a ring in the circle's story tray, not a feed post).
+    public var isStory: Bool
 
     public init(id: String, author: String, isMe: Bool, body: String, timestamp: UInt64,
-                hasMedia: Bool, reactions: String, thumbnail: Data? = nil, isVideo: Bool = false) {
+                hasMedia: Bool, reactions: String, media: [WatchMedia] = [], isStory: Bool = false) {
         self.id = id; self.author = author; self.isMe = isMe; self.body = body
         self.timestamp = timestamp; self.hasMedia = hasMedia; self.reactions = reactions
-        self.thumbnail = thumbnail; self.isVideo = isVideo
+        self.media = media; self.isStory = isStory
     }
 }
 
@@ -90,7 +105,12 @@ public struct WatchThreadDetail: Codable, Hashable {
 public struct WatchReply: Codable, Hashable {
     public var threadId: String
     public var body: String
-    public init(threadId: String, body: String) { self.threadId = threadId; self.body = body }
+    /// When set, this is a COMMENT on that post id (circle long-press → Comment); nil = a thread-level
+    /// message (a DM reply, or a new circle post).
+    public var targetId: String?
+    public init(threadId: String, body: String, targetId: String? = nil) {
+        self.threadId = threadId; self.body = body; self.targetId = targetId
+    }
 }
 
 public struct WatchReaction: Codable, Hashable {
