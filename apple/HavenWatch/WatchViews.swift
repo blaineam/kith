@@ -12,16 +12,18 @@ struct WatchConversationsView: View {
         NavigationStack(path: $path) {
             List {
                 if client.threads.isEmpty {
-                    Section {
-                        Text(client.reachable ? "No conversations yet." : "Open Haven on your iPhone to sync.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(client.reachable ? "No conversations yet." : "Open Haven on your iPhone to sync.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .listRowBackground(Color.clear)
                 }
                 ForEach(client.threads) { thread in
                     NavigationLink(value: thread) { WatchThreadRow(thread: thread) }
+                        .listRowBackground(Color.clear)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(WatchBackground())
             .navigationTitle("Haven")
             .navigationDestination(for: WatchThread.self) { thread in
                 WatchThreadView(threadId: thread.id, title: thread.title)
@@ -47,29 +49,29 @@ private struct WatchThreadRow: View {
     let thread: WatchThread
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                Image(systemName: thread.isDM ? "person.fill" : "sparkles")
-                    .font(.caption2)
-                    .foregroundStyle(thread.isDM ? Color.pink : Color.purple)
-                Text(thread.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer(minLength: 2)
-                if thread.timestamp > 0 {
-                    Text(watchRelativeTime(thread.timestamp))
+        HStack(spacing: 9) {
+            WatchAvatar(title: thread.title, isDM: thread.isDM, size: 34)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(thread.title)
+                        .font(.system(.headline, design: .rounded))
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
+                    if thread.timestamp > 0 {
+                        Text(watchRelativeTime(thread.timestamp))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if !thread.subtitle.isEmpty {
+                    Text(thread.subtitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
-            if !thread.subtitle.isEmpty {
-                Text(thread.subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
         }
-        .padding(.vertical, 2)
+        .watchCard()
     }
 }
 
@@ -92,20 +94,21 @@ struct WatchThreadView: View {
             if messages.isEmpty {
                 Text(client.loadingThread ? "Loading…" : "No messages yet.")
                     .font(.footnote).foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
             }
             ForEach(messages) { msg in
                 WatchMessageRow(message: msg)
                     .onTapGesture { reactingTo = msg }
             }
-            Section {
-                Button {
-                    showReply = true
-                } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left.fill")
-                }
-                .tint(.pink)
+            Button { showReply = true } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left.fill")
             }
+            .buttonStyle(WatchBrandButton())
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 6, leading: 4, bottom: 4, trailing: 4))
         }
+        .scrollContentBackground(.hidden)
+        .background(WatchBackground())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { client.openThread(threadId) }
@@ -203,10 +206,9 @@ struct WatchReplyView: View {
 
                 Button(action: send) {
                     Label("Send", systemImage: "paperplane.fill")
-                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(WatchBrandButton())
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .tint(.pink)
 
                 Divider()
                 Text("Quick replies").font(.caption2).foregroundStyle(.secondary)
@@ -222,6 +224,7 @@ struct WatchReplyView: View {
             }
             .padding(.horizontal, 4)
         }
+        .background(WatchBackground())
         .navigationTitle("Reply")
     }
 
@@ -250,5 +253,6 @@ struct WatchReactionPicker: View {
             }
             .padding(8)
         }
+        .background(WatchBackground())
     }
 }
