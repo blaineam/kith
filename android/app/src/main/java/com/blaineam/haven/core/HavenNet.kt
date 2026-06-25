@@ -318,10 +318,11 @@ object HavenNet : InboundListener {
 
     /** Send a text DM into a circle and deliver it to the partner. */
     fun sendDm(circleId: String, body: String, media: List<String> = emptyList(),
-               music: uniffi.haven_ffi.TrackRefFfi? = null) {
+               music: uniffi.haven_ffi.TrackRefFfi? = null, retentionSecs: ULong? = null) {
         if (body.isBlank() && media.isEmpty() && music == null) return
+        // retentionSecs != null → a disappearing message (auto-expires in the feed reducer, iOS parity).
         val env = runCatching {
-            social.post(circleId, body, media, music, null, false, false, nowMs())
+            social.post(circleId, body, media, music, retentionSecs, false, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
         scope.launch { media.forEach { uploadMedia(circleId, it) } }

@@ -24,12 +24,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextButton
@@ -137,6 +139,9 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
     var showMusicDialog by remember { mutableStateOf(false) }
     var showVoice by remember { mutableStateOf(false) }
     var secretMode by remember { mutableStateOf(false) }
+    var disappearSecs by remember { mutableStateOf<ULong?>(null) }
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var showOptions by remember { mutableStateOf(false) }
     val version by HavenNet.feedVersion
     val msgs = remember(version, circleId) { HavenNet.messages(circleId) }
     val picker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -176,7 +181,12 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(msgs, key = { it.id }) { m -> Bubble(m, circleId = circleId) }
+                items(msgs, key = { it.id }) { m ->
+                    Bubble(m, circleId = circleId, onEdit = { msg ->
+                        editingId = msg.id; secretMode = com.blaineam.haven.core.SecretMessages.isSecret(msg.body)
+                        draft = com.blaineam.haven.core.SecretMessages.text(msg.body)
+                    })
+                }
             }
 
             pendingPhoto?.let { ref ->
@@ -192,6 +202,14 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
                     MusicChip(m)
                     Icon(Icons.Filled.Close, "Remove song", tint = Color.White,
                         modifier = Modifier.padding(start = 6.dp).size(18.dp).clickable { pendingMusic = null })
+                }
+            }
+            if (editingId != null) {
+                Row(Modifier.padding(start = 16.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Editing message", color = HavenTheme.pink, fontSize = 12.sp)
+                    Spacer(Modifier.size(10.dp))
+                    Text("Cancel", color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp,
+                        modifier = Modifier.clickable { editingId = null; draft = ""; secretMode = false })
                 }
             }
 
@@ -210,10 +228,29 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
                     contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.Mic, "Voice message", tint = HavenTheme.pink)
                 }
-                Box(Modifier.size(40.dp).clip(CircleShape).clickable { secretMode = !secretMode },
-                    contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.Lock, "Secret message",
-                        tint = if (secretMode) HavenTheme.pink else Color.White.copy(alpha = 0.5f))
+                Box(contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(40.dp).clip(CircleShape).clickable { showOptions = true },
+                        contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.MoreVert, "More options",
+                            tint = if (secretMode || disappearSecs != null) HavenTheme.pink else Color.White.copy(alpha = 0.5f))
+                    }
+                    DropdownMenu(expanded = showOptions, onDismissRequest = { showOptions = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (secretMode) "✓ Secret message" else "Secret message") },
+                            onClick = { secretMode = !secretMode; showOptions = false })
+                        DropdownMenuItem(
+                            text = { Text(if (disappearSecs == null) "✓ Don't disappear" else "Don't disappear") },
+                            onClick = { disappearSecs = null; showOptions = false })
+                        DropdownMenuItem(
+                            text = { Text(if (disappearSecs == 3_600UL) "✓ Disappear · 1 hour" else "Disappear · 1 hour") },
+                            onClick = { disappearSecs = 3_600UL; showOptions = false })
+                        DropdownMenuItem(
+                            text = { Text(if (disappearSecs == 86_400UL) "✓ Disappear · 1 day" else "Disappear · 1 day") },
+                            onClick = { disappearSecs = 86_400UL; showOptions = false })
+                        DropdownMenuItem(
+                            text = { Text(if (disappearSecs == 604_800UL) "✓ Disappear · 1 week" else "Disappear · 1 week") },
+                            onClick = { disappearSecs = 604_800UL; showOptions = false })
+                    }
                 }
                 OutlinedTextField(
                     value = draft, onValueChange = { draft = it },
@@ -229,8 +266,11 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
                         .clickable(enabled = canSend) {
                             val body = if (secretMode && draft.isNotBlank())
                                 com.blaineam.haven.core.SecretMessages.encode(draft.trim()) else draft.trim()
-                            HavenNet.sendDm(circleId, body, listOfNotNull(pendingPhoto), pendingMusic)
-                            draft = ""; pendingPhoto = null; pendingMusic = null; secretMode = false
+                            val eid = editingId
+                            if (eid != null) HavenNet.editPost(circleId, eid, body)
+                            else HavenNet.sendDm(circleId, body, listOfNotNull(pendingPhoto), pendingMusic, disappearSecs)
+                            // disappearSecs stays sticky for the conversation (iOS parity); reset the rest.
+                            draft = ""; pendingPhoto = null; pendingMusic = null; secretMode = false; editingId = null
                         },
                     contentAlignment = Alignment.Center,
                 ) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = Color.White) }
@@ -249,7 +289,7 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(m: uniffi.haven_ffi.FeedItemFfi, circleId: String) {
+private fun Bubble(m: uniffi.haven_ffi.FeedItemFfi, circleId: String, onEdit: ((uniffi.haven_ffi.FeedItemFfi) -> Unit)? = null) {
     val mine = m.isMe
     val text = m.body
     var showReact by remember(m.id) { mutableStateOf(false) }
@@ -299,18 +339,24 @@ private fun Bubble(m: uniffi.haven_ffi.FeedItemFfi, circleId: String) {
         AlertDialog(
             onDismissRequest = { showReact = false },
             confirmButton = { TextButton(onClick = { showReact = false }) { Text("Close", color = HavenTheme.pink) } },
-            // Unsend your own message (removes it for both sides).
-            dismissButton = if (mine) ({
-                TextButton(onClick = { HavenNet.unsendPost(circleId, m.id); showReact = false }) {
-                    Text("Delete", color = HavenTheme.pink)
-                }
-            }) else null,
             text = {
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    listOf("❤️", "😂", "👍", "🎉", "😮", "😢", "🔥").forEach { e ->
-                        Text(e, fontSize = 28.sp, modifier = Modifier.clickable {
-                            HavenNet.react(circleId, m.id, e); showReact = false
-                        })
+                Column {
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        listOf("❤️", "😂", "👍", "🎉", "😮", "😢", "🔥").forEach { e ->
+                            Text(e, fontSize = 28.sp, modifier = Modifier.clickable {
+                                HavenNet.react(circleId, m.id, e); showReact = false
+                            })
+                        }
+                    }
+                    // Your own message: edit (text) or delete.
+                    if (mine) {
+                        Spacer(Modifier.size(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                            if (text.isNotBlank()) Text("Edit", color = HavenTheme.pink, fontSize = 15.sp,
+                                modifier = Modifier.clickable { onEdit?.invoke(m); showReact = false })
+                            Text("Delete", color = HavenTheme.pink, fontSize = 15.sp,
+                                modifier = Modifier.clickable { HavenNet.unsendPost(circleId, m.id); showReact = false })
+                        }
                     }
                 }
             },
