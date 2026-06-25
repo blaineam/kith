@@ -275,6 +275,10 @@ final class CameraModel: NSObject, ObservableObject {
     private let photoOutput = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let queue = DispatchQueue(label: "haven.camera.mac")
+    // Live filtered preview: frames are tapped here and rendered through FilterEngine by the
+    // FilteredCameraPreview/MetalCameraPreview (same pipeline as iOS — only the view layer differs).
+    let frameTap = LiveFrameTap()
+    private let videoDataOutput = AVCaptureVideoDataOutput()
 
     @Published var isRecording = false
     @Published var position: AVCaptureDevice.Position = .back
@@ -304,6 +308,10 @@ final class CameraModel: NSObject, ObservableObject {
             self.configureInputs()
             if self.session.canAddOutput(self.photoOutput) { self.session.addOutput(self.photoOutput) }
             if self.session.canAddOutput(self.movieOutput) { self.session.addOutput(self.movieOutput) }
+            if self.session.canAddOutput(self.videoDataOutput) {
+                self.videoDataOutput.wireLivePreview(tap: self.frameTap, queue: self.queue)
+                self.session.addOutput(self.videoDataOutput)
+            }
             self.session.commitConfiguration()
             if !self.session.isRunning { self.session.startRunning() }
             Task { @MainActor in self.ready = true }
@@ -815,10 +823,10 @@ struct StoryCameraView: View {
 }
 #else
 /// Native macOS story camera. Keeps the iOS initializer signature (`onShare`) so call sites
-/// compile unchanged. A live preview + capture controls (click = photo, hold = video) feed the
-/// shared `StoryCaptureModel` / `StoryReviewView` / `StoryComposerView` flow, ending in `onShare`.
-/// Simpler than the iOS surface (no filter strip / lens / pinch zoom — Macs lack the optics), but
-/// fully functional: capture → review → compose → share.
+/// compile unchanged. A live (Metal-filtered) preview + capture controls (click = photo, hold =
+/// video) feed the shared `StoryCaptureModel` / `StoryReviewView` / `StoryComposerView` flow,
+/// ending in `onShare`. Matches iOS feature-for-feature except for the iOS-only optics
+/// (lens presets / pinch zoom) and dual camera, which Macs don't support.
 struct StoryCameraView: View {
     var onShare: (_ mediaRef: String, _ caption: String, _ track: TrackRefFfi?) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -826,12 +834,19 @@ struct StoryCameraView: View {
     @StateObject private var capture = StoryCaptureModel()
     @State private var showReview = false
     @State private var draft: StoryDraft?
+    // Live filter applied to the camera feed, carried into the composer as the default look.
+    @State private var liveFilter: HavenFilter = .original
+    @State private var liveThumb: PlatformImage?
+    @State private var showLiveFilters = false
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if cam.ready {
-                CameraPreview(session: cam.session).ignoresSafeArea()
+                // Live, Metal-backed filtered preview (same FilterEngine pipeline as iOS).
+                FilteredCameraPreview(tap: cam.frameTap, filter: liveFilter,
+                                      orientation: havenCameraOrientation(position: cam.position),
+                                      onThumbnail: { liveThumb = $0 }).ignoresSafeArea()
             } else {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
@@ -853,15 +868,29 @@ struct StoryCameraView: View {
                     }
                     Spacer()
                     if cam.ready {
-                        Button { cam.flip() } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3.weight(.semibold))
-                                .foregroundStyle(.white).padding(10).background(.black.opacity(0.35), in: Circle())
+                        HStack(spacing: 10) {
+                            Button { withAnimation(HavenTheme.smooth) { showLiveFilters.toggle() } } label: {
+                                Image(systemName: "camera.filters").font(.title3.weight(.semibold))
+                                    .foregroundStyle(liveFilter != .original ? HavenTheme.pink : .white)
+                                    .padding(10).background(.black.opacity(0.35), in: Circle())
+                            }
+                            .buttonStyle(.plain)
+                            Button { cam.flip() } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3.weight(.semibold))
+                                    .foregroundStyle(.white).padding(10).background(.black.opacity(0.35), in: Circle())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20).padding(.top, 12)
                 Spacer()
+                if showLiveFilters, let liveThumb {
+                    FilterStrip(thumbnail: liveThumb, selection: $liveFilter)
+                        .background(.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .padding(.horizontal, 12).padding(.bottom, 6)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 bottomBar
             }
         }
@@ -878,7 +907,7 @@ struct StoryCameraView: View {
                             })
         }
         .havenFullScreenCover(item: $draft) { d in
-            StoryComposerView(draft: d) { ref, caption, track in
+            StoryComposerView(draft: d, initialFilter: liveFilter) { ref, caption, track in
                 onShare(ref, caption, track)
             } onDone: {
                 dismiss()

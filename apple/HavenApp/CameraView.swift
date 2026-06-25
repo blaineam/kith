@@ -100,10 +100,10 @@ struct CameraCaptureRepresentable: UIViewControllerRepresentable {
 /// surface (`filter` binding, optional `onThumbnail`, `onCaptured: ([String]) -> Void`) so the
 /// shared `CameraView` call site compiles unchanged.
 ///
-/// Pragmatic v1: a live `AVCaptureVideoPreviewLayer` preview with a Capture (photo) button and a
-/// Close button. On capture we take a still via `AVCapturePhotoOutput`, store it in `MediaStore`,
-/// and hand the ref up via `onCaptured`. Live filtering (the iOS Metal preview) and video
-/// recording are deferred; the captured still is filtered later in the shared `CaptureReviewView`.
+/// A live, Metal-filtered camera preview (`FilteredCameraPreview`) with a `FilterStrip`, a shutter
+/// (click = photo, click-and-hold = video), and a Close button. Stills go through
+/// `AVCapturePhotoOutput`, video through `AVCaptureMovieFileOutput`; each is stored in `MediaStore`
+/// and handed up via `onCaptured`, then filtered in the shared `CaptureReviewView`.
 struct CameraCaptureRepresentable: View {
     @Binding var filter: HavenFilter
     var onThumbnail: ((PlatformImage) -> Void)? = nil
@@ -111,12 +111,16 @@ struct CameraCaptureRepresentable: View {
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var engine = MacCameraEngine()
+    @State private var liveThumb: PlatformImage?
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if engine.ready {
-                MacCameraPreview(session: engine.session).ignoresSafeArea()
+                FilteredCameraPreview(tap: engine.frameTap, filter: filter,
+                                      orientation: .up,
+                                      onThumbnail: { img in liveThumb = img; onThumbnail?(img) })
+                    .ignoresSafeArea()
             } else {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
@@ -136,13 +140,34 @@ struct CameraCaptureRepresentable: View {
                 }
                 .padding(.horizontal, 20).padding(.top, 12)
                 Spacer()
-                Button { capture() } label: {
-                    ZStack {
-                        Circle().strokeBorder(.white, lineWidth: 5).frame(width: 78, height: 78)
-                        Circle().fill(.white).frame(width: 62, height: 62)
-                    }
+
+                // Live filter strip (off the live feed thumbnail), like iOS.
+                if let liveThumb {
+                    FilterStrip(thumbnail: liveThumb, selection: $filter)
+                        .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .padding(.horizontal, 10).padding(.bottom, 6)
                 }
-                .buttonStyle(.plain)
+
+                // Shutter: click = photo, click-and-hold (≥0.35s) = video.
+                ZStack {
+                    Circle().strokeBorder(.white, lineWidth: 5).frame(width: 78, height: 78)
+                    Circle().fill(engine.isRecording ? Color.red : Color.white)
+                        .frame(width: engine.isRecording ? 40 : 62, height: engine.isRecording ? 40 : 62)
+                        .animation(.spring(response: 0.3), value: engine.isRecording)
+                }
+                .contentShape(Circle())
+                .gesture(
+                    LongPressGesture(minimumDuration: 0.35)
+                        .onEnded { _ in
+                            guard !engine.isRecording, !engine.capturing else { return }
+                            engine.startRecording { url in finishVideo(url) }
+                        }
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .onEnded { _ in
+                            if engine.isRecording { engine.stopRecording() }
+                            else { capture() }
+                        }
+                )
                 .disabled(!engine.ready || engine.capturing)
                 .padding(.bottom, 28)
             }
@@ -160,22 +185,40 @@ struct CameraCaptureRepresentable: View {
             }
         }
     }
+
+    private func finishVideo(_ url: URL?) {
+        guard let url else { return }
+        Task { @MainActor in
+            let ref = await MediaStore.shared.addVideo(url: url)
+            onCaptured([ref])
+        }
+    }
 }
 
-/// A minimal AVCaptureSession-backed engine for the native macOS photo-capture surface.
+/// An AVCaptureSession-backed engine for the native macOS post-camera surface. Supports both
+/// stills (`AVCapturePhotoOutput`) and video recording (`AVCaptureMovieFileOutput`), plus a live
+/// filtered preview via the shared `LiveFrameTap` (rendered by `FilteredCameraPreview`).
 @MainActor
 final class MacCameraEngine: NSObject, ObservableObject {
     let session = AVCaptureSession()
     @Published var ready = false
     @Published var capturing = false
+    @Published var isRecording = false
 
     private let photoOutput = AVCapturePhotoOutput()
+    private let movieOutput = AVCaptureMovieFileOutput()
+    /// Live filtered preview: tapped frames → FilterEngine → MetalCameraPreview (same as iOS).
+    let frameTap = LiveFrameTap()
+    private let videoDataOutput = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "haven.maccamera.session")
     private var onPhoto: ((PlatformImage?) -> Void)?
+    private var onVideo: ((URL?) -> Void)?
 
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard granted, let self else { return }
+            // The mic is needed for sound on recorded video; failure just yields a silent clip.
+            AVCaptureDevice.requestAccess(for: .audio) { _ in }
             self.queue.async { self.configure() }
         }
     }
@@ -187,14 +230,24 @@ final class MacCameraEngine: NSObject, ObservableObject {
            let input = try? AVCaptureDeviceInput(device: device), session.canAddInput(input) {
             session.addInput(input)
         }
+        if let mic = AVCaptureDevice.default(for: .audio),
+           let micIn = try? AVCaptureDeviceInput(device: mic), session.canAddInput(micIn) {
+            session.addInput(micIn)
+        }
         if session.canAddOutput(photoOutput) { session.addOutput(photoOutput) }
+        if session.canAddOutput(movieOutput) { session.addOutput(movieOutput) }
+        if session.canAddOutput(videoDataOutput) {
+            videoDataOutput.wireLivePreview(tap: frameTap, queue: queue)
+            session.addOutput(videoDataOutput)
+        }
         session.commitConfiguration()
         if !session.isRunning { session.startRunning() }
         Task { @MainActor in self.ready = true }
     }
 
     func stop() {
-        queue.async { [session] in
+        queue.async { [session, movieOutput] in
+            if movieOutput.isRecording { movieOutput.stopRecording() }
             if session.isRunning { session.stopRunning() }
             // Release the camera device so the macOS camera indicator goes off.
             session.beginConfiguration()
@@ -205,13 +258,34 @@ final class MacCameraEngine: NSObject, ObservableObject {
     }
 
     func capturePhoto(_ completion: @escaping (PlatformImage?) -> Void) {
-        guard !capturing else { return }
+        guard !capturing, !isRecording else { return }
         capturing = true
         onPhoto = completion
         let settings = AVCapturePhotoSettings()
         queue.async { [weak self] in
             guard let self else { return }
             self.photoOutput.capturePhoto(with: settings, delegate: self)
+        }
+    }
+
+    /// Start recording a clip to a temp `.mov`; `completion` fires with the file URL (or nil on
+    /// failure) when recording stops. Mirrors the iOS `CameraViewController` recording API.
+    func startRecording(_ completion: @escaping (URL?) -> Void) {
+        guard !isRecording, !capturing else { return }
+        onVideo = completion
+        isRecording = true
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.movieOutput.startRecording(to: url, recordingDelegate: self)
+        }
+    }
+
+    func stopRecording() {
+        guard isRecording else { return }
+        queue.async { [weak self] in
+            guard let self, self.movieOutput.isRecording else { return }
+            self.movieOutput.stopRecording()
         }
     }
 }
@@ -223,6 +297,17 @@ extension MacCameraEngine: AVCapturePhotoCaptureDelegate {
             self.capturing = false
             self.onPhoto?(img)
             self.onPhoto = nil
+        }
+    }
+}
+
+extension MacCameraEngine: AVCaptureFileOutputRecordingDelegate {
+    nonisolated func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo url: URL,
+                                from connections: [AVCaptureConnection], error: Error?) {
+        Task { @MainActor in
+            self.isRecording = false
+            self.onVideo?(error == nil ? url : nil)
+            self.onVideo = nil
         }
     }
 }
