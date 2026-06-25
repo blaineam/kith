@@ -193,6 +193,7 @@ struct RootView: View {
     @ObservedObject private var connections = ConnectionsStore.shared
     @ObservedObject private var linkPresenter = LinkPresenter.shared
     @ObservedObject private var deepLinks = DeepLinkRouter.shared
+    @ObservedObject private var shareRouter = ShareRouter.shared
 
     @State private var tab = ProcessInfo.processInfo.environment["HAVEN_TAB"] ?? "circle"
     @State private var showConnect = false
@@ -230,6 +231,11 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.18), value: shouldPrivacyBlur)
         .onOpenURL { url in
+            // The Share Extension handed off items via the App Group inbox — import + route them.
+            if url.scheme == "haven", url.host == "share" {
+                Task { await ShareRouter.shared.ingest() }
+                return
+            }
             // Profile/post deep links (haven://u/… , haven://p/…) route in-app.
             if DeepLinkRouter.shared.handle(url, tab: &tab) { return }
             // Otherwise it's an invite link — "<id>.<verify>" in the URL fragment
@@ -305,10 +311,15 @@ struct RootView: View {
         .sheet(item: $pendingInvite) { invite in
             ConnectView(account: accountStore.account, contacts: contacts, incomingLink: invite.link)
         }
+        // Share-sheet hand-off: pick DM / post / story for items shared from another app.
+        .sheet(isPresented: $shareRouter.present) { ShareRouteView() }
         .onChange(of: scenePhase) { _, phase in
             // If we booted before the keychain was readable, swap the real identity back in
             // once we're active + unlocked (never silently keeps a throwaway identity).
-            if phase == .active { accountStore.reloadIfTemporary() }
+            if phase == .active {
+                accountStore.reloadIfTemporary()
+                Task { await ShareRouter.shared.ingest() }   // foreground fallback if open-URL didn't fire
+            }
         }
         .onAppear {
             accountStore.reloadIfTemporary()
