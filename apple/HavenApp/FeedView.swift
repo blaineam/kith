@@ -1925,7 +1925,10 @@ struct PostCard: View {
                 if !item.body.isEmpty { LinkedText(text: item.body) }
                 // Rich Open Graph preview for the first link in a text post (no media of its own).
                 if item.media.isEmpty, let url = LinkScanner.urls(in: item.body).first {
-                    LinkPreviewCard(url: url).padding(.top, 8)
+                    LinkPreviewCard(url: url)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .padding(.top, 8).padding(.horizontal, 2)
                 }
                 if !item.media.isEmpty {
                     // For a single-video post the GestureVideoPlayer owns tap/double-tap/hold/

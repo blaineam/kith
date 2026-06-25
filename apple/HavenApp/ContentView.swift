@@ -35,7 +35,9 @@ struct YouView: View {
                     }
                     .padding(20)
                 }
-                .scrollDismissesKeyboard(.interactively)
+                // Match the Circle feed: any scroll dismisses the comment keyboard (interactively
+                // only dismissed on a deliberate keyboard drag, which felt stuck on the You tab).
+                .scrollDismissesKeyboard(.immediately)
             }
             // No big "You" header — the profile header below already identifies the tab. Keep a
             // slim inline bar so the settings gear stays in the toolbar.

@@ -23,6 +23,7 @@ final class AudioCoordinator: ObservableObject {
     }
 
     private var videoPlayer: AVPlayer?
+    private var activeTrack: TrackRefFfi?   // the active post's song, so unmute can (re)start it
     private var fadeTimer: Timer?
 
     /// Begin a post's audio. If a song is attached it plays (video muted). Otherwise the
@@ -32,6 +33,7 @@ final class AudioCoordinator: ObservableObject {
         stop()
         activePostId = postId
         videoPlayer = video
+        activeTrack = track
         // Play the video's own audio only when there's no song, the author left it unmuted,
         // and the app isn't globally silenced.
         let playVideoAudio = (track == nil) && !muteVideo && !SettingsStore.shared.silent
@@ -56,9 +58,11 @@ final class AudioCoordinator: ObservableObject {
             videoUnmuted = false
         } else {
             // Unmute must actually (re)start audio for the active post — not just flip a flag.
-            // If a song is attached but was never queued (play() bails while silent), `resume()`
-            // has nothing to resume; reissue a full play so the track loads and starts.
-            if MusicPlayback.shared.current != nil {
+            // If a song is attached but was never queued (play() bails while silent), there's
+            // nothing to resume — so reissue a full play of the active post's track.
+            if let track = activeTrack {
+                MusicPlayback.shared.play(track)
+            } else if MusicPlayback.shared.current != nil {
                 MusicPlayback.shared.restartCurrent()
             } else {
                 // No song: bring the active post's video audio back up (author/global allowing).
