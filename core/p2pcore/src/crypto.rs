@@ -23,6 +23,7 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use hkdf::Hkdf;
 use ml_kem::kem::{Decapsulate, Encapsulate};
+use ml_kem::EncodedSizeUser;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
@@ -59,7 +60,14 @@ pub fn encapsulate_to(recipient: &HavenId) -> Result<(Encapsulation, [u8; 32])> 
         .encapsulate(&mut rng)
         .map_err(|_| CoreError::Crypto("ml-kem encapsulate failed"))?;
 
-    let key = combine(dh.as_bytes(), &ss_pq);
+    let recip_pq = recipient.kem_pq.as_bytes();
+    let transcript = kem_transcript(
+        &eph_pub.to_bytes(),
+        &ct[..],
+        recipient.kem_x.as_bytes(),
+        &recip_pq[..],
+    );
+    let key = combine(dh.as_bytes(), &ss_pq, &transcript);
     let enc = Encapsulation {
         eph_x_pub: eph_pub.to_bytes(),
         pq_ct: ct[..].to_vec(),
@@ -79,20 +87,46 @@ pub fn decapsulate(identity: &Identity, enc: &Encapsulation) -> Result<[u8; 32]>
         .decapsulate(&ct)
         .map_err(|_| CoreError::Crypto("ml-kem decapsulate failed"))?;
 
-    Ok(combine(dh.as_bytes(), &ss_pq))
+    // I am the recipient — rebuild the same transcript from my public keys + the carried encapsulation.
+    let me = identity.public();
+    let my_pq = me.kem_pq.as_bytes();
+    let transcript = kem_transcript(
+        &enc.eph_x_pub,
+        &enc.pq_ct,
+        me.kem_x.as_bytes(),
+        &my_pq[..],
+    );
+    Ok(combine(dh.as_bytes(), &ss_pq, &transcript))
 }
 
-/// HKDF-SHA256 over (classical-dh ‖ pq-shared), domain-separated. The output is the
-/// AEAD content key — knowing it requires breaking *both* halves.
-fn combine(dh: &[u8], pq: &[u8]) -> [u8; 32] {
+/// HKDF-SHA256 over (classical-dh ‖ pq-shared), domain-separated, with the full KEM **transcript**
+/// folded into the `info` (audit H1): the ephemeral key, the PQ ciphertext, and the recipient's two
+/// public keys. Binding the transcript gives implicit key confirmation and blocks unknown-key-share /
+/// ciphertext-substitution attacks (PQXDH/PQ3-style). Knowing the key requires breaking *both* halves.
+fn combine(dh: &[u8], pq: &[u8], transcript: &[u8]) -> [u8; 32] {
     let mut ikm = Vec::with_capacity(dh.len() + pq.len());
     ikm.extend_from_slice(dh);
     ikm.extend_from_slice(pq);
-    let hk = Hkdf::<Sha256>::new(Some(b"haven-hybrid-kem-v1"), &ikm);
+    // v2 salt marks the transcript-bound derivation (a clean break from the unbound v1).
+    let hk = Hkdf::<Sha256>::new(Some(b"haven-hybrid-kem-v2"), &ikm);
+    let mut info = Vec::with_capacity(16 + transcript.len());
+    info.extend_from_slice(b"content-aead-key");
+    info.extend_from_slice(transcript);
     let mut okm = [0u8; 32];
-    hk.expand(b"content-aead-key", &mut okm)
+    hk.expand(&info, &mut okm)
         .expect("32 is a valid HKDF length");
     okm
+}
+
+/// The KEM transcript both sides bind into the derived key: ephemeral X25519 pub ‖ ML-KEM ciphertext
+/// ‖ recipient X25519 pub ‖ recipient ML-KEM pub.
+fn kem_transcript(eph_x_pub: &[u8], pq_ct: &[u8], recip_kem_x: &[u8], recip_kem_pq: &[u8]) -> Vec<u8> {
+    let mut t = Vec::with_capacity(eph_x_pub.len() + pq_ct.len() + recip_kem_x.len() + recip_kem_pq.len());
+    t.extend_from_slice(eph_x_pub);
+    t.extend_from_slice(pq_ct);
+    t.extend_from_slice(recip_kem_x);
+    t.extend_from_slice(recip_kem_pq);
+    t
 }
 
 /// AES-256-GCM seal. A random 12-byte nonce is generated and prepended to the
