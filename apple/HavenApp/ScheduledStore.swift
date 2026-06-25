@@ -64,13 +64,30 @@ final class ScheduledStore: ObservableObject {
         }
     }
 
+    /// Encrypted-at-rest store for the queued plaintext (was an unprotected UserDefaults plist).
+    private var fileURL: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("haven-scheduled.json")
+    }
     private func load() {
-        guard let d = UserDefaults.standard.data(forKey: key),
+        // One-time migration off the old unencrypted UserDefaults store.
+        if let d = UserDefaults.standard.data(forKey: key) {
+            UserDefaults.standard.removeObject(forKey: key)
+            if let arr = try? JSONDecoder().decode([ScheduledItem].self, from: d) {
+                items = arr.sorted { $0.fireAt < $1.fireAt }
+                save()
+                return
+            }
+        }
+        guard let d = try? Data(contentsOf: fileURL),
               let arr = try? JSONDecoder().decode([ScheduledItem].self, from: d) else { return }
         items = arr.sorted { $0.fireAt < $1.fireAt }
     }
     private func save() {
-        UserDefaults.standard.set(try? JSONEncoder().encode(items), forKey: key)
+        guard let d = try? JSONEncoder().encode(items) else { return }
+        // Holds queued post/DM PLAINTEXT until it fires — protect it at rest like the feed state.
+        try? d.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 }
 
