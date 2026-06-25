@@ -798,8 +798,9 @@ final class FeedStore: ObservableObject {
         guard let type = data.first else { return }
         if viaNearby { nearbyActive = true } else { internetActive = true }
         let payload = Data(data.dropFirst())
-        // Frames that lead with a 64-char sender id (media req + calls): drop if blocked.
-        if [3, 10, 11, 12, 13, 15, 16, 17, 18, 21].contains(type) {
+        // Frames that lead with a 64-char sender id (media req + calls + camera state): drop if
+        // blocked (audit F4 — 22 was previously missing from this list).
+        if [3, 10, 11, 12, 13, 15, 16, 17, 18, 21, 22].contains(type) {
             let head = String(data: payload.prefix(64), encoding: .utf8) ?? ""
             if head.count == 64, ConnectionsStore.shared.isBlocked(head) { return }
         }

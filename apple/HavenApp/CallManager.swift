@@ -222,11 +222,18 @@ final class CallManager: NSObject, ObservableObject {
     // MARK: - Inbound signaling
 
     /// Legacy 1:1 invite (frame 10). Treated as a 2-person group with a synthetic session id.
+    /// An UNSEALED call control frame's self-asserted sender must be a known contact — a stranger
+    /// can't ring you, inject participants, or negotiate a call (audit F3). Sealed posts are already
+    /// author-verified; this gates the call signaling, which is plaintext-authenticated only.
+    private func knownContact(_ hex: String) -> Bool {
+        ContactsStore.shared.contacts.contains { $0.idHex == hex }
+    }
+
     func handleInvite(_ payload: Data) {
         guard payload.count > 64 else { return }
         let from = String(data: payload.prefix(64), encoding: .utf8) ?? ""
         let name = String(data: payload.dropFirst(64), encoding: .utf8) ?? "Someone"
-        guard from.count == 64 else { return }
+        guard from.count == 64, knownContact(from) else { return }   // strangers can't ring you (F3)
         if active {
             if roster.isEmpty || !roster.contains(from) { roster.insert(from); refreshParticipants() }
             return
@@ -243,7 +250,7 @@ final class CallManager: NSObject, ObservableObject {
     func handleGroupInvite(_ payload: Data) {
         guard payload.count > 64 else { return }
         let from = String(data: payload.prefix(64), encoding: .utf8) ?? ""
-        guard from.count == 64 else { return }
+        guard from.count == 64, knownContact(from) else { return }   // only contacts can invite you (F3)
         let body = payload.subdata(in: (payload.startIndex + 64)..<payload.endIndex)
         var off = 0
         guard let sid = CallManager.lpRead(body, &off),
@@ -394,7 +401,7 @@ final class CallManager: NSObject, ObservableObject {
     func handleAccept(_ payload: Data) {
         guard active, payload.count >= 64 else { return }
         let from = String(data: payload.prefix(64), encoding: .utf8) ?? ""
-        guard from.count == 64 else { return }
+        guard from.count == 64, knownContact(from) else { return }   // only a contact can accept (F3)
         inviteTimer?.invalidate(); inviteTimer = nil
         connecting = false; inCall = true
         if !roster.contains(from) { roster.insert(from); refreshParticipants() }
@@ -419,19 +426,20 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     func handleOffer(_ payload: Data) {
-        guard let (from, sid, json) = parseSignal(payload), validSession(sid) else { return }
+        guard let (from, sid, json) = parseSignal(payload), validSession(sid),
+              roster.contains(from) else { return }   // only a session participant negotiates (F3)
         if !mediaStarted { startMesh() }
-        let peer = peerConn(for: from)   // ensure a connection exists for an unknown peer
+        let peer = peerConn(for: from)
         guard let sdp = CallSignal.decodeSDP(json) else { return }
         peer.call.setRemoteOfferAndAnswer(sdp)   // flushes candidates via onRemoteReady
     }
     func handleAnswer(_ payload: Data) {
-        guard let (from, sid, json) = parseSignal(payload), validSession(sid),
+        guard let (from, sid, json) = parseSignal(payload), validSession(sid), roster.contains(from),
               let peer = peers[from], let sdp = CallSignal.decodeSDP(json) else { return }
         peer.call.setRemoteAnswer(sdp)
     }
     func handleIce(_ payload: Data) {
-        guard let (from, sid, json) = parseSignal(payload), validSession(sid),
+        guard let (from, sid, json) = parseSignal(payload), validSession(sid), roster.contains(from),
               let cand = CallSignal.decodeCandidate(json) else { return }
         let peer = peerConn(for: from)
         if peer.remoteDescriptionSet { peer.call.addRemoteCandidate(cand) }
@@ -746,7 +754,7 @@ final class CallManager: NSObject, ObservableObject {
     func handleCameraState(_ payload: Data) {
         guard payload.count > 64 else { return }
         let from = String(data: payload.prefix(64), encoding: .utf8) ?? ""
-        guard from.count == 64 else { return }
+        guard from.count == 64, roster.contains(from) else { return }   // only a participant (F3/F4)
         let on = payload.last == 1   // trailing flag byte
         if on { remoteCameraOff.remove(from) } else { remoteCameraOff.insert(from) }
     }
