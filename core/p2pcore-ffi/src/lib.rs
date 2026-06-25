@@ -122,10 +122,11 @@ impl Account {
         self.inner.public().to_bytes()
     }
 
-    /// Produce a hybrid (Ed25519 + ML-DSA) signature over `msg`.
-    pub fn sign(&self, msg: Vec<u8>) -> Vec<u8> {
-        self.inner.sign(&msg)
-    }
+    // NOTE: a raw `sign(msg)` was deliberately removed (audit H3). Exposing an unrestricted hybrid
+    // signing oracle over the FFI let any caller obtain a signature over chosen bytes, which could be
+    // replayed into a domain that expects a signature of the same shape. Signing now happens only
+    // through purpose-specific, domain-separated paths inside the engine (envelopes, profile cards,
+    // key commits, device lists), never over arbitrary input.
 }
 
 /// Parsed contents of a reach-me link.
@@ -1123,7 +1124,9 @@ impl HavenSocial {
     pub fn my_signed_profile(&self, name: String, bio: String, link: String, avatar: String, emoji: String) -> Vec<u8> {
         let st = self.state.lock().unwrap();
         let payload = serde_json::json!({ "n": name, "b": bio, "l": link, "a": avatar, "e": emoji }).to_string();
-        let sig = st.me.sign(payload.as_bytes());
+        // Domain-separate so a profile signature can never be confused with another signed object
+        // (audit H3). The tag is part of the SIGNED bytes; the wire blob still carries only `payload`.
+        let sig = st.me.sign(&profile_signing_bytes(payload.as_bytes()));
         let mut out = (sig.len() as u32).to_le_bytes().to_vec();
         out.extend_from_slice(&sig);
         out.extend_from_slice(payload.as_bytes());
@@ -1151,7 +1154,11 @@ impl HavenSocial {
         let sig = &blob[4..4 + sig_len];
         let payload = &blob[4 + sig_len..];
         let id = HavenId::from_bytes(&bundle).ok()?;
-        id.verify(payload, sig).ok()?;
+        // Verify the domain-separated signature; fall back to the legacy untagged form so cards
+        // signed by older builds still validate during rollout.
+        id.verify(&profile_signing_bytes(payload), sig)
+            .or_else(|_| id.verify(payload, sig))
+            .ok()?;
         let text = String::from_utf8(payload.to_vec()).ok()?;
         // New card is JSON; anything else is a legacy name-only profile.
         match serde_json::from_str::<serde_json::Value>(&text) {
@@ -1531,6 +1538,15 @@ fn tagged(tag: u8, body: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(1 + body.len());
     v.push(tag);
     v.extend_from_slice(body);
+    v
+}
+
+/// Domain-separated bytes for a profile-card signature (audit H3): a purpose tag prefixed to the JSON
+/// payload, so the signature can never be reused as any other signed object.
+fn profile_signing_bytes(payload: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(16 + payload.len());
+    v.extend_from_slice(b"haven-profile-v1");
+    v.extend_from_slice(payload);
     v
 }
 
