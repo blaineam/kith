@@ -681,8 +681,28 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     func toggleMute() {
-        muted.toggle()
-        for conn in peers.values { conn.call.setMicEnabled(!muted) }
+        // Route through CallKit when it's driving the call so the system mute button and ours stay
+        // in sync (otherwise the two toggles fight). CallKit echoes the change back to our
+        // CXSetMutedCallAction handler, which applies it. No CallKit on Catalyst/macOS → apply now.
+        if useCallKit { requestCallKitMuted(!muted) }
+        else { applyMuted(!muted) }
+    }
+
+    /// Apply a muted state to the local audio tracks. Does NOT re-notify CallKit (avoids a loop) —
+    /// callers that originate from CallKit, or from `toggleMute` on non-CallKit platforms, use this.
+    private func applyMuted(_ m: Bool) {
+        muted = m
+        for conn in peers.values { conn.call.setMicEnabled(!m) }
+    }
+
+    /// Ask CallKit to change the mute state; its handler echoes back into `applyMuted`.
+    private func requestCallKitMuted(_ m: Bool) {
+        #if !targetEnvironment(macCatalyst) && !os(macOS)
+        guard useCallKit, let uuid = callUUID else { applyMuted(m); return }
+        controller.request(CXTransaction(action: CXSetMutedCallAction(call: uuid, muted: m))) { _ in }
+        #else
+        applyMuted(m)
+        #endif
     }
 
     func toggleVideo() {
@@ -947,6 +967,11 @@ extension CallManager: CXProviderDelegate {
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         Task { @MainActor in self.reallyEnd(); action.fulfill() }
+    }
+    nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+        // The system mute button (or our own toggle, routed through CallKit) lands here — apply it
+        // to the audio tracks so the CallKit screen and the in-app screen never disagree.
+        Task { @MainActor in self.applyMuted(action.isMuted); action.fulfill() }
     }
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         let rtc = RTCAudioSession.sharedInstance()
@@ -1383,18 +1408,14 @@ struct CallOverlay: View {
         ZStack {
             callButton(call.screenShareOn ? "rectangle.inset.filled.and.person.filled" : "macwindow",
                        on: call.screenShareOn)
-            if call.screenShareOn {
-                // While sharing, the button stops the broadcast + our listener.
-                Button { CallManager.shared.stopScreenShare() } label: {
-                    Color.clear.frame(width: 52, height: 52)
-                }
-            } else {
-                // Not sharing: surface the system broadcast picker. Starting it begins our listener.
-                BroadcastPickerButton {
-                    CallManager.shared.startScreenShareListening()
-                }
-                .frame(width: 52, height: 52)
+            // Always the system broadcast picker: one tap toggles the OS broadcast on/off (the old
+            // split button left a separate "stop" that killed our listener but not the system
+            // broadcast, so stopping took several taps). Sync our listener to the direction it's going.
+            BroadcastPickerButton {
+                if CallManager.shared.screenShareOn { CallManager.shared.stopScreenShare() }
+                else { CallManager.shared.startScreenShareListening() }
             }
+            .frame(width: 52, height: 52)
         }
         #endif
     }
