@@ -1777,9 +1777,18 @@ mod round_trip_tests {
 
         // --- Post (frame 1) ---
         let env = alice.post(cid.clone(), "hello from windows".into(), vec![], None, None, false, false, 1_000).unwrap();
+        // The EVENT wire frame still round-trips through the codec.
         let ev_frame = wire::frame(wire::EVENT, &wire::event_payload(&cid, &env));
         let ev = wire::parse_event(&ev_frame[1..]).expect("event parses");
-        assert!(bob.receive(ev.circle_id, ev.envelope).unwrap(), "new on first receive");
+        assert_eq!(ev.circle_id, cid, "event frame carries the circle id");
+        // Posts are sealed under Alice's epoch key (group-keying), so Bob must receive her key commit
+        // before he can open them. Her sync bundle carries the commit + the event — deliver it the way
+        // the live sync path does (mirrors the core net_tests `sync` helper).
+        let mut got_new = false;
+        for envelope in alice.sync_envelopes(cid.clone()) {
+            if bob.receive(cid.clone(), envelope).unwrap() { got_new = true; }
+        }
+        assert!(got_new, "bob ingests new content on first sync");
         let feed = bob.feed(cid.clone(), 2_000, None);
         assert_eq!(feed.len(), 1);
         assert_eq!(feed[0].body, "hello from windows");
