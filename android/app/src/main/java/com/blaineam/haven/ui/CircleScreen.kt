@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -80,7 +81,8 @@ import uniffi.haven_ffi.FeedItemFfi
 fun CircleScreen(onAddFriend: () -> Unit) {
     val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
-    var pendingPhoto by remember { mutableStateOf<String?>(null) }   // media id staged for the next post
+    // Staged media for the next post — photos/videos AND a `geo:` location ref (multi-attach, iOS parity).
+    val pendingMedia = remember { androidx.compose.runtime.mutableStateListOf<String>() }
     var pendingMusic by remember { mutableStateOf<uniffi.haven_ffi.TrackRefFfi?>(null) }
     var showMusicDialog by remember { mutableStateOf(false) }
     // A link shared into Haven from another app prefills the composer.
@@ -116,16 +118,24 @@ fun CircleScreen(onAddFriend: () -> Unit) {
         else camPermission.launch(arrayOf(android.Manifest.permission.CAMERA, android.Manifest.permission.RECORD_AUDIO))
     }
     fun openStoryCamera() = openCamera(false)
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
-            if (com.blaineam.haven.core.isVideoUri(context, uri)) {
-                val bytes = com.blaineam.haven.core.readVideoBytes(context, uri)
-                if (bytes != null) pendingPhoto = LocalMedia.store(HavenNet.activeCircle.value, bytes, isVideo = true)
-            } else {
-                val bytes = loadAndDownscale(context, uri)
-                if (bytes != null) pendingPhoto = LocalMedia.store(HavenNet.activeCircle.value, bytes)
-            }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(8)) { uris ->
+        val cid = HavenNet.activeCircle.value
+        uris.forEach { uri ->
+            val ref = if (com.blaineam.haven.core.isVideoUri(context, uri))
+                com.blaineam.haven.core.readVideoBytes(context, uri)?.let { LocalMedia.store(cid, it, isVideo = true) }
+            else loadAndDownscale(context, uri)?.let { LocalMedia.store(cid, it) }
+            if (ref != null) pendingMedia.add(ref)
         }
+    }
+    // Location: best-effort current location → a geo: ref appended to the post (iOS parity).
+    val locPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.any { it }) com.blaineam.haven.core.LocationShare.currentRef(context)?.let { pendingMedia.add(it) }
+    }
+    fun attachLocation() {
+        val fine = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (fine || coarse) com.blaineam.haven.core.LocationShare.currentRef(context)?.let { pendingMedia.add(it) }
+        else locPermission.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
     }
 
     HavenBackground {
@@ -191,25 +201,34 @@ fun CircleScreen(onAddFriend: () -> Unit) {
             }
 
             if (!locked) {
-            // Staged photo preview.
-            pendingPhoto?.let { ref ->
-                // Compact thumbnail (like iOS) rather than a giant full-width preview.
-                Box(Modifier.padding(start = 16.dp, bottom = 6.dp)) {
-                    if (LocalMedia.isVideo(ref)) {
-                        Box(Modifier.size(64.dp)
-                            .clip(RoundedCornerShape(12.dp)).background(HavenTheme.card),
-                            contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.Videocam, "Video attached", tint = Color.White, modifier = Modifier.size(26.dp))
+            // Staged media preview (multiple photos/videos + a location pin), each removable.
+            if (pendingMedia.isNotEmpty()) {
+                androidx.compose.foundation.lazy.LazyRow(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(pendingMedia.size) { i ->
+                        val ref = pendingMedia[i]
+                        Box {
+                            when {
+                                com.blaineam.haven.core.LocationShare.isLocation(ref) ->
+                                    Box(Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).background(HavenTheme.card),
+                                        contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Filled.Place, "Location", tint = HavenTheme.pink, modifier = Modifier.size(26.dp))
+                                    }
+                                LocalMedia.isVideo(ref) ->
+                                    Box(Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).background(HavenTheme.card),
+                                        contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Filled.Videocam, "Video", tint = Color.White, modifier = Modifier.size(26.dp))
+                                    }
+                                else -> MediaImage(active, ref, Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+                            }
+                            Text("✕", color = Color.White, fontSize = 13.sp,
+                                modifier = Modifier.align(Alignment.TopEnd).padding(3.dp).clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.6f)).clickable { pendingMedia.remove(ref) }
+                                    .padding(horizontal = 6.dp, vertical = 1.dp))
                         }
-                    } else {
-                        MediaImage(active, ref,
-                            Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)),
-                            contentScale = ContentScale.Crop)
                     }
-                    Text("✕", color = Color.White, fontSize = 13.sp,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(3.dp).clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.6f)).clickable { pendingPhoto = null }
-                            .padding(horizontal = 6.dp, vertical = 1.dp))
                 }
             }
             // Staged music chip.
@@ -233,6 +252,8 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                 }, contentAlignment = Alignment.Center) { Icon(Icons.Filled.AddPhotoAlternate, "Add photo or video", tint = HavenTheme.pink) }
                 Box(Modifier.size(40.dp).clip(CircleShape).clickable { showMusicDialog = true },
                     contentAlignment = Alignment.Center) { Icon(Icons.Filled.MusicNote, "Add a song", tint = HavenTheme.pink) }
+                Box(Modifier.size(40.dp).clip(CircleShape).clickable { attachLocation() },
+                    contentAlignment = Alignment.Center) { Icon(Icons.Filled.Place, "Share location", tint = HavenTheme.pink) }
                 Spacer(Modifier.weight(1f))
                 Box {
                     Row(Modifier.clip(CircleShape)
@@ -263,11 +284,11 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                     colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = HavenTheme.pink, cursorColor = HavenTheme.pink),
                 )
                 Spacer(Modifier.size(8.dp))
-                val canPost = draft.isNotBlank() || pendingPhoto != null || pendingMusic != null
+                val canPost = draft.isNotBlank() || pendingMedia.isNotEmpty() || pendingMusic != null
                 Box(Modifier.size(48.dp).clip(CircleShape).background(HavenTheme.brandHorizontal)
                     .clickable(enabled = canPost) {
-                        HavenNet.post(active, draft.trim(), listOfNotNull(pendingPhoto), pendingMusic, retentionSecs = disappearSecs)
-                        draft = ""; pendingPhoto = null; pendingMusic = null; disappearSecs = null
+                        HavenNet.post(active, draft.trim(), pendingMedia.toList(), pendingMusic, retentionSecs = disappearSecs)
+                        draft = ""; pendingMedia.clear(); pendingMusic = null; disappearSecs = null
                     }, contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.Send, "Post", tint = Color.White) }
             }
             }
@@ -293,7 +314,7 @@ fun CircleScreen(onAddFriend: () -> Unit) {
             StoryCameraScreen(
                 onClose = { showPostCamera = false },
                 storeCircle = active,
-                onCaptured = { ref, _ -> pendingPhoto = ref; showPostCamera = false },
+                onCaptured = { ref, _ -> pendingMedia.add(ref); showPostCamera = false },
             )
         }
     }
@@ -428,7 +449,28 @@ private fun MediaThumb(circleId: String, ref: String, modifier: Modifier, onOpen
     }
 }
 
-/** Post media: a single item fills the card; multiple items scroll as a 2-row grid (like iOS). */
+/** Renders a `geo:` location ref as a chip; tap to open the spot in the system maps app. */
+@Composable
+fun LocationChip(ref: String) {
+    val context = LocalContext.current
+    val pin = com.blaineam.haven.core.LocationShare.parse(ref) ?: return
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(HavenTheme.card)
+        .clickable {
+            val uri = android.net.Uri.parse("geo:${pin.lat},${pin.lon}?q=${pin.lat},${pin.lon}(${android.net.Uri.encode(pin.label)})")
+            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, uri)) }
+        }
+        .padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(36.dp).clip(CircleShape).background(HavenTheme.pink.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Place, null, tint = HavenTheme.pink, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.size(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(pin.label, color = Color.White, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium, maxLines = 1)
+            Text("Tap to open in Maps", color = HavenTheme.textSecondary, fontSize = 11.sp)
+        }
+    }
+}
+
 @Composable
 fun MediaGallery(circleId: String, refs: List<String>, onOpen: (Int) -> Unit) {
     if (refs.size == 1) {
@@ -633,7 +675,7 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
     var commentPicker by remember(item.id) { mutableStateOf<String?>(null) }   // comment id being reacted to
     viewerStart?.let { start ->
         FullScreenOverlay(onDismiss = { viewerStart = null }) {
-            MediaViewer(circleId, item.media, start) { viewerStart = null }
+            MediaViewer(circleId, item.media.filter { !com.blaineam.haven.core.LocationShare.isLocation(it) }, start) { viewerStart = null }
         }
     }
 
@@ -674,10 +716,15 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
             LinkPreviewCard(item.body, Modifier.padding(top = 10.dp))
         }
 
-        // Attached photos / videos — gallery with tap-to-open full-screen viewer.
-        if (item.media.isNotEmpty()) {
+        // Location pins render as a tap-to-open-Maps chip; photos/videos as a gallery.
+        item.media.filter { com.blaineam.haven.core.LocationShare.isLocation(it) }.forEach { ref ->
             Spacer(Modifier.height(10.dp))
-            MediaGallery(circleId, item.media) { viewerStart = it }
+            LocationChip(ref)
+        }
+        val mediaRefs = item.media.filter { !com.blaineam.haven.core.LocationShare.isLocation(it) }
+        if (mediaRefs.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            MediaGallery(circleId, mediaRefs) { viewerStart = it }
         }
 
         // Attached song — artwork + 30s preview playback, resolved via iTunes Search.
