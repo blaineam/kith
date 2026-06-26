@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -98,8 +99,10 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val version by HavenNet.feedVersion          // recompose when the feed changes
     val circlesVersion by HavenNet.circlesVersion
     val active by HavenNet.activeCircle
-    val items: List<FeedItemFfi> = remember(version, active, profile.retentionDays) {
-        runCatching { HavenNet.engine.feed(active, nowMs(), profile.retentionSecs()) }.getOrDefault(emptyList())
+    val circleSettingsVersion by com.blaineam.haven.core.CircleSettings.version
+    val items: List<FeedItemFfi> = remember(version, active, profile.retentionDays, circleSettingsVersion) {
+        // Per-circle auto-delete override (falls back to the app-wide retention default).
+        runCatching { HavenNet.engine.feed(active, nowMs(), com.blaineam.haven.core.CircleSettings.retentionSecs(active)) }.getOrDefault(emptyList())
     }
     val storyGroups = remember(items) { groupStories(items) }
     val posts = remember(items) { items.filter { !it.story } }
@@ -383,6 +386,8 @@ private fun CircleManageSheet(circleId: String, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf(HavenNet.circleName(circleId)) }
     val members = remember(circlesVersion, version, circleId) { HavenNet.membersOf(circleId) }
     val isDefault = circleId == com.blaineam.haven.core.DEFAULT_CIRCLE
+    val cs = com.blaineam.haven.core.CircleSettings
+    val csVersion by cs.version
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss, containerColor = HavenTheme.card,
         title = { Text("Circle settings", color = Color.White) },
@@ -394,6 +399,17 @@ private fun CircleManageSheet(circleId: String, onDismiss: () -> Unit) {
                         label = { Text("Circle name") }, modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = HavenTheme.pink, cursorColor = HavenTheme.pink),
                     )
+                }
+                // Per-circle media overrides (parity with iOS "Media in this circle"). Each falls
+                // back to the app-wide default in Settings unless pinned here.
+                key(csVersion) {
+                    Text("Media in this circle", color = HavenTheme.textSecondary, fontSize = 12.sp)
+                    OverrideRow("Save your posts", cs.saveOwnOverride(circleId)) { cs.setSaveOwn(circleId, it) }
+                    OverrideRow("Save others' posts", cs.saveOthersOverride(circleId)) { cs.setSaveOthers(circleId, it) }
+                    OverrideRow("Auto-optimize media", cs.optimizeOverride(circleId)) { cs.setOptimize(circleId, it) }
+                    RetentionOverrideRow(cs.retentionOverride(circleId)) { cs.setRetention(circleId, it) }
+                    Text("Override the app-wide Photos / optimize / auto-delete defaults just for this circle.",
+                        color = HavenTheme.textSecondary, fontSize = 11.sp)
                 }
                 Text("Members (${members.size})", color = HavenTheme.textSecondary, fontSize = 12.sp)
                 if (members.isEmpty()) {
@@ -424,6 +440,55 @@ private fun CircleManageSheet(circleId: String, onDismiss: () -> Unit) {
             }
         },
     )
+}
+
+/** Tri-state per-circle override: Auto (inherit global) / On / Off. */
+@Composable
+private fun OverrideRow(label: String, current: Boolean?, onSet: (Boolean?) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1)
+        OverrideSeg("Auto", current == null) { onSet(null) }
+        OverrideSeg("On", current == true) { onSet(true) }
+        OverrideSeg("Off", current == false) { onSet(false) }
+    }
+}
+
+@Composable
+private fun OverrideSeg(text: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text,
+        color = if (selected) Color.White else HavenTheme.textSecondary,
+        fontSize = 12.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp))
+            .background(if (selected) HavenTheme.pink.copy(alpha = 0.28f) else Color.Transparent)
+            .clickable { onClick() }.padding(horizontal = 8.dp, vertical = 4.dp),
+    )
+}
+
+/** Per-circle auto-delete override: Auto (inherit) / Keep forever / 1d / 1w / 30d / 1yr. */
+@Composable
+private fun RetentionOverrideRow(currentDays: Int?, onSet: (Int?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val label = when (currentDays) {
+        null -> "Auto"; 0 -> "Keep forever"; 1 -> "After 1 day"; 7 -> "After 1 week"
+        30 -> "After 30 days"; 365 -> "After 1 year"; else -> "After $currentDays days"
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Auto-delete old posts", color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1)
+        Box {
+            Text(label, color = HavenTheme.pink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { open = true }.padding(horizontal = 8.dp, vertical = 4.dp))
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                val opts = listOf<Pair<String, Int?>>(
+                    "Auto (use default)" to null, "Keep forever" to 0, "After 1 day" to 1,
+                    "After 1 week" to 7, "After 30 days" to 30, "After 1 year" to 365,
+                )
+                opts.forEach { (t, v) ->
+                    DropdownMenuItem(text = { Text(t) }, onClick = { onSet(v); open = false })
+                }
+            }
+        }
+    }
 }
 
 /** Short label for a disappearing-post window (mirrors the composer chip). */

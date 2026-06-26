@@ -12,6 +12,7 @@ class HavenApplication : Application() {
         com.blaineam.haven.core.CircleLock.init(this)   // cheap; avoids an uninit access during first compose
         com.blaineam.haven.core.AvatarStore.init(this)  // photo avatars for feed/people/story-tray
         com.blaineam.haven.core.ScheduledStore.init(this)  // load + fire any due scheduled posts
+        com.blaineam.haven.core.CircleSettings.init(this)  // per-circle save/optimize/retention overrides
         SyncWorker.schedule(this)
     }
 }

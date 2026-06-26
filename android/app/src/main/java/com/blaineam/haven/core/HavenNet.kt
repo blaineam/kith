@@ -472,8 +472,8 @@ object HavenNet : InboundListener {
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
         scope.launch { media.forEach { uploadMedia(circleId, it) } }   // push photos/videos to the relay
-        // "Save my posts to Photos" (iOS parity).
-        if (media.isNotEmpty() && ProfileStore.get(appContext).saveMyPosts)
+        // "Save my posts to Photos" (per-circle override, falling back to the app-wide default).
+        if (media.isNotEmpty() && CircleSettings.saveOwn(circleId))
             scope.launch { media.forEach { MediaSaver.autoSave(appContext, it) } }
     }
 
@@ -1011,8 +1011,9 @@ object HavenNet : InboundListener {
             incomingMedia.remove(ref)
             LocalMedia.storeUnderRef(DEFAULT_CIRCLE, ref, full)
             scope.launch(Dispatchers.Main) { feedVersion.value++ }
-            // "Save others' posts to Photos" (iOS parity) — auto-save received media once.
-            if (ProfileStore.get(appContext).saveOthersPosts) scope.launch { MediaSaver.autoSave(appContext, ref) }
+            // "Save others' posts to Photos" — per-circle override (received media stores under the
+            // default circle), falling back to the app-wide default.
+            if (CircleSettings.saveOthers(DEFAULT_CIRCLE)) scope.launch { MediaSaver.autoSave(appContext, ref) }
         }
     }
 
