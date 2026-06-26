@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
@@ -91,10 +92,40 @@ fun CallOverlay() {
     val ringing by CallManager.ringing
     val inCall by CallManager.inCall
     val connecting by CallManager.connecting
+    val minimized by CallManager.minimized
 
     when {
         ringing && !inCall -> IncomingCall()
+        (inCall || connecting) && minimized -> MinimizedCall()
         inCall || connecting -> InCall()
+    }
+}
+
+/** A small floating call tile (the rest of the app stays usable); tap to return, or end. */
+@Composable
+private fun MinimizedCall() {
+    val name by CallManager.peerName
+    val firstRemote = CallManager.participants.firstOrNull()?.let { CallManager.remoteVideo[it] }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Row(
+            Modifier.padding(top = 48.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xE6000000))
+                .clickable { CallManager.minimized.value = false }.padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(50.dp, 66.dp).clip(RoundedCornerShape(10.dp)).background(HavenTheme.card)) {
+                CallVideoTile(firstRemote, Modifier.fillMaxSize())
+            }
+            Spacer(Modifier.size(10.dp))
+            Column {
+                Text(name.ifBlank { "Haven call" }, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("Tap to return", color = HavenTheme.textSecondary, fontSize = 11.sp)
+            }
+            Spacer(Modifier.size(12.dp))
+            Box(Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFEF4444)).clickable { CallManager.hangup() },
+                contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.CallEnd, "End", tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+        }
     }
 }
 
@@ -152,9 +183,15 @@ private fun InCall() {
                 .clip(RoundedCornerShape(12.dp)).background(HavenTheme.card),
         ) { CallVideoTile(CallManager.localVideo, Modifier.fillMaxSize(), mirror = true) }
 
-        // Title.
-        Text(name.ifBlank { "Haven call" }, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.align(Alignment.TopStart).padding(16.dp))
+        // Title + minimize (return to the app while the call continues).
+        Row(Modifier.align(Alignment.TopStart).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.4f))
+                .clickable { CallManager.minimized.value = true }, contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.KeyboardArrowDown, "Minimize", tint = Color.White)
+            }
+            Spacer(Modifier.size(10.dp))
+            Text(name.ifBlank { "Haven call" }, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
 
         // Controls.
         Row(

@@ -38,6 +38,8 @@ object CallManager {
     val peerName = mutableStateOf("")
     val micOn = mutableStateOf(true)
     val cameraOn = mutableStateOf(true)
+    /** In-app minimized call (small floating tile + tap to restore), iOS parity. */
+    val minimized = mutableStateOf(false)
     /** Other participants (hex), drives the video grid. */
     val participants: SnapshotStateList<String> = mutableStateListOf()
     /** Remote video track per participant, attached by the UI renderers. */
@@ -284,7 +286,7 @@ object CallManager {
         localVideo = null
         remoteVideo.clear(); participants.clear(); roster.clear()
         sessionId = ""; mediaStarted = false; isCaller = false
-        ringing.value = false; connecting.value = false; inCall.value = false
+        ringing.value = false; connecting.value = false; inCall.value = false; minimized.value = false
         peerName.value = ""
     }
 }
