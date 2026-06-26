@@ -1410,6 +1410,7 @@ struct FeedView: View {
     @State private var showLocation = false   // opt-in: tag the post with a photo's reverse-geocoded place
     @State private var showSchedule = false   // "send later" date picker
     @State private var dropActive = false   // drag-and-drop media onto the composer (macOS/iPadOS)
+    @State private var showFilesImporter = false   // pick media from the Files app (iOS/iPadOS)
     @State private var showMediaPicker = false
     @State private var showCamera = false
     @State private var showSongPicker = false
@@ -1574,6 +1575,11 @@ struct FeedView: View {
             .sheet(isPresented: $showSchedule) {
                 SchedulePicker(circleId: store.activeCircleId, isDM: false) { date in scheduleCurrentPost(at: date) }
             }
+            .fileImporter(isPresented: $showFilesImporter,
+                          allowedContentTypes: [.image, .movie], allowsMultipleSelection: true) { result in
+                guard case let .success(urls) = result else { return }
+                importFiles(urls)
+            }
             .confirmationDialog("This media may be sensitive",
                                 isPresented: Binding(get: { pendingSensitive != nil },
                                                      set: { if !$0 { pendingSensitive = nil } }),
@@ -1723,6 +1729,9 @@ struct FeedView: View {
                 HStack(spacing: 10) {
                     Menu {
                         Button { showMediaPicker = true } label: { Label("Photo or Video", systemImage: "photo.on.rectangle") }
+                        #if os(iOS)
+                        Button { showFilesImporter = true } label: { Label("Files…", systemImage: "folder") }
+                        #endif
                         Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
                         Button { showSongPicker = true } label: { Label("Add a song", systemImage: "music.note") }
                         Button { showLocationPicker = true } label: { Label("Pin a location", systemImage: "mappin.and.ellipse") }
@@ -1805,6 +1814,27 @@ struct FeedView: View {
             }
         }
         return handled
+    }
+
+    /// Ingest files chosen from the Files app. Each URL is security-scoped, so access must be opened
+    /// around the read and the bytes copied into MediaStore before the scope closes.
+    private func importFiles(_ urls: [URL]) {
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType
+            if let type, type.conforms(to: .movie) {
+                let ext = url.pathExtension.isEmpty ? "mov" : url.pathExtension
+                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("files_\(UUID().uuidString).\(ext)")
+                try? FileManager.default.copyItem(at: url, to: tmp)
+                if scoped { url.stopAccessingSecurityScopedResource() }
+                Task { @MainActor in attachedMedia.append(await MediaStore.shared.addVideo(url: tmp)) }
+            } else if let data = try? Data(contentsOf: url), let img = PlatformImage(data: data) {
+                if scoped { url.stopAccessingSecurityScopedResource() }
+                attachedMedia.append(MediaStore.shared.addImage(img))
+            } else if scoped {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
     }
 
     private var attachmentTray: some View {
