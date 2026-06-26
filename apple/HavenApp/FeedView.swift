@@ -483,12 +483,13 @@ final class FeedStore: ObservableObject {
         // Hide posts from blocked people and from anyone no longer in this circle (removed members), so
         // a removal actually clears their content from the feed. My own posts always stay. Filtering by
         // prefix because a feed item carries the author's short id.
-        let members = social?.contactNodeIds(circleId: activeCircleId) ?? []
+        let members = social?.contactNodeIds(circleId: activeCircleId)   // nil = social not ready
         let blocked = ConnectionsStore.shared.blocked
         items = raw.filter { fi in
             if fi.isMe { return true }
             if blocked.contains(where: { $0.hasPrefix(fi.authorShort) }) { return false }
-            if members.isEmpty { return true }   // membership unknown yet — don't blank the feed
+            guard let members else { return true }   // lookup unavailable — don't blank the feed
+            // empty list = a genuine solo circle → hide everyone else (incl. a re-synced removed member)
             return members.contains(where: { $0.hasPrefix(fi.authorShort) })
         }
         sensitiveCache.removeAll()   // a refresh may have ingested new SensitiveFlag events
