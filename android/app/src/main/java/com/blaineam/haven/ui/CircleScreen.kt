@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -107,6 +108,7 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     var showPostCamera by remember { mutableStateOf(false) }   // in-app camera capture for a post
     var disappearSecs by remember { mutableStateOf<ULong?>(null) }  // disappearing post (retention)
     var showDisappearMenu by remember { mutableStateOf(false) }
+    var showSchedule by remember { mutableStateOf(false) }   // "send later" dialog
     var cameraForPost by remember { mutableStateOf(false) }
     val camPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         if (grants[android.Manifest.permission.CAMERA] == true) { if (cameraForPost) showPostCamera = true else showStoryCamera = true }
@@ -254,6 +256,9 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                     contentAlignment = Alignment.Center) { Icon(Icons.Filled.MusicNote, "Add a song", tint = HavenTheme.pink) }
                 Box(Modifier.size(40.dp).clip(CircleShape).clickable { attachLocation() },
                     contentAlignment = Alignment.Center) { Icon(Icons.Filled.Place, "Share location", tint = HavenTheme.pink) }
+                Box(Modifier.size(40.dp).clip(CircleShape).clickable {
+                    if (draft.isNotBlank() || pendingMedia.isNotEmpty()) showSchedule = true
+                }, contentAlignment = Alignment.Center) { Icon(Icons.Filled.Schedule, "Schedule send", tint = HavenTheme.pink) }
                 Spacer(Modifier.weight(1f))
                 Box {
                     Row(Modifier.clip(CircleShape)
@@ -325,6 +330,48 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                 onDismiss = { showMusicDialog = false },
             )
         }
+    }
+    if (showSchedule) {
+        fun doSchedule(sendAtMs: Long) {
+            com.blaineam.haven.core.ScheduledStore.schedule(active, draft.trim(), pendingMedia.toList(), disappearSecs, sendAtMs)
+            draft = ""; pendingMedia.clear(); pendingMusic = null; disappearSecs = null; showSchedule = false
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showSchedule = false }, containerColor = HavenTheme.card,
+            title = { Text("Send later", color = Color.White) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Posts from this phone when the time comes (it catches up next time you open Haven).",
+                        color = HavenTheme.textSecondary, fontSize = 12.sp)
+                    val now = java.util.Calendar.getInstance()
+                    fun at(addDays: Int, hour: Int): Long = (java.util.Calendar.getInstance().apply {
+                        add(java.util.Calendar.DAY_OF_YEAR, addDays); set(java.util.Calendar.HOUR_OF_DAY, hour)
+                        set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0)
+                    }).timeInMillis
+                    val eveningToday = at(0, 19)
+                    listOfNotNull(
+                        "In 1 hour" to (now.timeInMillis + 3_600_000L),
+                        if (eveningToday > now.timeInMillis) "This evening (7 PM)" to eveningToday else null,
+                        "Tomorrow morning (9 AM)" to at(1, 9),
+                    ).forEach { (label, ms) ->
+                        Text(label, color = HavenTheme.pink, fontSize = 15.sp,
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { doSchedule(ms) }.padding(vertical = 10.dp))
+                    }
+                    Text("Pick a date & time…", color = Color.White, fontSize = 15.sp,
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable {
+                            val c = java.util.Calendar.getInstance()
+                            android.app.DatePickerDialog(context, { _, y, mo, d ->
+                                android.app.TimePickerDialog(context, { _, h, mi ->
+                                    val cal = java.util.Calendar.getInstance().apply { set(y, mo, d, h, mi, 0) }
+                                    if (cal.timeInMillis > System.currentTimeMillis()) doSchedule(cal.timeInMillis)
+                                }, c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE), false).show()
+                            }, c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH), c.get(java.util.Calendar.DAY_OF_MONTH))
+                                .apply { datePicker.minDate = System.currentTimeMillis() }.show()
+                        }.padding(vertical = 10.dp))
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { showSchedule = false }) { Text("Cancel", color = HavenTheme.textSecondary) } },
+        )
     }
 }
 
