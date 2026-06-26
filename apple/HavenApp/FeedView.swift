@@ -1737,10 +1737,12 @@ struct FeedView: View {
                         Image(systemName: "plus.circle.fill").font(.title).foregroundStyle(HavenTheme.pink)
                     }
                     .accessibilityIdentifier("attachMenu")
+                    .menuIndicator(.hidden)   // no macOS disclosure chevron next to the + button
 
                     TextField("Share something…", text: $compose, axis: .vertical)
                         .accessibilityIdentifier("composeField")
                         .focused($composeFocused)
+                        .textFieldStyle(.plain)   // drop the macOS system focus ring/border — matches iOS
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         // A fixed-radius rounded rect — a Capsule's radius grows with height and
                         // clips into the text once the field wraps to multiple lines.
@@ -2505,8 +2507,10 @@ struct PostCard: View {
                     Button { showCommentMediaPicker = true } label: { Label("Photo or Video", systemImage: "photo") }
                     Button { showAudioRecorder = true } label: { Label("Audio reply", systemImage: "mic") }
                 } label: { Image(systemName: "paperclip").foregroundStyle(.secondary) }
+                .menuIndicator(.hidden)   // no macOS disclosure chevron next to the paperclip
                 TextField("Add a reply…", text: $commentText, axis: .vertical)
                     .lineLimit(1...5)
+                    .textFieldStyle(.plain)   // drop the macOS system focus ring — matches iOS
                     .font(.caption).padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .focused($commentFieldFocused)

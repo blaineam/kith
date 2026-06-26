@@ -184,8 +184,13 @@ final class ScannerNSView: NSView {
         }
         session.addOutput(output)
         output.setMetadataObjectsDelegate(coordinator, queue: .main)
-        output.metadataObjectTypes = [.qr]
         session.commitConfiguration()
+        // `availableMetadataObjectTypes` is only valid AFTER the output is connected (post-commit).
+        // Setting a type that isn't available yet throws "unsupported type" → SIGABRT (the macOS
+        // restore/scan crash). Guard it.
+        if output.availableMetadataObjectTypes.contains(.qr) {
+            output.metadataObjectTypes = [.qr]
+        }
 
         Task { @MainActor in
             let layer = AVCaptureVideoPreviewLayer(session: self.session)
