@@ -13,6 +13,7 @@ class HavenApplication : Application() {
         com.blaineam.haven.core.AvatarStore.init(this)  // photo avatars for feed/people/story-tray
         com.blaineam.haven.core.ScheduledStore.init(this)  // load + fire any due scheduled posts
         com.blaineam.haven.core.CircleSettings.init(this)  // per-circle save/optimize/retention overrides
+        com.blaineam.haven.core.HiddenStore.init(this)     // posts the user hid from their own feed
         SyncWorker.schedule(this)
     }
 }

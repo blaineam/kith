@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Timer
@@ -100,19 +101,23 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val circlesVersion by HavenNet.circlesVersion
     val active by HavenNet.activeCircle
     val circleSettingsVersion by com.blaineam.haven.core.CircleSettings.version
-    val items: List<FeedItemFfi> = remember(version, active, profile.retentionDays, circleSettingsVersion, circlesVersion, HavenNet.blocked.size) {
+    val showHidden by com.blaineam.haven.core.HiddenStore.showHidden
+    val hiddenCount = com.blaineam.haven.core.HiddenStore.hidden.size
+    val items: List<FeedItemFfi> = remember(version, active, profile.retentionDays, circleSettingsVersion, circlesVersion, HavenNet.blocked.size, showHidden, hiddenCount) {
         // Per-circle auto-delete override (falls back to the app-wide retention default).
         val raw = runCatching { HavenNet.engine.feed(active, nowMs(), com.blaineam.haven.core.CircleSettings.retentionSecs(active)) }.getOrDefault(emptyList())
         // Hide posts from blocked people and from anyone no longer in this circle (removed members),
         // so a removal actually clears their content from the feed. My own posts always stay.
         val memberHexes = runCatching { HavenNet.membersOf(active).map { it.idHex } }.getOrDefault(emptyList())
         raw.filter { fi ->
-            when {
+            val allowedAuthor = when {
                 fi.isMe -> true
                 HavenNet.blocked.any { it.startsWith(fi.authorShort) } -> false
                 memberHexes.isEmpty() -> true   // membership unknown yet — don't hide everything
                 else -> memberHexes.any { it.startsWith(fi.authorShort) }
             }
+            // Personal per-post hide (reversible via the "show hidden" toggle).
+            allowedAuthor && (showHidden || !com.blaineam.haven.core.HiddenStore.isHidden(fi.id))
         }
     }
     val storyGroups = remember(items) { groupStories(items) }
@@ -708,6 +713,14 @@ private fun CircleSwitcher(activeId: String, circlesVersion: Int) {
                 text = { Text(if (locked) "🔓 Unlock this circle" else "🔒 Lock this circle", color = Color.White) },
                 onClick = { com.blaineam.haven.core.CircleLock.setLocked(activeId, !locked); menu = false },
             )
+            val anyHidden = com.blaineam.haven.core.HiddenStore.hidden.size
+            val showingHidden by com.blaineam.haven.core.HiddenStore.showHidden
+            if (anyHidden > 0) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(if (showingHidden) "🙈  Hide hidden posts" else "👁  Show hidden posts ($anyHidden)", color = Color.White) },
+                    onClick = { com.blaineam.haven.core.HiddenStore.toggleShowHidden(); menu = false },
+                )
+            }
             androidx.compose.material3.DropdownMenuItem(
                 text = { Text("+ New circle", color = HavenTheme.pink) },
                 onClick = { menu = false; showCreate = true },
@@ -790,6 +803,7 @@ private val QUICK_EMOJI = listOf("❤️", "😂", "🔥", "👍", "🎉", "😮
 @Composable
 fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
     var showComment by remember(item.id) { mutableStateOf(false) }
+    var postMenu by remember(item.id) { mutableStateOf(false) }
     var commentDraft by remember(item.id) { mutableStateOf("") }
     var showPicker by remember(item.id) { mutableStateOf(false) }
     var showEdit by remember(item.id) { mutableStateOf(false) }
@@ -832,6 +846,23 @@ fun PostCard(item: FeedItemFfi, circleId: String = DEFAULT_CIRCLE) {
                 relativeTime(item.createdAt) + if (item.edited) " · edited" else "",
                 color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp,
             )
+            Box {
+                Icon(androidx.compose.material.icons.Icons.Filled.MoreVert, "More",
+                    tint = HavenTheme.textSecondary,
+                    modifier = Modifier.padding(start = 4.dp).size(20.dp).clickable { postMenu = true })
+                DropdownMenu(expanded = postMenu, onDismissRequest = { postMenu = false },
+                    modifier = Modifier.background(HavenTheme.card)) {
+                    val hidden = com.blaineam.haven.core.HiddenStore.isHidden(item.id)
+                    DropdownMenuItem(
+                        text = { Text(if (hidden) "Unhide post" else "Hide post", color = Color.White) },
+                        onClick = {
+                            if (hidden) com.blaineam.haven.core.HiddenStore.unhide(item.id)
+                            else com.blaineam.haven.core.HiddenStore.hide(item.id)
+                            postMenu = false
+                        },
+                    )
+                }
+            }
         }
         if (item.body.isNotBlank()) {
             Spacer(Modifier.height(10.dp))

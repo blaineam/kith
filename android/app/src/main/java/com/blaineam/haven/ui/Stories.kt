@@ -112,12 +112,25 @@ fun StoriesTray(groups: List<StoryGroup>, onAddStory: () -> Unit, onOpen: (Int) 
 }
 
 /** Full-screen story viewer: progress bars, tap right/left to advance, auto-advance. */
+/** A small translucent pill button for the story header (Keep / Delete). */
+@Composable
+private fun StoryActionChip(label: String, onClick: () -> Unit) {
+    androidx.compose.material3.Text(
+        label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.22f))
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+    )
+}
+
 @Composable
 fun StoryViewer(groups: List<StoryGroup>, startGroup: Int, onClose: () -> Unit) {
     var groupIdx by remember { mutableIntStateOf(startGroup) }
     var itemIdx by remember { mutableIntStateOf(0) }
     var replyText by remember { mutableStateOf("") }
     var replying by remember { mutableStateOf(false) }   // pauses auto/tap-advance while typing
+    var confirmDelete by remember { mutableStateOf(false) }
     var sentNote by remember { mutableStateOf(false) }
     val group = groups.getOrNull(groupIdx) ?: run { onClose(); return }
     val item = group.items.getOrNull(itemIdx) ?: run { onClose(); return }
@@ -204,10 +217,46 @@ fun StoryViewer(groups: List<StoryGroup>, startGroup: Int, onClose: () -> Unit) 
             color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 28.dp),
         )
-        androidx.compose.material3.Text(
-            "✕", color = Color.White, fontSize = 22.sp,
-            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).clickable { onClose() },
-        )
+        Row(
+            Modifier.align(Alignment.TopEnd).padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (group.isMe) {
+                // Keep: turn this disappearing story into a permanent post (iOS parity).
+                StoryActionChip("Keep") {
+                    val text = StoryCaptions.decode(item.body).text
+                    com.blaineam.haven.core.HavenNet.post(
+                        com.blaineam.haven.core.DEFAULT_CIRCLE, text, item.media, item.music, null)
+                    onClose()
+                }
+                // Delete: unsend my own story everywhere it was shared.
+                StoryActionChip("Delete") { confirmDelete = true }
+            }
+            androidx.compose.material3.Text(
+                "✕", color = Color.White, fontSize = 22.sp,
+                modifier = Modifier.clickable { onClose() },
+            )
+        }
+        if (confirmDelete) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmDelete = false },
+                containerColor = HavenTheme.card,
+                title = { androidx.compose.material3.Text("Delete this story?", color = Color.White) },
+                text = { androidx.compose.material3.Text("It will be removed from your story and for everyone you shared it with.", color = HavenTheme.textSecondary) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        com.blaineam.haven.core.HavenNet.unsendPost(com.blaineam.haven.core.DEFAULT_CIRCLE, item.id)
+                        confirmDelete = false; onClose()
+                    }) { androidx.compose.material3.Text("Delete story", color = Color(0xFFEF4444)) }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { confirmDelete = false }) {
+                        androidx.compose.material3.Text("Cancel", color = HavenTheme.pink)
+                    }
+                },
+            )
+        }
 
         // Reply privately — DMs the author with this story attached so they know which one.
         if (!group.isMe) {
