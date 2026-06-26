@@ -485,7 +485,10 @@ final class FeedStore: ObservableObject {
         // prefix because a feed item carries the author's short id.
         let members = social?.contactNodeIds(circleId: activeCircleId)   // nil = social not ready
         let blocked = ConnectionsStore.shared.blocked
+        let showHidden = HiddenStore.shared.showHidden
         items = raw.filter { fi in
+            // Personal per-post hide (reversible via the "show hidden" toggle).
+            if !showHidden && HiddenStore.shared.isHidden(fi.id) { return false }
             if fi.isMe { return true }
             if blocked.contains(where: { $0.hasPrefix(fi.authorShort) }) { return false }
             guard let members else { return true }   // lookup unavailable — don't blank the feed
@@ -1498,6 +1501,14 @@ struct FeedView: View {
                             }
                         }
                         Divider()
+                        if !HiddenStore.shared.hidden.isEmpty {
+                            Button {
+                                HiddenStore.shared.toggleShowHidden(); store.refresh()
+                            } label: {
+                                Label(HiddenStore.shared.showHidden ? "Hide hidden posts" : "Show hidden posts (\(HiddenStore.shared.hidden.count))",
+                                      systemImage: HiddenStore.shared.showHidden ? "eye.slash" : "eye")
+                            }
+                        }
                         Button { newCircleName = ""; showNewCircle = true } label: {
                             Label("New circle…", systemImage: "plus.circle")
                         }
@@ -2291,6 +2302,12 @@ struct PostCard: View {
                         Button { showEdit = true } label: { Label("Edit", systemImage: "pencil") }
                         Button(role: .destructive) { onUnsend() } label: { Label("Unsend", systemImage: "arrow.uturn.backward") }
                     }
+                    // Hide any post from my own feed (reversible). Local + per-device.
+                    let isHidden = HiddenStore.shared.isHidden(item.id)
+                    Button {
+                        if isHidden { HiddenStore.shared.unhide(item.id) } else { HiddenStore.shared.hide(item.id) }
+                        feed.refresh()
+                    } label: { Label(isHidden ? "Unhide" : "Hide", systemImage: isHidden ? "eye" : "eye.slash") }
                 } label: { Image(systemName: "ellipsis").foregroundStyle(.secondary).padding(6) }
             }
         }
