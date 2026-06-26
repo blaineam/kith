@@ -128,7 +128,14 @@ object CallManager {
     fun decline() = hangup()
 
     fun hangup() {
-        invitees().forEach { HavenNet.sendCallFrame(CallWire.HANGUP, CallWire.hangup(myHex), it) }
+        // The hangup is one fire-and-forget UDP frame; a single drop makes the far side wait out the
+        // ICE timeout (~seconds) instead of ending promptly. Send it a few times — it's idempotent on
+        // receipt. Capture targets before teardown clears the roster.
+        val targets = invitees().toList()
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        repeat(3) { i ->
+            h.postDelayed({ targets.forEach { HavenNet.sendCallFrame(CallWire.HANGUP, CallWire.hangup(myHex), it) } }, 90L * i)
+        }
         teardown()
     }
 
