@@ -46,6 +46,8 @@ object CallManager {
     val participants: SnapshotStateList<String> = mutableStateListOf()
     /** Remote video track per participant, attached by the UI renderers. */
     val remoteVideo: SnapshotStateMap<String, VideoTrack?> = mutableStateMapOf()
+    /** A peer's incoming SCREEN-share track (its second `screen0` video track), rendered aspect-fit. */
+    val remoteScreen: SnapshotStateMap<String, VideoTrack?> = mutableStateMapOf()
     var localVideo: VideoTrack? = null; private set
 
     lateinit var eglBase: EglBase; private set
@@ -59,6 +61,8 @@ object CallManager {
     private var surfaceHelper: SurfaceTextureHelper? = null
     private var screenCapturer: org.webrtc.VideoCapturer? = null
     private var screenSurfaceHelper: SurfaceTextureHelper? = null
+    private var screenVideoSource: VideoSource? = null
+    private var screenTrack: VideoTrack? = null   // the shared "screen0" track added to every peer
 
     private var sessionId: String = ""
     private var isCaller = false
@@ -261,6 +265,8 @@ object CallManager {
                 HavenNet.sendCallFrame(CallWire.ICE, CallWire.signal(myHex, sessionId, CallSignal.encodeCandidate(cand, m, mid)), peer)
             },
             onRemoteVideo = { track -> remoteVideo[peer] = track },
+            onRemoteScreen = { track -> remoteScreen[peer] = track },
+            onRemoteScreenEnded = { remoteScreen[peer] = null },
         )
     }
 
@@ -283,45 +289,48 @@ object CallManager {
     fun switchCamera() { if (!screenShare.value) capturer?.switchCamera(null) }
 
     /**
-     * Begin sharing the screen. The existing [localVideo] track wraps a shared [VideoSource]; we pause
-     * the camera and feed that same source from a [org.webrtc.ScreenCapturerAndroid] instead, so every
-     * peer keeps the already-negotiated track — its content just becomes the screen. No renegotiation.
+     * Begin sharing the screen as a SECOND video track ("screen0"), added alongside the camera — not a
+     * swap. The remote renders it in its own aspect-fit tile (matching the iOS protocol), and the camera
+     * keeps streaming. Adding the track renegotiates each peer (the sharer offers, the peer answers).
      *
      * [resultCode]/[data] come from the system MediaProjection consent dialog (launched by the UI).
      */
     fun startScreenShare(resultCode: Int, data: android.content.Intent) {
         if (screenShare.value) return
-        val src = videoSource ?: return
         runCatching {
             // Android 14+: a mediaProjection-typed foreground service must be live before capture.
             ConnectionService.startForProjection(appContext)
-            capturer?.stopCapture()   // pause the camera feeding the shared source
+            val f = ensureFactory()
+            val src = f.createVideoSource(true)   // isScreencast=true tunes the encoder for screen content
+            screenVideoSource = src
             val helper = SurfaceTextureHelper.create("ScreenCapture", eglBase.eglBaseContext)
             screenSurfaceHelper = helper
-            val screen = org.webrtc.ScreenCapturerAndroid(data, object : android.media.projection.MediaProjection.Callback() {
+            val cap = org.webrtc.ScreenCapturerAndroid(data, object : android.media.projection.MediaProjection.Callback() {
                 override fun onStop() {
                     android.os.Handler(android.os.Looper.getMainLooper()).post { stopScreenShare() }
                 }
             })
-            screenCapturer = screen
-            screen.initialize(helper, appContext, src.capturerObserver)
+            screenCapturer = cap
+            cap.initialize(helper, appContext, src.capturerObserver)
             val dm = appContext.resources.displayMetrics
-            screen.startCapture(dm.widthPixels, dm.heightPixels, 15)
-            localVideo?.setEnabled(true)   // ensure the track is on even if the camera was muted
+            cap.startCapture(dm.widthPixels, dm.heightPixels, 15)
+            val track = f.createVideoTrack(WebRTCPeer.SCREEN_TRACK_ID, src)
+            screenTrack = track
+            peers.values.forEach { runCatching { it.addScreenTrack(track) } }
             screenShare.value = true
         }.onFailure { Log.w(TAG, "screen share start failed", it) }
     }
 
-    /** Stop screen sharing and resume the front camera on the same track. */
+    /** Stop screen sharing: remove the screen track from every peer (renegotiate) and tear it down. */
     fun stopScreenShare() {
-        if (!screenShare.value && screenCapturer == null) return
+        if (!screenShare.value && screenTrack == null) return
+        screenShare.value = false
+        peers.values.forEach { runCatching { it.removeScreenTrack() } }
         runCatching { screenCapturer?.stopCapture() }
         runCatching { screenCapturer?.dispose() }; screenCapturer = null
         runCatching { screenSurfaceHelper?.dispose() }; screenSurfaceHelper = null
-        screenShare.value = false
-        // Resume the camera feeding the shared source (the capturer is still initialized).
-        runCatching { capturer?.startCapture(1280, 720, 30) }
-        localVideo?.setEnabled(cameraOn.value)
+        runCatching { screenTrack?.dispose() }; screenTrack = null
+        runCatching { screenVideoSource?.dispose() }; screenVideoSource = null
     }
 
     fun toggleScreenShare(resultCode: Int, data: android.content.Intent) {
@@ -333,12 +342,14 @@ object CallManager {
         runCatching { screenCapturer?.stopCapture() }
         runCatching { screenCapturer?.dispose() }; screenCapturer = null
         runCatching { screenSurfaceHelper?.dispose() }; screenSurfaceHelper = null
+        runCatching { screenTrack?.dispose() }; screenTrack = null
+        runCatching { screenVideoSource?.dispose() }; screenVideoSource = null
         screenShare.value = false
         runCatching { capturer?.stopCapture() }
         runCatching { capturer?.dispose() }; capturer = null
         runCatching { surfaceHelper?.dispose() }; surfaceHelper = null
         localVideo = null
-        remoteVideo.clear(); participants.clear(); roster.clear()
+        remoteVideo.clear(); remoteScreen.clear(); participants.clear(); roster.clear()
         sessionId = ""; mediaStarted = false; isCaller = false
         ringing.value = false; connecting.value = false; inCall.value = false; minimized.value = false
         peerName.value = ""

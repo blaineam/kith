@@ -54,14 +54,15 @@ import org.webrtc.VideoTrack
  * across recomposition so tracks bind reliably.
  */
 @Composable
-fun CallVideoTile(track: VideoTrack?, modifier: Modifier = Modifier, mirror: Boolean = false) {
+fun CallVideoTile(track: VideoTrack?, modifier: Modifier = Modifier, mirror: Boolean = false, fit: Boolean = false) {
     val context = LocalContext.current
     val view = remember {
         SurfaceViewRenderer(context).apply {
             init(CallManager.eglBase.eglBaseContext, null)
             setEnableHardwareScaler(true)
             setMirror(mirror)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            // Screen shares aspect-FIT (show the whole screen, letterboxed); camera tiles fill.
+            setScalingType(if (fit) RendererCommon.ScalingType.SCALE_ASPECT_FIT else RendererCommon.ScalingType.SCALE_ASPECT_FILL)
         }
     }
     AndroidView(factory = { view }, modifier = modifier)
@@ -168,22 +169,33 @@ private fun InCall() {
         }
     }
 
+    // A peer sharing their screen takes over the main view (aspect-fit, whole screen visible).
+    val screenShareEntry = CallManager.remoteScreen.entries.firstOrNull { it.value != null }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        // Remote tiles in a grid; local preview pinned bottom-right.
-        if (participants.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Connecting…", color = Color.White, fontSize = 18.sp)
+        when {
+            screenShareEntry != null -> {
+                CallVideoTile(screenShareEntry.value, Modifier.fillMaxSize(), fit = true)
+                Text("${screenShareEntry.key.take(6)} is sharing their screen",
+                    color = Color.White, fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp)
+                        .clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.5f)).padding(horizontal = 10.dp, vertical = 4.dp))
             }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(if (participants.size <= 1) 1 else 2),
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                items(participants, key = { it }) { hex ->
-                    Box(Modifier.padding(2.dp).aspectRatio(0.75f).background(HavenTheme.card)) {
-                        CallVideoTile(remote[hex], Modifier.fillMaxSize())
-                        Text(hex.take(6), color = Color.White, fontSize = 11.sp,
-                            modifier = Modifier.align(Alignment.BottomStart).padding(6.dp))
+            participants.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Connecting…", color = Color.White, fontSize = 18.sp)
+                }
+            }
+            else -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(if (participants.size <= 1) 1 else 2),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(participants, key = { it }) { hex ->
+                        Box(Modifier.padding(2.dp).aspectRatio(0.75f).background(HavenTheme.card)) {
+                            CallVideoTile(remote[hex], Modifier.fillMaxSize())
+                            Text(hex.take(6), color = Color.White, fontSize = 11.sp,
+                                modifier = Modifier.align(Alignment.BottomStart).padding(6.dp))
+                        }
                     }
                 }
             }

@@ -28,7 +28,16 @@ class WebRTCPeer(
     private val onLocalSdp: (type: String, sdp: String) -> Unit,
     private val onLocalIce: (candidate: String, mLineIndex: Int, mid: String?) -> Unit,
     private val onRemoteVideo: (VideoTrack?) -> Unit,
+    private val onRemoteScreen: (VideoTrack?) -> Unit = {},
+    private val onRemoteScreenEnded: () -> Unit = {},
 ) {
+    private var screenSender: org.webrtc.RtpSender? = null
+
+    /** Route an incoming video track: the second video track (`screen0`) is a screen share; the rest
+     *  is the camera. Same id contract iOS uses, so the platforms interop. */
+    private fun routeRemote(t: VideoTrack) {
+        if (t.id() == SCREEN_TRACK_ID) onRemoteScreen(t) else onRemoteVideo(t)
+    }
     private val pendingRemote = ArrayList<IceCandidate>()
     var remoteSet = false; private set
 
@@ -40,10 +49,17 @@ class WebRTCPeer(
         object : PeerConnection.Observer {
             override fun onIceCandidate(c: IceCandidate) = onLocalIce(c.sdp, c.sdpMLineIndex, c.sdpMid)
             override fun onTrack(transceiver: org.webrtc.RtpTransceiver) {
-                (transceiver.receiver.track() as? VideoTrack)?.let { onRemoteVideo(it) }
+                (transceiver.receiver.track() as? VideoTrack)?.let { routeRemote(it) }
             }
             override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
-                (receiver.track() as? VideoTrack)?.let { onRemoteVideo(it) }
+                (receiver.track() as? VideoTrack)?.let { routeRemote(it) }
+            }
+            override fun onRemoveTrack(receiver: RtpReceiver) {
+                // Mid-call the only track ever removed is the peer's screen share (camera/audio stay),
+                // so a removal clears the remote screen tile (no stuck last frame).
+                if ((receiver.track() as? VideoTrack)?.id() == SCREEN_TRACK_ID || receiver.track() == null) {
+                    onRemoteScreenEnded()
+                }
             }
             override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) { Log.d(TAG, "$peerHex ice=$s") }
             override fun onConnectionChange(s: PeerConnection.PeerConnectionState) { Log.d(TAG, "$peerHex pc=$s") }
@@ -62,6 +78,22 @@ class WebRTCPeer(
         val streamIds = listOf("haven")
         localAudio?.let { pc?.addTrack(it, streamIds) }
         localVideo?.let { pc?.addTrack(it, streamIds) }
+    }
+
+    /** Add my screen-share track to this peer and renegotiate (the sharer offers; the peer answers). */
+    fun addScreenTrack(track: VideoTrack) {
+        val pc = pc ?: return
+        if (screenSender != null) return
+        screenSender = pc.addTrack(track, listOf("screen"))
+        makeOffer()   // renegotiate to announce the new m-line
+    }
+
+    /** Remove my screen-share track and renegotiate (the m-line goes inactive on the peer). */
+    fun removeScreenTrack() {
+        val pc = pc ?: return
+        screenSender?.let { runCatching { pc.removeTrack(it) } }
+        screenSender = null
+        makeOffer()
     }
 
     fun makeOffer() {
@@ -122,5 +154,9 @@ class WebRTCPeer(
         override fun onSetFailure(error: String?) { Log.w(TAG, "sdp set fail: $error") }
     }
 
-    companion object { private const val TAG = "WebRTCPeer" }
+    companion object {
+        private const val TAG = "WebRTCPeer"
+        /** Track id for the screen-share video track — matches iOS `WebRTCCall.screenTrackId`. */
+        const val SCREEN_TRACK_ID = "screen0"
+    }
 }
