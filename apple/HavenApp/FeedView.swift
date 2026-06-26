@@ -740,22 +740,34 @@ final class FeedStore: ObservableObject {
         // its own transport (any configured relay OR the user's S3 bucket). (D16 Phase 3.) When it
         // pulls in changes from another device (e.g. a synced circle) persist + refresh.
         Task { @MainActor in
-            if await SelfSyncCoordinator.shared.sync(social: self.social) { self.persist(); self.refresh() }
-        }
-        let ids = circles.map { $0.id }
-        guard ids.contains(where: { SharedStore.hasMailbox($0) }) else { return }   // relay or S3
-        Task { @MainActor in
-            let msgs = await SharedStore.pollMailbox(circleIds: ids)
-            var changed = false
-            for (cid, env) in msgs {
-                if (try? social.receive(circleId: cid, envelope: env)) == true {
-                    changed = true
-                    notifyNewest(in: cid)
-                    bumpUnseen(cid)
-                }
+            if await SelfSyncCoordinator.shared.sync(social: self.social) {
+                // refreshCircles() — NOT just refresh() — so a circle synced from another of MY devices
+                // actually enters the polled list; otherwise its mailbox is never pulled and the linked
+                // device shows the circle but none of its posts.
+                self.persist(); self.refreshCircles(); self.refresh()
+                // Pull that circle's history from its relay now (it has structure but no posts yet),
+                // and push my own already-posted content up so my other device can pull it too.
+                let synced = self.circles.map(\.id)
+                self.backfillMailbox(circleIds: synced)
+                await self.pullMailbox(circleIds: synced)
             }
-            if changed { persist(); refresh(); requestMissingMedia() }
         }
+        Task { @MainActor in await self.pullMailbox(circleIds: self.circles.map { $0.id }) }
+    }
+
+    /// Pull every sealed post/DM waiting in the given circles' relay mailboxes and ingest them.
+    @MainActor func pullMailbox(circleIds ids: [String]) async {
+        guard let social, ids.contains(where: { SharedStore.hasMailbox($0) }) else { return }
+        let msgs = await SharedStore.pollMailbox(circleIds: ids)
+        var changed = false
+        for (cid, env) in msgs {
+            if (try? social.receive(circleId: cid, envelope: env)) == true {
+                changed = true
+                notifyNewest(in: cid)
+                bumpUnseen(cid)
+            }
+        }
+        if changed { persist(); refresh(); requestMissingMedia() }
     }
 
     /// Drain events that arrived inline in a push (stashed by the NSE) and ingest them — silent
