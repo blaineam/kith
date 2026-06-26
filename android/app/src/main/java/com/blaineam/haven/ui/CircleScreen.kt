@@ -307,6 +307,57 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     }
 }
 
+/** Circle roster + settings (iOS parity): rename, see members, remove/block a member, leave. */
+@Composable
+private fun CircleManageSheet(circleId: String, onDismiss: () -> Unit) {
+    val circlesVersion by HavenNet.circlesVersion
+    val version by HavenNet.feedVersion
+    var name by remember { mutableStateOf(HavenNet.circleName(circleId)) }
+    val members = remember(circlesVersion, version, circleId) { HavenNet.membersOf(circleId) }
+    val isDefault = circleId == com.blaineam.haven.core.DEFAULT_CIRCLE
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss, containerColor = HavenTheme.card,
+        title = { Text("Circle settings", color = Color.White) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!isDefault) {
+                    OutlinedTextField(
+                        value = name, onValueChange = { name = it }, singleLine = true,
+                        label = { Text("Circle name") }, modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = HavenTheme.pink, cursorColor = HavenTheme.pink),
+                    )
+                }
+                Text("Members (${members.size})", color = HavenTheme.textSecondary, fontSize = 12.sp)
+                if (members.isEmpty()) {
+                    Text("No one else yet — invite a friend to this circle.", color = HavenTheme.textSecondary, fontSize = 13.sp)
+                }
+                members.forEach { m ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        HavenAvatar(m.idHex, m.name, size = 30.dp)
+                        Spacer(Modifier.size(8.dp))
+                        Text(m.name, color = Color.White, modifier = Modifier.weight(1f), maxLines = 1)
+                        Text("Remove", color = HavenTheme.pink, fontSize = 13.sp,
+                            modifier = Modifier.clickable { HavenNet.removeFromCircle(circleId, m.idHex) }.padding(horizontal = 6.dp, vertical = 4.dp))
+                        Text("Block", color = Color(0xFFEF4444), fontSize = 13.sp,
+                            modifier = Modifier.clickable { HavenNet.block(m.idHex) }.padding(horizontal = 6.dp, vertical = 4.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                if (!isDefault && name.isNotBlank()) HavenNet.renameCircle(circleId, name.trim())
+                onDismiss()
+            }) { Text("Done", color = HavenTheme.pink) }
+        },
+        dismissButton = {
+            if (!isDefault) androidx.compose.material3.TextButton(onClick = { HavenNet.leaveCircle(circleId); onDismiss() }) {
+                Text("Leave circle", color = Color(0xFFEF4444))
+            }
+        },
+    )
+}
+
 /** Short label for a disappearing-post window (mirrors the composer chip). */
 private fun disappearLabel(secs: ULong): String = when (secs) {
     3_600uL -> "1h"; 86_400uL -> "1d"; 604_800uL -> "1w"; else -> "${secs / 3_600uL}h"
@@ -464,6 +515,7 @@ fun MediaViewer(circleId: String, refs: List<String>, startIndex: Int, onClose: 
 private fun CircleSwitcher(activeId: String, circlesVersion: Int) {
     var menu by remember { mutableStateOf(false) }
     var showCreate by remember { mutableStateOf(false) }
+    var showManage by remember { mutableStateOf(false) }
     val circles = remember(circlesVersion) { HavenNet.feedCircles() }
     val name = remember(activeId, circlesVersion) { HavenNet.circleName(activeId) }
     Box {
@@ -482,6 +534,10 @@ private fun CircleSwitcher(activeId: String, circlesVersion: Int) {
                 )
             }
             androidx.compose.material3.HorizontalDivider(color = HavenTheme.cardBorder)
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text("⚙️  Circle settings", color = Color.White) },
+                onClick = { menu = false; showManage = true },
+            )
             val locked = com.blaineam.haven.core.CircleLock.isLocked(activeId)
             androidx.compose.material3.DropdownMenuItem(
                 text = { Text(if (locked) "🔓 Unlock this circle" else "🔒 Lock this circle", color = Color.White) },
@@ -493,6 +549,7 @@ private fun CircleSwitcher(activeId: String, circlesVersion: Int) {
             )
         }
     }
+    if (showManage) CircleManageSheet(activeId) { showManage = false }
     if (showCreate) {
         var nm by remember { mutableStateOf("") }
         androidx.compose.material3.AlertDialog(

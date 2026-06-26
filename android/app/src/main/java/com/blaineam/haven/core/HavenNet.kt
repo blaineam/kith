@@ -399,10 +399,18 @@ object HavenNet : InboundListener {
     }
 
     /** Remove someone from the current circle WITHOUT blocking them (parity with iOS). */
-    fun removeFromCircle(idHex: String) {
-        runCatching { social.removeFromCircle(activeCircle.value, idHex) }
+    fun removeFromCircle(idHex: String) = removeFromCircle(activeCircle.value, idHex)
+
+    /** Remove a member from a SPECIFIC circle (roster management). */
+    fun removeFromCircle(circleId: String, idHex: String) {
+        runCatching { social.removeFromCircle(circleId, idHex) }
         feedVersion.value++; circlesVersion.value++; persist()
     }
+
+    /** The members of a circle, with resolved display names — for the roster/management UI. */
+    fun membersOf(circleId: String): List<Contact> =
+        runCatching { social.contactNodeIds(circleId) }.getOrDefault(emptyList())
+            .map { hex -> contacts.firstOrNull { it.idHex == hex } ?: Contact(hex, displayName(hex), "") }
 
     fun unblock(idHex: String) {
         blocked.removeAll { it == idHex }
