@@ -100,9 +100,20 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val circlesVersion by HavenNet.circlesVersion
     val active by HavenNet.activeCircle
     val circleSettingsVersion by com.blaineam.haven.core.CircleSettings.version
-    val items: List<FeedItemFfi> = remember(version, active, profile.retentionDays, circleSettingsVersion) {
+    val items: List<FeedItemFfi> = remember(version, active, profile.retentionDays, circleSettingsVersion, circlesVersion, HavenNet.blocked.size) {
         // Per-circle auto-delete override (falls back to the app-wide retention default).
-        runCatching { HavenNet.engine.feed(active, nowMs(), com.blaineam.haven.core.CircleSettings.retentionSecs(active)) }.getOrDefault(emptyList())
+        val raw = runCatching { HavenNet.engine.feed(active, nowMs(), com.blaineam.haven.core.CircleSettings.retentionSecs(active)) }.getOrDefault(emptyList())
+        // Hide posts from blocked people and from anyone no longer in this circle (removed members),
+        // so a removal actually clears their content from the feed. My own posts always stay.
+        val memberHexes = runCatching { HavenNet.membersOf(active).map { it.idHex } }.getOrDefault(emptyList())
+        raw.filter { fi ->
+            when {
+                fi.isMe -> true
+                HavenNet.blocked.any { it.startsWith(fi.authorShort) } -> false
+                memberHexes.isEmpty() -> true   // membership unknown yet — don't hide everything
+                else -> memberHexes.any { it.startsWith(fi.authorShort) }
+            }
+        }
     }
     val storyGroups = remember(items) { groupStories(items) }
     val posts = remember(items) { items.filter { !it.story } }

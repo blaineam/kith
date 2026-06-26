@@ -5,10 +5,13 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
@@ -127,7 +130,20 @@ private fun MainScaffold() {
     Scaffold(
         containerColor = HavenTheme.background,
         bottomBar = {
-            NavigationBar(containerColor = HavenTheme.card) {
+            // Hide the tab bar while the keyboard is up so the composer sits flush on it (no
+            // tab-bar-height gap above the keyboard, matching iOS).
+            val imeUp = androidx.compose.foundation.layout.WindowInsets.ime
+                .getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
+            val inCall by com.blaineam.haven.core.CallManager.inCall
+            val callMinimized by com.blaineam.haven.core.CallManager.minimized
+            if (!imeUp) NavigationBar(containerColor = HavenTheme.card) {
+                val navColors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = HavenTheme.pink,
+                    selectedTextColor = HavenTheme.pink,
+                    indicatorColor = HavenTheme.pink.copy(alpha = 0.14f),
+                    unselectedIconColor = HavenTheme.textSecondary,
+                    unselectedTextColor = HavenTheme.textSecondary,
+                )
                 Tab.entries.forEach { t ->
                     // Badge the Circle tab with the number of pending connection requests (parity with
                     // iOS, which badges the circle tab). `pending` is a SnapshotStateList so this updates live.
@@ -145,13 +161,17 @@ private fun MainScaffold() {
                             }
                         },
                         label = { Text(t.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = HavenTheme.pink,
-                            selectedTextColor = HavenTheme.pink,
-                            indicatorColor = HavenTheme.pink.copy(alpha = 0.14f),
-                            unselectedIconColor = HavenTheme.textSecondary,
-                            unselectedTextColor = HavenTheme.textSecondary,
-                        ),
+                        colors = navColors,
+                    )
+                }
+                // A minimized call shows as a "Call" tab to the right of You (iOS parity), not a banner.
+                if (inCall && callMinimized) {
+                    NavigationBarItem(
+                        selected = false,
+                        onClick = { com.blaineam.haven.core.CallManager.minimized.value = false },
+                        icon = { Icon(Icons.Filled.Call, contentDescription = "Return to call", tint = HavenTheme.pink) },
+                        label = { Text("Call", color = HavenTheme.pink) },
+                        colors = navColors,
                     )
                 }
             }

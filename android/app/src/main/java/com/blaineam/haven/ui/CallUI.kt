@@ -98,7 +98,7 @@ fun CallOverlay() {
 
     when {
         ringing && !inCall -> IncomingCall()
-        (inCall || connecting) && minimized -> MinimizedCall()
+        (inCall || connecting) && minimized -> Unit   // shown as a nav-bar "Call" tab (see RootScreen)
         inCall || connecting -> InCall()
     }
 }

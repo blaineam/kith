@@ -405,6 +405,11 @@ object HavenNet : InboundListener {
     fun removeFromCircle(circleId: String, idHex: String) {
         runCatching { social.removeFromCircle(circleId, idHex) }
         feedVersion.value++; circlesVersion.value++; persist()
+        // Re-lock the relay mailbox to the remaining members so the removed person can no longer
+        // pull this circle's future media from the relay. (Already-delivered, locally-cached media
+        // can't be clawed back — a fundamental P2P limit — but the epoch key rotates so they can't
+        // read anything new.)
+        authorizeMembership()
     }
 
     /** The members of a circle, with resolved display names — for the roster/management UI. */
@@ -422,7 +427,10 @@ object HavenNet : InboundListener {
     ) {
         runCatching { social.addContactBundle(circleId, bundle) }
         scope.launch(Dispatchers.Main) {
-            if (contacts.none { it.idHex == idHex }) contacts.add(Contact(idHex, name, verifyHex))
+            // Upsert: refresh the name/verify on re-add (a removed-then-readded contact must stop
+            // resolving to "Someone" — iOS does the same via syncUpsert).
+            val i = contacts.indexOfFirst { it.idHex == idHex }
+            if (i >= 0) contacts[i] = Contact(idHex, name, verifyHex) else contacts.add(Contact(idHex, name, verifyHex))
             saveContacts()
         }
         persist()
