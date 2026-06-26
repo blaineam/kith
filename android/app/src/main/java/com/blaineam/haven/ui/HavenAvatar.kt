@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -34,7 +35,13 @@ fun HavenAvatar(idOrShort: String, name: String, size: Dp, isMe: Boolean = false
     val v by AvatarStore.version
     val context = LocalContext.current
     val key = if (isMe) HavenNet.nodeIdHex else idOrShort
-    val img = remember(key, v) { AvatarStore.image(key) }
+    // For my own avatar, ProfileStore is the source of truth (what the You tab shows) — read it
+    // directly so the feed/own-post avatar can't diverge from the profile picture.
+    val myB64 = if (isMe) ProfileStore.get(context).avatarB64 else ""
+    val img = remember(key, v, myB64) {
+        if (isMe && myB64.isNotBlank()) decodeAvatarB64(myB64) ?: AvatarStore.image(key)
+        else AvatarStore.image(key)
+    }
     val emoji = when {
         emojiOverride != null -> emojiOverride
         isMe -> ProfileStore.get(context).emoji
@@ -49,3 +56,8 @@ fun HavenAvatar(idOrShort: String, name: String, size: Dp, isMe: Boolean = false
         }
     }
 }
+
+private fun decodeAvatarB64(b64: String): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+    val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+}.getOrNull()

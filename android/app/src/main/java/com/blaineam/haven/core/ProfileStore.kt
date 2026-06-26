@@ -73,6 +73,9 @@ class ProfileStore private constructor(context: Context) {
             .putString(KEY_EMOJI, emoji)
             .putString(KEY_AVATAR, avatarB64)
             .apply()
+        // Keep AvatarStore in sync so my avatar never diverges between the You tab and the feed
+        // (some edit paths call save() rather than setAvatar()).
+        runCatching { AvatarStore.put(HavenNet.nodeIdHex, avatarB64, emoji) }
     }
 
     /** Set + persist my avatar, and mirror it into [AvatarStore] so my own posts show it too. */
