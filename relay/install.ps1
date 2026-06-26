@@ -17,9 +17,13 @@
 [CmdletBinding()]
 param(
   [string]$Repo = $(if ($env:HAVEN_RELAY_REPO) { $env:HAVEN_RELAY_REPO } else { "blaineam/haven" }),
+  [string]$Store = $(if ($env:HAVEN_RELAY_DATA) { $env:HAVEN_RELAY_DATA } else { "" }),  # custom storage path
   [switch]$NoAutostart
 )
 $ErrorActionPreference = "Stop"
+# Threaded into the relay commands so storage dir, auto-start, and the link all agree.
+$dataArgs = @()
+if ($Store -ne "") { $dataArgs = @("--data", $Store) }
 
 # ── Pick the right prebuilt for this machine's architecture ──────────────────────────────
 $arch = $env:PROCESSOR_ARCHITECTURE
@@ -50,13 +54,10 @@ if ($userPath -notlike "*$dir*") {
   $env:Path += ";$dir"
 }
 
-# ── Reboot survival: a Scheduled Task that runs the relay at every logon ──────────────────
+# ── Reboot survival: let the binary register the Scheduled Task (platform-detected, threads the
+#    storage path, and only starts once a circle is linked) ─────────────────────────────────
 if (-not $NoAutostart) {
-  $taskName = "HavenRelay"
-  schtasks /Delete /TN $taskName /F 2>$null | Out-Null
-  # /sc onlogon → starts at logon (survives reboot); runs hidden; restarts handled by haven-relay itself.
-  schtasks /Create /TN $taskName /TR "`"$exe`" run" /SC ONLOGON /RL LIMITED /F | Out-Null
-  Write-Host "✓ Registered scheduled task '$taskName' — haven-relay starts on every logon/reboot."
+  & $exe service install @dataArgs
 }
 
 Write-Host ""
@@ -66,7 +67,11 @@ Write-Host ""
 Write-Host "Make it your circle's mailbox in two steps:"
 Write-Host "  1. In the Haven app:  You -> Relay -> add a relay. Copy the haven-relay:// link."
 Write-Host "  2. Open a NEW PowerShell window and run once:"
-Write-Host "       haven-relay run --link `"haven-relay://circle#....`""
+if ($Store -ne "") {
+  Write-Host "       haven-relay run --link `"haven-relay://circle#....`" --data `"$Store`""
+} else {
+  Write-Host "       haven-relay run --link `"haven-relay://circle#....`""
+}
 Write-Host ""
 Write-Host "After that it relaunches automatically on every reboot (Scheduled Task 'HavenRelay')."
 Write-Host "  • Start it now without rebooting:   schtasks /Run /TN HavenRelay"

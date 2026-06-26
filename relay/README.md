@@ -43,16 +43,26 @@ Once linked it serves **both** relay roles while the device is online:
 ### Run it — three steps
 
 ```sh
-# 1. Install (one line):
+# 1. Install (one line). The installer also auto-sets-up start-on-restart for THIS OS
+#    (systemd user unit / launchd agent / Task Scheduler / @reboot cron) — opt out with --no-service:
 curl -fsSL https://wemiller.com/apps/haven/relay/install.sh | sh
+
+#    Want the sealed-blob store on a specific disk? Pass a custom storage path:
+#    curl -fsSL …/install.sh | sh -s -- --store /mnt/bigdisk/haven-relay
 
 # 2. The Haven app shows you a relay link for your circle (You → Advanced → Relay).
 #    Paste it in. The relay derives its own identity, makes its store dir, and goes online.
-haven-relay run --link "haven-relay://circle#...."
+#    (If you chose a custom --store path, add the same --data here.)
+haven-relay run --link "haven-relay://circle#...."   # [--data /mnt/bigdisk/haven-relay]
 
-# 3. Leave it running. To restart later, no arguments needed — it reuses the saved link:
+# 3. That's it — it now auto-starts on every reboot. To restart by hand, no args needed:
 haven-relay run
 ```
+
+The installer registers the auto-start *before* you link, so it simply comes online on the
+next login after step 2 (or run step 2 now and it starts immediately). Remove the auto-start
+any time with `haven-relay service uninstall`. The auto-start command carries through your
+`--data` path, so a custom storage location survives reboots.
 
 On first run it prints a **QR + the link** (so you can re-add the relay in the app any
 time), **persists its identity** so its node id is stable across restarts, and **persists

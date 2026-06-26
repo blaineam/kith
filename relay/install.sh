@@ -29,6 +29,8 @@ DATADIR="${HAVEN_BRIDGE_DIR:-$HOME/haven-bridge}"
 BUCKET=haven
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 REPO="${HAVEN_RELAY_REPO:-blaineam/haven}"   # GitHub releases host the prebuilt binaries
+RELAY_DATA="${HAVEN_RELAY_DATA:-}"   # custom storage path for the relay (identity + sealed-blob store)
+WANT_SERVICE=1                       # auto-set up start-on-restart (platform-detected)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,11 +38,17 @@ while [ $# -gt 0 ]; do
     --native) BUCKET_MODE=native ;;
     --port)   PORT="$2"; shift ;;
     --dir)    DATADIR="$2"; shift ;;
+    --store|--data) RELAY_DATA="$2"; shift ;;   # custom relay storage path (where sealed blobs live)
+    --no-service)   WANT_SERVICE=0 ;;            # skip the auto-start setup
     --prefix) PREFIX="$2"; shift ;;
     *) echo "unknown option: $1"; exit 1 ;;
   esac
   shift
 done
+
+# Threaded into every relay command so the storage dir, auto-start, and the link all agree.
+DATA_ARG=""
+[ -n "$RELAY_DATA" ] && DATA_ARG="--data $RELAY_DATA"
 
 OS="$(uname -s 2>/dev/null || echo unknown)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
@@ -82,28 +90,39 @@ install_relay() {
     *":$PREFIX:"*) : ;;
     *) echo "  (add $PREFIX to your PATH, or run it by full path)" ;;
   esac
-  cat <<'EOF'
 
-Now make it your circle's mailbox in two steps:
+  BIN="$PREFIX/haven-relay"
+  STORE_DESC="${RELAY_DATA:-~/.haven-relay}"
 
-  1. In the Haven app:  You → Advanced → Relay → "Add a relay"
-     It shows a relay link (haven-relay://circle#...). Copy it.
+  # Auto-set-up start-on-restart, platform-detected (systemd user unit / launchd agent / Task
+  # Scheduler / @reboot cron). The binary picks the right mechanism; we just thread the storage
+  # path through so the auto-started service uses the same data dir. It won't START until you've
+  # linked a circle (below) — it just registers, then comes up on the next login.
+  if [ "$WANT_SERVICE" = 1 ]; then
+    echo "▸ Setting up auto-start on restart…"
+    # shellcheck disable=SC2086
+    "$BIN" service install $DATA_ARG || echo "  (couldn't auto-install the service; see 'haven-relay service install')"
+  fi
 
-  2. On this machine:
-       haven-relay run --link "haven-relay://circle#...."
-
-That's it. It prints a QR + the link (so you can re-add it in the app any time),
-generates and SAVES its own identity, creates ~/.haven-relay/store, and serves your
-circle's sealed-media mailbox from local disk over Haven Net. Leave it running.
-
-  • Restart later with no arguments:   haven-relay run
-  • Keep it always-on (Linux):
-      (crontab -e)  →  @reboot $HOME/.local/bin/haven-relay run >/dev/null 2>&1
-    or a one-line systemd user service (see README.md).
-
-The relay only ever moves ciphertext. It cannot read your circle's content.
-═══════════════════════════════════════════════════════════════
-EOF
+  echo "═══════════════════════════════════════════════════════════════"
+  echo
+  echo "Now make it your circle's mailbox in two steps:"
+  echo
+  echo "  1. In the Haven app:  You → Advanced → Relay → \"Add a relay\""
+  echo "     It shows a relay link (haven-relay://circle#...). Copy it."
+  echo
+  echo "  2. On this machine (one time, to attach + save the link):"
+  echo "       haven-relay run --link \"haven-relay://circle#....\" $DATA_ARG"
+  echo
+  echo "It generates + SAVES its own identity, stores the circle's sealed blobs in"
+  echo "  $STORE_DESC/store, and serves them over Haven Net. After that first link it"
+  echo "auto-starts on every restart (set up above) — no need to keep a terminal open."
+  echo
+  echo "  • Restart manually any time:   haven-relay run $DATA_ARG"
+  echo "  • Remove the auto-start:       haven-relay service uninstall"
+  echo
+  echo "The relay only ever moves ciphertext. It cannot read your circle's content."
+  echo "═══════════════════════════════════════════════════════════════"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────

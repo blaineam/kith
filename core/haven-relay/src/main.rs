@@ -38,10 +38,12 @@ fn main() -> Result<()> {
         Some("make-link") => make_link(&args[2..]),
         Some("id") => print_id(&args[2..]),
         Some("service") => match args.get(2).map(String::as_str) {
-            Some("install") => service::install(),
+            // Pass through any `run` flags (esp. `--data <custom storage path>`) so the auto-start
+            // command matches how the operator runs it.
+            Some("install") => service::install(&args[3..]),
             Some("uninstall") | Some("remove") => service::uninstall(),
             _ => {
-                eprintln!("usage: haven-relay service install | uninstall");
+                eprintln!("usage: haven-relay service install [--data DIR] | uninstall");
                 std::process::exit(2);
             }
         },
