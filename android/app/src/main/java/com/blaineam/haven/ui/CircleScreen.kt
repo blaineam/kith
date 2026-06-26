@@ -22,6 +22,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -98,14 +102,20 @@ fun CircleScreen(onAddFriend: () -> Unit) {
     val posts = remember(items) { items.filter { !it.story } }
     var viewingStory by remember { mutableStateOf<Int?>(null) }
     var showStoryCamera by remember { mutableStateOf(false) }
+    var showPostCamera by remember { mutableStateOf(false) }   // in-app camera capture for a post
+    var disappearSecs by remember { mutableStateOf<ULong?>(null) }  // disappearing post (retention)
+    var showDisappearMenu by remember { mutableStateOf(false) }
+    var cameraForPost by remember { mutableStateOf(false) }
     val camPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants[android.Manifest.permission.CAMERA] == true) showStoryCamera = true
+        if (grants[android.Manifest.permission.CAMERA] == true) { if (cameraForPost) showPostCamera = true else showStoryCamera = true }
     }
-    fun openStoryCamera() {
+    fun openCamera(forPost: Boolean) {
+        cameraForPost = forPost
         if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)
-            == android.content.pm.PackageManager.PERMISSION_GRANTED) showStoryCamera = true
+            == android.content.pm.PackageManager.PERMISSION_GRANTED) { if (forPost) showPostCamera = true else showStoryCamera = true }
         else camPermission.launch(arrayOf(android.Manifest.permission.CAMERA, android.Manifest.permission.RECORD_AUDIO))
     }
+    fun openStoryCamera() = openCamera(false)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             if (com.blaineam.haven.core.isVideoUri(context, uri)) {
@@ -213,44 +223,52 @@ fun CircleScreen(onAddFriend: () -> Unit) {
                         modifier = Modifier.clickable { pendingMusic = null })
                 }
             }
-            // Composer.
-            Row(
-                Modifier.fillMaxWidth().padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(44.dp).clip(CircleShape).clickable {
-                        picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                    },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Filled.AddPhotoAlternate, "Add photo or video", tint = HavenTheme.pink) }
-                Box(
-                    Modifier.size(40.dp).clip(CircleShape).clickable { showMusicDialog = true },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Filled.MusicNote, "Add a song", tint = HavenTheme.pink) }
+            // Composer options: camera · photo/video · music · disappearing (iOS parity).
+            Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp).clip(CircleShape).clickable { openCamera(true) },
+                    contentAlignment = Alignment.Center) { Icon(Icons.Filled.PhotoCamera, "Camera", tint = HavenTheme.pink) }
+                Box(Modifier.size(40.dp).clip(CircleShape).clickable {
+                    picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                }, contentAlignment = Alignment.Center) { Icon(Icons.Filled.AddPhotoAlternate, "Add photo or video", tint = HavenTheme.pink) }
+                Box(Modifier.size(40.dp).clip(CircleShape).clickable { showMusicDialog = true },
+                    contentAlignment = Alignment.Center) { Icon(Icons.Filled.MusicNote, "Add a song", tint = HavenTheme.pink) }
+                Spacer(Modifier.weight(1f))
+                Box {
+                    Row(Modifier.clip(CircleShape)
+                        .background(if (disappearSecs != null) HavenTheme.pink.copy(alpha = 0.2f) else Color.Transparent)
+                        .clickable { showDisappearMenu = true }.padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Timer, "Disappearing",
+                            tint = if (disappearSecs != null) HavenTheme.pink else HavenTheme.textSecondary, modifier = Modifier.size(18.dp))
+                        if (disappearSecs != null) { Spacer(Modifier.size(4.dp)); Text(disappearLabel(disappearSecs!!), fontSize = 12.sp, color = HavenTheme.pink) }
+                    }
+                    DropdownMenu(expanded = showDisappearMenu, onDismissRequest = { showDisappearMenu = false }) {
+                        listOf<Pair<String, ULong?>>(
+                            "Don't disappear" to null, "After 1 hour" to 3_600uL,
+                            "After 1 day" to 86_400uL, "After 1 week" to 604_800uL,
+                        ).forEach { (label, secs) ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = { disappearSecs = secs; showDisappearMenu = false })
+                        }
+                    }
+                }
+            }
+            // Composer text + send.
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
+                    value = draft, onValueChange = { draft = it },
                     placeholder = { Text("Share with your circle…") },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(22.dp),
-                    maxLines = 4,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = HavenTheme.pink,
-                        cursorColor = HavenTheme.pink,
-                    ),
+                    modifier = Modifier.weight(1f), shape = RoundedCornerShape(22.dp), maxLines = 4,
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = HavenTheme.pink, cursorColor = HavenTheme.pink),
                 )
                 Spacer(Modifier.size(8.dp))
                 val canPost = draft.isNotBlank() || pendingPhoto != null || pendingMusic != null
-                Box(
-                    Modifier.size(48.dp).clip(CircleShape)
-                        .background(HavenTheme.brandHorizontal)
-                        .clickable(enabled = canPost) {
-                            HavenNet.post(active, draft.trim(), listOfNotNull(pendingPhoto), pendingMusic)
-                            draft = ""; pendingPhoto = null; pendingMusic = null
-                        },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.AutoMirrored.Filled.Send, "Post", tint = Color.White) }
+                Box(Modifier.size(48.dp).clip(CircleShape).background(HavenTheme.brandHorizontal)
+                    .clickable(enabled = canPost) {
+                        HavenNet.post(active, draft.trim(), listOfNotNull(pendingPhoto), pendingMusic, retentionSecs = disappearSecs)
+                        draft = ""; pendingPhoto = null; pendingMusic = null; disappearSecs = null
+                    }, contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.Send, "Post", tint = Color.White) }
             }
             }
         }
@@ -268,6 +286,17 @@ fun CircleScreen(onAddFriend: () -> Unit) {
             StoryCameraScreen(onClose = { showStoryCamera = false })
         }
     }
+    if (showPostCamera) {
+        // In-app camera for a POST: a capture is attached to the composer (stored under the active
+        // circle's key) — no story editor.
+        FullScreenOverlay(onDismiss = { showPostCamera = false }) {
+            StoryCameraScreen(
+                onClose = { showPostCamera = false },
+                storeCircle = active,
+                onCaptured = { ref, _ -> pendingPhoto = ref; showPostCamera = false },
+            )
+        }
+    }
     if (showMusicDialog) {
         FullScreenOverlay(onDismiss = { showMusicDialog = false }) {
             MusicSearchSheet(
@@ -276,6 +305,11 @@ fun CircleScreen(onAddFriend: () -> Unit) {
             )
         }
     }
+}
+
+/** Short label for a disappearing-post window (mirrors the composer chip). */
+private fun disappearLabel(secs: ULong): String = when (secs) {
+    3_600uL -> "1h"; 86_400uL -> "1d"; 604_800uL -> "1w"; else -> "${secs / 3_600uL}h"
 }
 
 /** Hosts content in a borderless full-screen dialog window so it covers the bottom tab bar too. */

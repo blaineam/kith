@@ -456,10 +456,11 @@ object HavenNet : InboundListener {
 
     /** Author a post in a circle and broadcast the sealed event to its members. */
     fun post(circleId: String, body: String, media: List<String> = emptyList(),
-             music: uniffi.haven_ffi.TrackRefFfi? = null) {
+             music: uniffi.haven_ffi.TrackRefFfi? = null, retentionSecs: ULong? = null) {
         if (body.isBlank() && media.isEmpty() && music == null) return
         val env = runCatching {
-            social.post(circleId, body, media, music, null, false, false, nowMs())
+            // retentionSecs != null → a disappearing post (auto-expires in the feed reducer, iOS parity).
+            social.post(circleId, body, media, music, retentionSecs, false, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
         scope.launch { media.forEach { uploadMedia(circleId, it) } }   // push photos/videos to the relay

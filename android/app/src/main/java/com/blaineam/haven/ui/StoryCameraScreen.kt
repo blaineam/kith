@@ -87,7 +87,12 @@ private data class StoryDraft(val ref: String, val isVideo: Boolean, val filterI
 /** In-app story camera: TAP = photo, HOLD = video (release to stop), flip. Then the editor. */
 @SuppressLint("MissingPermission")
 @Composable
-fun StoryCameraScreen(onClose: () -> Unit) {
+fun StoryCameraScreen(
+    onClose: () -> Unit,
+    storeCircle: String = DEFAULT_CIRCLE,
+    // Post mode: when set, a capture is handed back (ref, isVideo) instead of opening the story editor.
+    onCaptured: ((String, Boolean) -> Unit)? = null,
+) {
     var draft by remember { mutableStateOf<StoryDraft?>(null) }
     val d = draft
     if (d != null) { StoryEditor(ref = d.ref, isVideo = d.isVideo, initialFilter = d.filterIdx, onClose = onClose); return }
@@ -129,9 +134,11 @@ fun StoryCameraScreen(onClose: () -> Unit) {
                     scope.launch {
                         val ref = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                             raw?.let { uprightJpeg(it, rot, mirror = lensFront) }
-                                ?.let { LocalMedia.store(DEFAULT_CIRCLE, it) }
+                                ?.let { LocalMedia.store(storeCircle, it) }
                         }
-                        if (ref != null) draft = StoryDraft(ref, false, liveFilterIdx) else status = "Couldn't capture"
+                        if (ref != null) {
+                            if (onCaptured != null) onCaptured(ref, false) else draft = StoryDraft(ref, false, liveFilterIdx)
+                        } else status = "Couldn't capture"
                     }
                 }
                 override fun onError(e: ImageCaptureException) { status = "Capture failed" }
@@ -157,10 +164,12 @@ fun StoryCameraScreen(onClose: () -> Unit) {
                         val ref = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             runCatching {
                                 val bytes = file.readBytes(); file.delete()
-                                LocalMedia.store(DEFAULT_CIRCLE, bytes, isVideo = true)
+                                LocalMedia.store(storeCircle, bytes, isVideo = true)
                             }.getOrNull()
                         }
-                        if (ref != null) draft = StoryDraft(ref, true, liveFilterIdx) else status = "Couldn't save video"
+                        if (ref != null) {
+                            if (onCaptured != null) onCaptured(ref, true) else draft = StoryDraft(ref, true, liveFilterIdx)
+                        } else status = "Couldn't save video"
                     }
                 } else {
                     runCatching { file.delete() }
