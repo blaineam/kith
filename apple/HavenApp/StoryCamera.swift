@@ -381,6 +381,20 @@ final class CameraModel: NSObject, ObservableObject {
     }
 
     func capturePhoto(_ completion: @escaping (PlatformImage) -> Void) {
+        // macOS: AVCapturePhotoOutput frequently fails to deliver when an AVCaptureMovieFileOutput is
+        // attached to the same session — the delegate gets an error and we'd silently produce nothing,
+        // i.e. "the camera only records video, never takes a picture". Grab the still straight from the
+        // live preview frame instead; it's the same raw frame iOS's photo path returns and it's always
+        // there once the session is running.
+        if let ci = frameTap.latest {
+            let ctx = CIContext()
+            if let cg = ctx.createCGImage(ci, from: ci.extent) {
+                let img = NSImage(cgImage: cg, size: NSSize(width: ci.extent.width, height: ci.extent.height))
+                completion(img)
+                return
+            }
+        }
+        // Fallback if no frame has arrived yet.
         onPhoto = completion
         let settings = AVCapturePhotoSettings()
         queue.async { [weak self] in
@@ -1150,6 +1164,7 @@ struct StoryComposerView: View {
                 Image(systemName: "xmark").font(.title2.weight(.semibold)).foregroundStyle(.white)
                     .padding(10).background(.black.opacity(0.35), in: Circle())
             }
+            .buttonStyle(.plain)
             Spacer()
             controlButton("Aa", system: nil) {
                 editingCaption = true
@@ -1189,6 +1204,7 @@ struct StoryComposerView: View {
             .foregroundStyle(.white).frame(width: 42, height: 42)
             .background(.black.opacity(0.35), in: Circle())
         }
+        .buttonStyle(.plain)   // no macOS rectangular button chrome behind the circle
     }
 
     /// Caption editing controls: tap-through typography, highlight toggle, color row.

@@ -96,6 +96,10 @@ struct SongPicker: View {
             }
             .onChange(of: query) { _, _ in if source == .catalog { scheduleCatalogSearch() } }
         }
+        #if os(macOS)
+        // A macOS sheet sizes to content; the song list collapsed to a sliver. Give it a real frame.
+        .frame(minWidth: 460, idealWidth: 540, minHeight: 560, idealHeight: 660)
+        #endif
     }
 
     // MARK: - Library (iOS/Catalyst only)
