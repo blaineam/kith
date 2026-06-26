@@ -13,6 +13,8 @@
     <!-- Foreground "stay connected" service (keeps the iroh node alive for real-time delivery). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Screen sharing in a call (MediaProjection) — Android 14+ requires this FGS type. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- Nearby Connections (offline mesh). Location is required for BLE scanning on API <= 30. -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -61,6 +63,6 @@
         <service
             android:name=".core.ConnectionService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|mediaProjection" />
     </application>
 </manifest>

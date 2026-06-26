@@ -22,6 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.ScreenShare
+import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
@@ -155,6 +157,16 @@ private fun InCall() {
     val cameraOn by CallManager.cameraOn
     val participants = CallManager.participants
     val remote = CallManager.remoteVideo
+    val sharing by CallManager.screenShare
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // System MediaProjection consent → start the screen capture on approval.
+    val projectionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == android.app.Activity.RESULT_OK && data != null) {
+            CallManager.startScreenShare(result.resultCode, data)
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         // Remote tiles in a grid; local preview pinned bottom-right.
@@ -203,6 +215,15 @@ private fun InCall() {
             RoundButton(if (cameraOn) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
                 if (cameraOn) HavenTheme.card else Color.White, "Camera") { CallManager.toggleCamera() }
             RoundButton(Icons.Filled.Cameraswitch, HavenTheme.card, "Flip") { CallManager.switchCamera() }
+            RoundButton(if (sharing) Icons.Filled.StopScreenShare else Icons.Filled.ScreenShare,
+                if (sharing) Color.White else HavenTheme.card, "Share screen") {
+                if (sharing) CallManager.stopScreenShare()
+                else {
+                    val mpm = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE)
+                        as android.media.projection.MediaProjectionManager
+                    projectionLauncher.launch(mpm.createScreenCaptureIntent())
+                }
+            }
             RoundButton(Icons.Filled.CallEnd, Color(0xFFEF4444), "End") { CallManager.hangup() }
         }
     }

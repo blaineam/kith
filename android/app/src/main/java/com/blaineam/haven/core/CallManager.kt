@@ -40,6 +40,8 @@ object CallManager {
     val cameraOn = mutableStateOf(true)
     /** In-app minimized call (small floating tile + tap to restore), iOS parity. */
     val minimized = mutableStateOf(false)
+    /** Sharing this device's screen into the call instead of the camera. */
+    val screenShare = mutableStateOf(false)
     /** Other participants (hex), drives the video grid. */
     val participants: SnapshotStateList<String> = mutableStateListOf()
     /** Remote video track per participant, attached by the UI renderers. */
@@ -55,6 +57,8 @@ object CallManager {
     private var videoSource: VideoSource? = null
     private var capturer: CameraVideoCapturer? = null
     private var surfaceHelper: SurfaceTextureHelper? = null
+    private var screenCapturer: org.webrtc.VideoCapturer? = null
+    private var screenSurfaceHelper: SurfaceTextureHelper? = null
 
     private var sessionId: String = ""
     private var isCaller = false
@@ -276,10 +280,60 @@ object CallManager {
 
     fun toggleMic() { micOn.value = !micOn.value; audioTrack?.setEnabled(micOn.value) }
     fun toggleCamera() { cameraOn.value = !cameraOn.value; localVideo?.setEnabled(cameraOn.value) }
-    fun switchCamera() { capturer?.switchCamera(null) }
+    fun switchCamera() { if (!screenShare.value) capturer?.switchCamera(null) }
+
+    /**
+     * Begin sharing the screen. The existing [localVideo] track wraps a shared [VideoSource]; we pause
+     * the camera and feed that same source from a [org.webrtc.ScreenCapturerAndroid] instead, so every
+     * peer keeps the already-negotiated track — its content just becomes the screen. No renegotiation.
+     *
+     * [resultCode]/[data] come from the system MediaProjection consent dialog (launched by the UI).
+     */
+    fun startScreenShare(resultCode: Int, data: android.content.Intent) {
+        if (screenShare.value) return
+        val src = videoSource ?: return
+        runCatching {
+            // Android 14+: a mediaProjection-typed foreground service must be live before capture.
+            ConnectionService.startForProjection(appContext)
+            capturer?.stopCapture()   // pause the camera feeding the shared source
+            val helper = SurfaceTextureHelper.create("ScreenCapture", eglBase.eglBaseContext)
+            screenSurfaceHelper = helper
+            val screen = org.webrtc.ScreenCapturerAndroid(data, object : android.media.projection.MediaProjection.Callback() {
+                override fun onStop() {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post { stopScreenShare() }
+                }
+            })
+            screenCapturer = screen
+            screen.initialize(helper, appContext, src.capturerObserver)
+            val dm = appContext.resources.displayMetrics
+            screen.startCapture(dm.widthPixels, dm.heightPixels, 15)
+            localVideo?.setEnabled(true)   // ensure the track is on even if the camera was muted
+            screenShare.value = true
+        }.onFailure { Log.w(TAG, "screen share start failed", it) }
+    }
+
+    /** Stop screen sharing and resume the front camera on the same track. */
+    fun stopScreenShare() {
+        if (!screenShare.value && screenCapturer == null) return
+        runCatching { screenCapturer?.stopCapture() }
+        runCatching { screenCapturer?.dispose() }; screenCapturer = null
+        runCatching { screenSurfaceHelper?.dispose() }; screenSurfaceHelper = null
+        screenShare.value = false
+        // Resume the camera feeding the shared source (the capturer is still initialized).
+        runCatching { capturer?.startCapture(1280, 720, 30) }
+        localVideo?.setEnabled(cameraOn.value)
+    }
+
+    fun toggleScreenShare(resultCode: Int, data: android.content.Intent) {
+        if (screenShare.value) stopScreenShare() else startScreenShare(resultCode, data)
+    }
 
     private fun teardown() {
         peers.values.forEach { it.close() }; peers.clear()
+        runCatching { screenCapturer?.stopCapture() }
+        runCatching { screenCapturer?.dispose() }; screenCapturer = null
+        runCatching { screenSurfaceHelper?.dispose() }; screenSurfaceHelper = null
+        screenShare.value = false
         runCatching { capturer?.stopCapture() }
         runCatching { capturer?.dispose() }; capturer = null
         runCatching { surfaceHelper?.dispose() }; surfaceHelper = null

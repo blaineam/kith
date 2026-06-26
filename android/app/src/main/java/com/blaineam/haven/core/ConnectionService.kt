@@ -24,8 +24,14 @@ class ConnectionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         ensureChannel(this)
+        // Screen-sharing in a call needs the foreground service to carry the mediaProjection type
+        // (Android 14+ requires it before MediaProjection can capture). We add it to the running
+        // data-sync service while a share is active.
+        val projection = intent?.getBooleanExtra(EXTRA_PROJECTION, false) == true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            if (projection) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            startForeground(NOTIF_ID, notification(), type)
         } else {
             startForeground(NOTIF_ID, notification())
         }
@@ -51,6 +57,7 @@ class ConnectionService : Service() {
     companion object {
         private const val CHANNEL = "haven.connection"
         private const val NOTIF_ID = 42
+        private const val EXTRA_PROJECTION = "projection"
         private const val PREF = "haven.fg"
         private const val KEY = "enabled"
 
@@ -76,6 +83,13 @@ class ConnectionService : Service() {
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, ConnectionService::class.java))
+        }
+
+        /** (Re)start the foreground service with the mediaProjection type added — call right before
+         *  starting a screen-share capture so Android 14+ permits MediaProjection. */
+        fun startForProjection(ctx: Context) {
+            ContextCompat.startForegroundService(
+                ctx, Intent(ctx, ConnectionService::class.java).putExtra(EXTRA_PROJECTION, true))
         }
 
         fun stop(ctx: Context) {
