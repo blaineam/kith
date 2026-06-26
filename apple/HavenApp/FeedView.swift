@@ -479,7 +479,18 @@ final class FeedStore: ObservableObject {
 
     private func now() -> UInt64 { UInt64(Date().timeIntervalSince1970 * 1000) }
     func refresh() {
-        items = social?.feed(circleId: activeCircleId, nowMs: now(), viewerRetentionSecs: CircleSettingsStore.shared.retentionSecs(activeCircleId)) ?? []
+        let raw = social?.feed(circleId: activeCircleId, nowMs: now(), viewerRetentionSecs: CircleSettingsStore.shared.retentionSecs(activeCircleId)) ?? []
+        // Hide posts from blocked people and from anyone no longer in this circle (removed members), so
+        // a removal actually clears their content from the feed. My own posts always stay. Filtering by
+        // prefix because a feed item carries the author's short id.
+        let members = social?.contactNodeIds(circleId: activeCircleId) ?? []
+        let blocked = ConnectionsStore.shared.blocked
+        items = raw.filter { fi in
+            if fi.isMe { return true }
+            if blocked.contains(where: { $0.hasPrefix(fi.authorShort) }) { return false }
+            if members.isEmpty { return true }   // membership unknown yet — don't blank the feed
+            return members.contains(where: { $0.hasPrefix(fi.authorShort) })
+        }
         sensitiveCache.removeAll()   // a refresh may have ingested new SensitiveFlag events
         SpotlightIndex.reindexAll()   // no-op unless the user enabled Spotlight indexing
     }
@@ -1558,7 +1569,11 @@ struct FeedView: View {
             }
             .sheet(isPresented: $showRequests) { ConnectionRequestsView().macSheetClose() }
             .havenFullScreenCover(isPresented: $showStories) {
+                // `.id(storyIndex)` forces a fresh StoryViewer per tapped user — otherwise SwiftUI reuses
+                // the view identity and its @State `index` sticks at the first value, so every tap opened
+                // the lineup from the far-left user instead of the one tapped.
                 StoryViewer(stories: store.groupedStoriesFlat, index: storyIndex, friendName: friendName)
+                    .id(storyIndex)
             }
             .havenFullScreenCover(item: $trimmingRef) { target in
                 if let url = MediaStore.shared.storagePath(for: target.ref) {

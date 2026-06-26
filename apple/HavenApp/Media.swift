@@ -265,7 +265,9 @@ final class MediaStore: ObservableObject {
         // Optimize: downscale very large photos + compress, so they're light to send —
         // but keep it high-res (longest edge up to 2560, well above 1080p).
         let optimize = CircleSettingsStore.shared.autoOptimize(FeedStore.shared.activeCircleId)
-        let img = optimize ? Self.downscale(image, maxDimension: 2560) : image
+        // Bake EXIF orientation into the pixels: Android's BitmapFactory ignores the orientation tag,
+        // so a portrait iPhone photo arrives sideways unless we normalize it to .up here.
+        let img = Self.normalizedUp(optimize ? Self.downscale(image, maxDimension: 2560) : image)
         let quality: CGFloat = optimize ? 0.88 : 0.95
         if let data = img.jpegData(compressionQuality: quality), let url = fileURL(ref) {
             try? data.write(to: url)
@@ -304,7 +306,8 @@ final class MediaStore: ObservableObject {
             return false
         }
         export.outputURL = dst
-        export.outputFileType = .mov
+        // .mp4 (not .mov/QuickTime): Android's MediaPlayer reliably plays MP4; some builds choke on MOV.
+        export.outputFileType = .mp4
         export.metadata = []   // no location/maker metadata travels with shared media
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             export.exportAsynchronously { cont.resume() }
@@ -461,6 +464,22 @@ final class MediaStore: ObservableObject {
     static func downscale(_ image: PlatformImage, maxDimension: CGFloat) -> PlatformImage {
         image.downscaled(maxDimension: maxDimension)
     }
+
+    /// Redraw an image so its pixels are upright (`.up` orientation), instead of relying on an EXIF
+    /// orientation tag. Cross-platform decoders (Android BitmapFactory) ignore that tag, so without
+    /// this a portrait iPhone photo shows up rotated 90° elsewhere.
+    #if canImport(UIKit)
+    static func normalizedUp(_ image: UIImage) -> UIImage {
+        guard image.imageOrientation != .up else { return image }
+        let fmt = UIGraphicsImageRendererFormat.default()
+        fmt.scale = image.scale
+        return UIGraphicsImageRenderer(size: image.size, format: fmt).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
+    }
+    #else
+    static func normalizedUp(_ image: PlatformImage) -> PlatformImage { image }
+    #endif
 
     /// Transcode a video to a network-friendly 1080p H.264 MP4 (full HD, just
     /// re-encoded smaller than the camera original).
