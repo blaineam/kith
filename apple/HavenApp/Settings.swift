@@ -177,6 +177,7 @@ struct SettingsView: View {
                     Text("Technical details, your identity, and starting over.")
                 }
             }
+            .formStyle(.grouped)   // grouped sections (not macOS right-aligned columns)
             .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.interactively)
         }

@@ -133,6 +133,7 @@ struct SchedulePicker: View {
                         }
                     }
                 }
+                .formStyle(.grouped)   // grouped sections (not macOS right-aligned columns)
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("Schedule")

@@ -293,6 +293,7 @@ struct CircleSettingsView: View {
                     }
                 }
             }
+            .formStyle(.grouped)   // grouped sections (not macOS right-aligned columns)
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Circle settings")

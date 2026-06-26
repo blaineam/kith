@@ -293,6 +293,14 @@ extension View {
 }
 
 extension View {
+    /// Consistent settings-form look on every platform. macOS's default `Form` style is `.columns`
+    /// (right-aligned labels in a cramped column) — `.grouped` gives the iOS-like grouped sections
+    /// with proper padding. `.scrollContentBackground(.hidden)` makes the form transparent so the
+    /// brand gradient behind it shows through cleanly instead of stacking a second background.
+    @ViewBuilder func havenSettingsForm() -> some View {
+        self.formStyle(.grouped).scrollContentBackground(.hidden)
+    }
+
     /// `.statusBarHidden()` on iOS; no-op on macOS (no status bar).
     @ViewBuilder func havenStatusBarHidden(_ hidden: Bool = true) -> some View {
         #if os(iOS)

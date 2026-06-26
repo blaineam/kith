@@ -155,6 +155,7 @@ struct StorageSettingsView: View {
             }
             .scrollContentBackground(.hidden)
         }
+        .havenSettingsForm()
         .navigationTitle("Storage")
         .havenInlineNavTitle()
         .onAppear { startAtLogin = relay.startsAtLogin }
@@ -286,6 +287,7 @@ struct AdvancedStorageView: View {
             }
             .scrollContentBackground(.hidden)
         }
+        .havenSettingsForm()
         .navigationTitle("Advanced")
         .havenInlineNavTitle()
     }

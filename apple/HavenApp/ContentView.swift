@@ -427,6 +427,7 @@ struct IdentityBackupView: View {
                 } header: { Text("Transfer & restore") }
                 footer: { Text("Move an identity to a new device by scanning a QR code, or add/restore one onto this device from a transfer code.") }
             }
+            .formStyle(.grouped)   // grouped sections (not macOS right-aligned columns)
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Identity & backup")

@@ -2726,6 +2726,7 @@ struct NewCircleView: View {
                         }
                     }
                 }
+                .formStyle(.grouped)   // grouped sections (not macOS right-aligned columns)
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("New circle")
