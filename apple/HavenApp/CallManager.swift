@@ -838,6 +838,12 @@ final class CallManager: NSObject, ObservableObject {
         screenShareOn = false
         var changed = false
         for conn in peers.values { if conn.call.stopScreenShare() { changed = true } }
+        // The iOS ReplayKit broadcast suspends the app's camera capture session while it runs; removing
+        // the screen track doesn't bring it back, so the user's video0 track stays live but frame-less
+        // ("can't broadcast video after stopping screen share"). Restart the camera capture if it was on.
+        #if os(iOS)
+        if videoOn { for conn in peers.values { conn.call.startVideo() } }
+        #endif
         if changed { renegotiateAll() }
     }
 
