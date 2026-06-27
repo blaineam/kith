@@ -896,6 +896,12 @@ final class FeedStore: ObservableObject {
         DeviceRosterManager.shared.enable(social: social, accountSeed: seed, accountBundle: bundle, accountHex: AccountStore.currentNodeHex())
     }
 
+    /// Step this device down from being the primary (master-key) device — for when the wrong device
+    /// claimed the role. It then shows the link button so it can be linked to the real primary.
+    func stepDownAsPrimary() {
+        DeviceRosterManager.shared.stepDown()
+    }
+
     /// Revoke a linked device (primary only). It stops being a recipient of future circle key commits.
     func revokeDevice(_ nodeHex: String) {
         guard let seed = AccountStore.storedSeed() else { return }

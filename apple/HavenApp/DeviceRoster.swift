@@ -125,6 +125,16 @@ final class DeviceRosterManager: ObservableObject {
         return resign(social: social, accountSeed: accountSeed)
     }
 
+    /// Step DOWN as primary: forget this device's roster entirely so it stops asserting the master key.
+    /// Needed because both devices share the seed, so the WRONG one (e.g. the Mac) can claim primary and
+    /// get stuck. After this the device shows the link button again and can be linked to the real primary
+    /// (whose higher-version roster then supersedes anything this device published). Reversible.
+    func stepDown() {
+        version = 0; primaryHex = ""; entries = [:]; revoked = []
+        DeviceCredentialStore.clear()   // also drop any stale linked-device credential → clean re-link
+        rebuild(); save()
+    }
+
     /// Re-issue every active device's credential + a fresh signed DeviceList and push to the engine.
     @discardableResult
     private func resign(social: HavenSocial?, accountSeed: Data) -> Bool {
@@ -192,6 +202,7 @@ struct AuthorizedDevicesView: View {
     @ObservedObject private var roster = DeviceRosterManager.shared
     @ObservedObject private var store = FeedStore.shared
     @State private var revokeTarget: RosterDevice?
+    @State private var confirmStepDown = false
 
     private var thisDeviceAuthorized: Bool { DeviceCredentialStore.isAuthorized }
     private var hasSeed: Bool { AccountStore.storedSeed() != nil }
@@ -232,6 +243,15 @@ struct AuthorizedDevicesView: View {
                     } footer: { Text("The primary holds the master key and authorizes/revokes your other devices. Do this on ONE device (e.g. your iPhone).")
                         .fixedSize(horizontal: false, vertical: true) }
                 }
+                // This device IS the primary — let it step down if the wrong device claimed the role.
+                if roster.isEnabled {
+                    Section {
+                        Button(role: .destructive) { confirmStepDown = true } label: {
+                            Label("This isn’t my primary device", systemImage: "arrow.uturn.backward")
+                        }
+                    } footer: { Text("Stop this device acting as the primary (master key). Use it on your iPhone instead, then link this device to it.")
+                        .fixedSize(horizontal: false, vertical: true) }
+                }
                 if !roster.isEnabled {
                     Section {
                         Button { store.requestDeviceEnrollment() } label: {
@@ -257,6 +277,12 @@ struct AuthorizedDevicesView: View {
             Button("Cancel", role: .cancel) { revokeTarget = nil }
         } message: {
             Text("This device will no longer receive anything posted to your circles afterward. To use it again you'd re-link it.")
+        }
+        .confirmationDialog("Stop being the primary device?", isPresented: $confirmStepDown, titleVisibility: .visible) {
+            Button("Step down", role: .destructive) { store.stepDownAsPrimary() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This device will no longer hold the master-key role. Make your iPhone the primary, then link this device to it.")
         }
     }
 }
