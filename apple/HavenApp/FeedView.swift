@@ -872,6 +872,7 @@ final class FeedStore: ObservableObject {
         case 23: handleNearbySelfSync(payload)                  // another of MY devices' self-sync slot (local, relay-free)
         case 24: handleDeviceEnrollmentRequest(payload)         // a device of mine asks to be authorized with its own key
         case 25: handleDeviceEnrollmentGrant(payload)           // the primary granted my device a credential
+        case 26: handleRequestFullState(payload)                // a newly-linked device of mine asks for my full state
         default: break
         }
     }
@@ -921,20 +922,32 @@ final class FeedStore: ObservableObject {
         lpAppend(&grant, Data(hex.utf8))
         lpAppend(&grant, cred)
         nearbyBroadcast(25, grant)
-        refresh()
+        // CRITICAL: linking must SYNC STATE, not just hand over a credential. Push my full account state
+        // (profile photo/bio/link + circles + posts) to the newly-linked device right now.
+        nearbyPeerConnected()
     }
 
-    /// The primary granted my device its credential. Store it. (Engine still runs under the shared seed
-    /// for now — the seed-drop transition that finalizes revocation is a later, guarded step.)
+    /// The primary granted my device its credential. Store it, then ASK the primary to send me its full
+    /// state (so my profile photo/bio/link + posts populate), and refresh. (Engine still runs under the
+    /// shared seed for now — the seed-drop that finalizes revocation is a later, guarded step.)
     private func handleDeviceEnrollmentGrant(_ payload: Data) {
         var off = 0
         guard let targetHexData = lpRead(payload, &off), let cred = lpRead(payload, &off) else { return }
         let targetHex = String(data: targetHexData, encoding: .utf8) ?? ""
         guard targetHex == DeviceKeyStore.deviceNodeHex() else { return }   // not for this device
         DeviceCredentialStore.save(cred)
+        nearbyBroadcast(26, Data(targetHex.utf8))   // "send me your full state"
+        refresh(); requestMissingMedia()
         NotificationManager.shared.notify(title: "Device authorized",
-                                          body: "This device is now a secure linked device.",
+                                          body: "This device is now a secure linked device — syncing your stuff…",
                                           dedupeKey: "device-auth-grant")
+    }
+
+    /// Another of my devices asked for my full state (after being authorized). Push it: profile + circles
+    /// + posts. (Same payload the passive nearby-connect sends, but triggered explicitly by linking.)
+    private func handleRequestFullState(_ payload: Data) {
+        guard AccountStore.storedSeed() != nil else { return }   // only a seed-holder can push the account state
+        nearbyPeerConnected()
     }
 
     /// Share my S3 bucket as the active circle's mailbox — WITHOUT sending the credentials.
