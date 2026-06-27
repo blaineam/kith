@@ -224,15 +224,23 @@ struct AuthorizedDevicesView: View {
                 footer: { Text("Each linked device has its own key, authorized by your master key. Revoke a device to cut it off from everything posted afterward.")
                     .fixedSize(horizontal: false, vertical: true) }
 
+                // Only a device that ISN'T already the primary offers these. The primary (roster on) shows
+                // just the roster + revoke above.
                 if hasSeed && !roster.isEnabled {
                     Section {
-                        Button { store.enableDeviceRoster() } label: { Label("Turn on device management", systemImage: "checkmark.shield") }
-                    } footer: { Text("Registers this device as your primary (master-key) device.") }
+                        Button { store.enableDeviceRoster() } label: { Label("Make this my primary device", systemImage: "checkmark.shield") }
+                    } footer: { Text("The primary holds the master key and authorizes/revokes your other devices. Do this on ONE device (e.g. your iPhone).")
+                        .fixedSize(horizontal: false, vertical: true) }
                 }
-                if !thisDeviceAuthorized {
+                if !roster.isEnabled {
                     Section {
-                        Button { store.requestDeviceEnrollment() } label: { Label("Make this a secure linked device", systemImage: "link.badge.plus") }
-                    } footer: { Text("Asks your primary device (it must be nearby) to authorize this device with its own revocable key.")
+                        Button { store.requestDeviceEnrollment() } label: {
+                            Label(thisDeviceAuthorized ? "Re-sync from my primary device" : "Make this a secure linked device",
+                                  systemImage: thisDeviceAuthorized ? "arrow.triangle.2.circlepath" : "link.badge.plus")
+                        }
+                    } footer: { Text(thisDeviceAuthorized
+                        ? "This device is authorized. Pull your profile + posts from your primary device again (keep it nearby or online)."
+                        : "Asks your primary device (keep it nearby or online) to authorize this device with its own revocable key and send your profile + posts.")
                         .fixedSize(horizontal: false, vertical: true) }
                 }
             }
