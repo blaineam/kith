@@ -316,6 +316,10 @@ struct StoryViewer: View {
         // Stop the previous slide's audio so it never bleeds into the next.
         player?.pause()
         player = nil
+        // Clear a STUCK hold-to-pause: on macOS a tap-to-navigate cancels the 0-distance DragGesture's
+        // onEnded, leaving heldPaused == true, which froze the progress timer (the last/only story then
+        // never auto-advanced or dismissed). Reset it on every load.
+        heldPaused = false
         guard stories.indices.contains(index) else { return }
         let s = stories[index]
         // The author's song plays while you watch; the video is muted under it.

@@ -127,12 +127,10 @@ struct YouView: View {
                 }
             }
             .onPreferenceChange(PostCenterKey.self) { centers in
+                // Same nearest-to-center logic the Circle feed uses, so the You page drives audio too.
                 let target = PlatformScreen.bounds.midY
-                let tolerance = PlatformScreen.bounds.height / 3
-                if let nearest = centers.filter({ abs($0.value - target) < tolerance })
-                    .min(by: { abs($0.value - target) < abs($1.value - target) }) {
-                    AudioCoordinator.shared.center(nearest.key)
-                }
+                let nearest = centers.min { abs($0.value - target) < abs($1.value - target) }
+                AudioCoordinator.shared.center(nearest?.key)
             }
         }
     }

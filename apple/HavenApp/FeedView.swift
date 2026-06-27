@@ -1770,17 +1770,10 @@ struct FeedView: View {
                 }
                 .scrollDismissesKeyboard(.immediately)
                 .onPreferenceChange(PostCenterKey.self) { centers in
-                    // The post nearest the vertical center becomes active — but ONLY when one is genuinely
-                    // near center (within a third of the screen). Without the tolerance, macOS layout
-                    // reported below-fold posts' positions and their song started before they were centered;
-                    // and by only switching when something IS centered, the current post keeps playing until
-                    // a *different* post takes the center (instead of going silent between posts).
+                    // The post nearest the vertical center of the screen becomes active.
                     let target = PlatformScreen.bounds.midY
-                    let tolerance = PlatformScreen.bounds.height / 3
-                    if let nearest = centers.filter({ abs($0.value - target) < tolerance })
-                        .min(by: { abs($0.value - target) < abs($1.value - target) }) {
-                        AudioCoordinator.shared.center(nearest.key)
-                    }
+                    let nearest = centers.min { abs($0.value - target) < abs($1.value - target) }
+                    AudioCoordinator.shared.center(nearest?.key)
                 }
                 }   // ScrollViewReader
                 // Hide the "Share something" composer while a comment field is focused so it
