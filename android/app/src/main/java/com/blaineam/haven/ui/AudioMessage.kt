@@ -47,7 +47,23 @@ import kotlinx.coroutines.delay
 fun AudioPlayerPill(circleId: String, ref: String, modifier: Modifier = Modifier) {
     var playing by remember(ref) { mutableStateOf(false) }
     val player = remember(ref) { MediaPlayer() }
-    DisposableEffect(ref) { onDispose { runCatching { player.release() } } }
+    val context = LocalContext.current
+    val audioManager = remember {
+        context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+    }
+    val attrs = remember {
+        android.media.AudioAttributes.Builder()
+            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }
+    val focusRequest = remember {
+        android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(attrs).build()
+    }
+    DisposableEffect(ref) {
+        onDispose { runCatching { player.release() }; runCatching { audioManager.abandonAudioFocusRequest(focusRequest) } }
+    }
     androidx.compose.foundation.layout.Row(
         modifier.clip(RoundedCornerShape(20.dp)).background(Color.White.copy(alpha = 0.18f))
             .clickable {
@@ -55,8 +71,18 @@ fun AudioPlayerPill(circleId: String, ref: String, modifier: Modifier = Modifier
                 else {
                     val f = LocalMedia.audioFile(circleId, ref)
                     if (f != null) runCatching {
-                        player.reset(); player.setDataSource(f.absolutePath); player.prepare(); player.start()
-                        player.setOnCompletionListener { playing = false }
+                        // Set the media audio attributes + take audio focus BEFORE start, or the clip
+                        // played silently (the Android analog of iOS not activating the audio session).
+                        player.reset()
+                        player.setAudioAttributes(attrs)
+                        player.setDataSource(f.absolutePath)
+                        player.prepare()
+                        audioManager.requestAudioFocus(focusRequest)
+                        player.start()
+                        player.setOnCompletionListener {
+                            playing = false
+                            runCatching { audioManager.abandonAudioFocusRequest(focusRequest) }
+                        }
                         playing = true
                     }
                 }

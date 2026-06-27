@@ -71,6 +71,11 @@ object SelfSyncCoordinator {
      *  key's stamp when its value actually changes — otherwise two devices would ping-pong). */
     private val baseFile: File get() = File(appContext.filesDir, "haven-selfsync.bin")
 
+    /** Erase this device's self-sync base — on factory reset or when adopting a DIFFERENT identity, so a
+     *  freshly-restored device never diffs its empty engine against a STALE base and tombstones the whole
+     *  account (the data-loss bug). */
+    fun reset() { runCatching { baseFile.delete() } }
+
     /**
      * A stable **per-device** id. All of a user's devices share the account seed (same node id), so
      * each physical device needs its own id to own a sync slot and to break LWW ties. Random 32
@@ -161,9 +166,9 @@ object SelfSyncCoordinator {
             decodeContact(e.value)?.let { wantContacts[it.idHex] = it }
         }
         for (c in wantContacts.values) HavenNet.selfSyncUpsertContact(c)
-        for (c in HavenNet.selfSyncContactsSnapshot()) {
-            if (!wantContacts.containsKey(c.idHex)) HavenNet.selfSyncRemoveContact(c.idHex)
-        }
+        // ADDITIVE ONLY — never remove a contact a peer simply doesn't list. Absence-based removal made a
+        // freshly-restored (empty) device wipe the primary's contacts/circles/posts. (Same data-loss bug
+        // fixed on iOS.) Real deletions propagate as explicit, intentional records, not from absence.
 
         // Blocked list: reconcile both directions.
         val wantBlocked = HashSet<String>()
@@ -174,44 +179,26 @@ object SelfSyncCoordinator {
         for (hex in wantBlocked - haveBlocked) HavenNet.selfSyncSetBlocked(hex, true)
         for (hex in haveBlocked - wantBlocked) HavenNet.selfSyncSetBlocked(hex, false)
 
-        // Circles: reconcile each synced circle — create it, register every member's bundle (so
-        // this device can seal to them), record its relay mailbox(es), and PRUNE locals that the
-        // converged record no longer holds (the decoded member set is AUTHORITATIVE). A circle that
-        // a peer device LEFT is tombstoned out of the converged state, so we leave it here too.
+        // Circles: reconcile each synced circle — create it + register every member's bundle so this
+        // device can seal to them, and record its relay mailbox(es). ADDITIVE in v1 (no absence-based
+        // leave/prune — see the strictly-additive note below).
         if (social != null) {
-            // Synced circle ids present in the converged state (the rest are tombstoned → leave).
-            val syncedCircleIds = HashSet<String>()
             val existing = runCatching { social.circles() }.getOrDefault(emptyList())
             for (e in live) if (e.key.startsWith("circle:")) {
                 val id = e.key.removePrefix("circle:")
                 val cs = decodeCircleSync(e.value) ?: continue
-                syncedCircleIds.add(id)
                 runCatching { social.createCircle(id, cs.name) }   // no-op if it already exists
                 val cur = existing.firstOrNull { it.id == id }
                 if (cur != null && cur.name != cs.name) runCatching { social.renameCircle(id, cs.name) }
 
-                // Add every synced member's bundle (addContactBundle returns the member's node hex,
-                // and is a no-op if already present) — collect the authoritative node-id set.
-                val wantMembers = HashSet<String>()
+                // STRICTLY ADDITIVE: register every synced member's bundle (no-op if already present).
+                // We do NOT remove members or leave circles based on a peer's absence — that is exactly
+                // what wiped accounts when a freshly-restored (empty) device synced. Explicit circle-leave
+                // / member-removal must be driven by an intentional action, not inferred from absence.
                 for (bundle in cs.memberBundles) {
-                    val hex = runCatching { social.addContactBundle(id, bundle) }.getOrNull()
-                        ?: nodeHex(bundle)   // fall back to the bundle's first-32-bytes node id
-                    if (hex.length == 64) wantMembers.add(hex.lowercase())
-                }
-                // Remove members present locally but NOT in the synced set (membership propagation).
-                val haveMembers = runCatching { social.contactNodeIds(id) }.getOrDefault(emptyList())
-                for (nodeHex in haveMembers) {
-                    if (nodeHex.lowercase() !in wantMembers) {
-                        runCatching { social.removeFromCircle(id, nodeHex) }
-                    }
+                    runCatching { social.addContactBundle(id, bundle) }
                 }
                 for (node in cs.relays) HavenNet.selfSyncAddRelay(id, node)
-            }
-            // Leave circles tombstoned on another device (present locally, absent from the converged
-            // state). DM circles + the default circle are never auto-left.
-            for (ci in existing) {
-                if (ci.id == DEFAULT_CIRCLE || ci.id.startsWith("dm:")) continue
-                if (ci.id !in syncedCircleIds) runCatching { social.leaveCircle(ci.id) }
             }
         }
     }
@@ -298,11 +285,17 @@ object SelfSyncCoordinator {
                 runCatching { base.set(key, value, now, deviceId) }
             }
         }
-        // Detect local removals in dynamic namespaces (a contact deleted, a peer unblocked, a circle
-        // left) and tombstone them so the removal propagates instead of a peer device re-adding them.
-        for (e in base.entries()) {
-            if (dynamicPrefixes.any { e.key.startsWith(it) } && !local.containsKey(e.key)) {
-                runCatching { base.remove(e.key, now, deviceId) }
+        // Detect local removals in dynamic namespaces and tombstone them so the removal propagates —
+        // BUT NOT when the engine looks freshly-empty (no circles locally while the base still has
+        // circles). That signature is a just-restored / unready device, and tombstoning there is exactly
+        // what wiped accounts. In that state we only ADD, never remove.
+        val localHasCircle = local.keys.any { it.startsWith("circle:") }
+        val baseHasCircle = base.entries().any { it.key.startsWith("circle:") }
+        if (localHasCircle || !baseHasCircle) {
+            for (e in base.entries()) {
+                if (dynamicPrefixes.any { e.key.startsWith(it) } && !local.containsKey(e.key)) {
+                    runCatching { base.remove(e.key, now, deviceId) }
+                }
             }
         }
 

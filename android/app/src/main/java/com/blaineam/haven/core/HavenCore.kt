@@ -49,6 +49,9 @@ class HavenCore private constructor(
         val s = runCatching { Base64.decode(b64, Base64.NO_WRAP) }.getOrNull() ?: return false
         if (s.size != 32) return false
         prefs.edit().putString(KEY_SEED, Base64.encodeToString(s, Base64.NO_WRAP)).apply()
+        // Adopting a DIFFERENT identity: clear the self-sync base so this device doesn't diff its (about
+        // to be reloaded) empty engine against the old identity's base and tombstone the new account.
+        runCatching { SelfSyncCoordinator.reset() }
         return true
     }
 

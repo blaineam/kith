@@ -182,12 +182,9 @@ pub fn apply_local(
             }
         }
     }
-    // Drop locals no longer wanted.
-    let before = prefs.contacts.len();
-    prefs.contacts.retain(|c| want_contacts.contains_key(&c.id_hex));
-    if prefs.contacts.len() != before {
-        changed = true;
-    }
+    // ADDITIVE ONLY — never drop a contact a peer simply doesn't list. Absence-based removal made a
+    // freshly-restored (empty) device wipe the primary's contacts/circles/posts (the iOS/Android
+    // data-loss bug). Real deletions must propagate as explicit records, not be inferred from absence.
 
     // Blocked list: reconcile both directions.
     let mut want_blocked: Vec<String> = entries
@@ -210,19 +207,14 @@ pub fn apply_local(
         changed = true;
     }
 
-    // Circles: reconstruct each synced circle — create it, register every member's bundle (so
-    // this device can seal to them), and record its relay mailbox(es). The synced record is the
-    // AUTHORITATIVE member set, so we also remove locally-present members that were dropped on
-    // another device, and `leave_circle` for circles tombstoned (LEFT) elsewhere.
+    // Circles: reconstruct each synced circle — create it + register every member's bundle so this
+    // device can seal to them, and record its relay mailbox(es). STRICTLY ADDITIVE (no absence-based
+    // member-prune or circle-leave — that wiped accounts on a freshly-restored device).
     let existing: Vec<(String, String)> =
         social.circles().into_iter().map(|c| (c.id, c.name)).collect();
-    // The set of circle ids the converged state still has live (decoded successfully).
-    let mut synced_circle_ids: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
     for (k, v) in entries {
         let Some(id) = k.strip_prefix("circle:") else { continue };
         let Some(cs) = decode_circle_sync(v.clone()) else { continue };
-        synced_circle_ids.insert(id.to_string());
         match existing.iter().find(|(cid, _)| cid == id) {
             None => {
                 social.create_circle(id.to_string(), cs.name.clone());
@@ -235,25 +227,10 @@ pub fn apply_local(
                 }
             }
         }
-        // Register every synced member bundle so this device can seal to them.
+        // Register every synced member bundle so this device can seal to them. ADDITIVE — we never
+        // remove a member just because a peer's record doesn't list them.
         for bundle in &cs.member_bundles {
             let _ = social.add_contact_bundle(id.to_string(), bundle.clone());
-        }
-        // Remove members present locally but NOT in the authoritative synced set.
-        let want_node_hex: std::collections::BTreeSet<String> = cs
-            .member_bundles
-            .iter()
-            .filter_map(|b| {
-                p2pcore::identity::HavenId::from_bytes(b)
-                    .ok()
-                    .map(|id| hex::encode(id.node_id_bytes()))
-            })
-            .collect();
-        for node_hex in social.contact_node_ids(id.to_string()) {
-            if !want_node_hex.contains(&node_hex) {
-                social.remove_from_circle(id.to_string(), node_hex);
-                changed = true;
-            }
         }
         if !cs.relays.is_empty() {
             let list = prefs.relays.entry(id.to_string()).or_default();
@@ -265,18 +242,9 @@ pub fn apply_local(
             }
         }
     }
-    // Tombstoned circles: a circle LEFT on another device is absent from the synced set but still
-    // exists locally — leave it here too so the removal converges. (Skip the default + DM circles,
-    // which are never synced as leave-able and would only churn.)
-    for (cid, _) in &existing {
-        if cid == "default" || cid.starts_with("dm:") {
-            continue;
-        }
-        if !synced_circle_ids.contains(cid) {
-            social.leave_circle(cid.clone());
-            changed = true;
-        }
-    }
+    // (No absence-based circle leaving — a circle missing from a peer's slot is NOT a signal to leave
+    // it; that destroyed accounts on a freshly-restored device. Explicit leave is intentional only.)
+    let _ = &existing;
 
     changed
 }

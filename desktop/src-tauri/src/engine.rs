@@ -237,6 +237,9 @@ impl Engine {
         }
         if let Some(seed) = store::load_identity_seed(node_hex)? {
             store::save_seed(&seed)?;
+            // Switching to a DIFFERENT identity: clear the self-sync base so the rebuilt engine doesn't
+            // diff the new (empty-until-synced) account against the old identity's base and tombstone it.
+            store::remove_if_exists(&self.paths.selfsync_state_file());
         }
         ids.save(&self.paths)?;
         Ok(())
@@ -1595,14 +1598,20 @@ impl Engine {
                 base.set(key, value.clone(), stamp);
             }
         }
-        // Detect local removals in dynamic namespaces (a contact deleted, a peer unblocked) and
-        // tombstone them so the removal propagates instead of a peer device re-adding them.
-        let present_keys: Vec<String> = base.entries().map(|(k, _)| k.to_string()).collect();
-        for key in present_keys {
-            if crate::selfsync::DYNAMIC_PREFIXES.iter().any(|p| key.starts_with(p))
-                && !local.contains_key(&key)
-            {
-                base.remove(&key, stamp);
+        // Detect local removals in dynamic namespaces and tombstone them — BUT NOT when the engine
+        // looks freshly-empty (no circles locally while the base still has circles). That signature is
+        // a just-restored / unready device, and tombstoning there is exactly what wiped accounts; in
+        // that state we only ADD, never remove.
+        let local_has_circle = local.keys().any(|k| k.starts_with("circle:"));
+        let base_has_circle = base.entries().any(|(k, _)| k.starts_with("circle:"));
+        if local_has_circle || !base_has_circle {
+            let present_keys: Vec<String> = base.entries().map(|(k, _)| k.to_string()).collect();
+            for key in present_keys {
+                if crate::selfsync::DYNAMIC_PREFIXES.iter().any(|p| key.starts_with(p))
+                    && !local.contains_key(&key)
+                {
+                    base.remove(&key, stamp);
+                }
             }
         }
 
@@ -1723,6 +1732,9 @@ impl Engine {
         }
         self.media.clear();
         store::remove_if_exists(&self.paths.state_file());
+        // Clear the self-sync base too, so adopting a new identity doesn't diff an empty engine against
+        // a stale base and tombstone the account (the data-loss bug).
+        store::remove_if_exists(&self.paths.selfsync_state_file());
         store::delete_s3_secret();
         let _ = store::delete_seed();
         self.emit_changed();
