@@ -347,22 +347,38 @@ enum PKCE {
 /// Minimal Keychain string store for storage credentials/tokens.
 enum Keychain {
     private static let service = "com.blaineam.kith.storage"
+    /// Data-protection keychain (entitlement-governed, no repeat macOS prompts) — iOS no-op. See
+    /// AccountStore for the same pattern + migration rationale.
+    private static func base(_ key: String, dataProtection: Bool = true) -> [String: Any] {
+        var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                kSecAttrService as String: service, kSecAttrAccount as String: key]
+        if dataProtection { q[kSecUseDataProtectionKeychain as String] = true }
+        return q
+    }
     static func set(_ value: String, for key: String) {
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service, kSecAttrAccount as String: key]
-        SecItemDelete(base as CFDictionary)
+        for dp in [true, false] { SecItemDelete(base(key, dataProtection: dp) as CFDictionary) }
         guard !value.isEmpty else { return }
-        var add = base
+        var add = base(key)
         add[kSecValueData as String] = Data(value.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }
     static func get(_ key: String) -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                kSecAttrService as String: service, kSecAttrAccount as String: key,
-                                kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess, let d = item as? Data else { return nil }
+        func read(dataProtection: Bool) -> Data? {
+            var q = base(key, dataProtection: dataProtection)
+            q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+            var item: CFTypeRef?
+            return SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess ? item as? Data : nil
+        }
+        if let d = read(dataProtection: true) { return String(data: d, encoding: .utf8) }
+        // Legacy keychain fallback → migrate forward (drop legacy only after the DP write lands).
+        guard let d = read(dataProtection: false) else { return nil }
+        var add = base(key)
+        add[kSecValueData as String] = d
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        if SecItemAdd(add as CFDictionary, nil) == errSecSuccess {
+            SecItemDelete(base(key, dataProtection: false) as CFDictionary)
+        }
         return String(data: d, encoding: .utf8)
     }
 }
