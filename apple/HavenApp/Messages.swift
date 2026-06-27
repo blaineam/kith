@@ -43,7 +43,7 @@ struct MessagesView: View {
         // on the Messages list, not the picker.
         .navigationDestination(item: $pushedDM) { id in DMThreadView(circleId: id) }
         .sheet(isPresented: $showPicker, onDismiss: { if let id = newDM { newDM = nil; pushedDM = id } }) {
-            DMContactPicker { id in newDM = id; showPicker = false }
+            DMContactPicker { id in newDM = id; showPicker = false }.macSheetFrame()
         }
         .onAppear {
             // Screenshot harness: open the first DM thread for its hero shot.
@@ -157,6 +157,8 @@ struct DMThreadView: View {
                  : (p.lastSeen.map { "Last seen \(relativeTimeShort(UInt64($0.timeIntervalSince1970 * 1000))) ago" } ?? "Offline"))
                 .font(.caption2).foregroundStyle(p.online ? Color.green : Color.secondary)
         }
+        .padding(.horizontal, 10)   // keep the text off the pill edges (was bleeding outside the shape)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     var body: some View {
@@ -204,7 +206,7 @@ struct DMThreadView: View {
         .onDisappear { MusicPlayback.shared.stop() }   // leaving the thread silences any DM song
         .havenFullScreenCover(item: $zoom) { t in MediaZoomViewer(refs: t.refs, index: t.index) }
         .sheet(item: $reactTarget) { t in
-            ReactionPicker { e in store.reactMessage(in: circleId, t.id, e) }
+            ReactionPicker { e in store.reactMessage(in: circleId, t.id, e) }.macSheetFrame()
         }
     }
 
@@ -411,9 +413,9 @@ struct DMThreadView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(.ultraThinMaterial)
-        .sheet(isPresented: $showMedia) { MediaPicker { refs in attachedMedia.append(contentsOf: refs) } }
-        .sheet(isPresented: $showSongs) { SongPicker { t in attachedTrack = t } }
-        .sheet(isPresented: $showAudio) { AudioRecorderView { ref in attachedMedia.append(ref) } }
+        .sheet(isPresented: $showMedia) { MediaPicker { refs in attachedMedia.append(contentsOf: refs) }.macSheetFrame() }
+        .sheet(isPresented: $showSongs) { SongPicker { t in attachedTrack = t }.macSheetFrame() }
+        .sheet(isPresented: $showAudio) { AudioRecorderView { ref in attachedMedia.append(ref) }.macSheetFrame() }
     }
 
     private func send() {

@@ -1495,7 +1495,7 @@ struct CallOverlay: View {
             }
         }
         .padding(.horizontal, 12)
-        .sheet(isPresented: $showAddPicker) { AddToCallPicker() }
+        .sheet(isPresented: $showAddPicker) { AddToCallPicker().macSheetFrame() }
     }
 
     #if targetEnvironment(macCatalyst)

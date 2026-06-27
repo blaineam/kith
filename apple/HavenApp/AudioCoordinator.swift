@@ -2,6 +2,9 @@ import SwiftUI
 import AVFoundation
 import MediaPlayer
 import MusicKit
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Coordinates a post's audio: the attached song plays while its video stays muted.
 /// When the viewer unmutes the video, the music fades down as the video fades up — a
@@ -10,6 +13,20 @@ import MusicKit
 @MainActor
 final class AudioCoordinator: ObservableObject {
     static let shared = AudioCoordinator()
+
+    private init() {
+        // macOS has no scenePhase .background for a normal window; the reliable "user switched away from
+        // Haven" signal is NSApplication.didResignActive (and it does NOT fire for in-app sheets/panels,
+        // so it won't stop music in normal use). These observers live for the app's lifetime (singleton).
+        #if os(macOS)
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AudioCoordinator.shared.pauseForBackground() }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AudioCoordinator.shared.appBecameActive() }
+        }
+        #endif
+    }
 
     @Published private(set) var activePostId: String?
     @Published private(set) var videoUnmuted = false

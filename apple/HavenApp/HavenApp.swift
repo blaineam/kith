@@ -150,17 +150,15 @@ struct HavenApp: App {
                 // Back to the foreground — if we're sitting on a locked circle, prompt at once.
                 let cid = FeedStore.shared.activeCircleId
                 if BiometricGate.shared.isLocked(cid) { BiometricGate.shared.unlock(cid) }
-            case .inactive, .background:
-                // Pause post music + BLOCK auto-restart the moment we're not the active app. Covers iOS
-                // backgrounding AND macOS app-switch (which reports .inactive, not .background) — that's
-                // why the song kept kicking on in the background.
+            case .background:
+                // Only true backgrounding pauses + blocks audio. (.inactive is too twitchy on macOS — it
+                // fires whenever the window loses key focus, which was stopping music in normal use. macOS
+                // app-switch is handled by NSApplication.didResignActive in AudioCoordinator instead.)
                 AudioCoordinator.shared.pauseForBackground()
-                if phase == .background {
-                    NotificationManager.shared.scheduleRefresh()
-                    BiometricGate.shared.relockAll()   // re-lock biometric circles on the way out
-                    Task { await BackgroundUploader.shared.flush() }   // finish pending mailbox uploads
-                }
-            @unknown default: break
+                NotificationManager.shared.scheduleRefresh()
+                BiometricGate.shared.relockAll()   // re-lock biometric circles on the way out
+                Task { await BackgroundUploader.shared.flush() }   // finish pending mailbox uploads
+            default: break
             }
         }
 

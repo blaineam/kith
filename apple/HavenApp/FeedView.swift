@@ -1595,7 +1595,7 @@ final class FeedStore: ObservableObject {
 }
 
 /// Delivery state of a circle's authored content (the composer status light).
-enum PostSyncStatus {
+enum PostSyncStatus: Equatable {
     case synced, pending, stuck
     var color: Color { switch self { case .synced: return .green; case .pending: return .yellow; case .stuck: return .red } }
     var label: String {
@@ -1615,14 +1615,19 @@ struct SyncStatusBadge: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 2.5)) { _ in
             let s = store.syncStatus(circleId: circleId)
-            HStack(spacing: 5) {
-                Circle().fill(s.color).frame(width: 7, height: 7)
-                    .shadow(color: s.color.opacity(0.6), radius: 2)
-                Text(s.label).font(.caption2).foregroundStyle(.secondary)
+            // Only surface the pill when there's something to know — "Syncing…" or "device-only". When
+            // everything's synced it collapses to nothing so it doesn't pad out the composer.
+            if s != .synced {
+                HStack(spacing: 5) {
+                    Circle().fill(s.color).frame(width: 7, height: 7)
+                        .shadow(color: s.color.opacity(0.6), radius: 2)
+                    Text(s.label).font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(.ultraThinMaterial, in: Capsule())
+                .help("Yellow: still syncing. Red: only on this device. (Hidden once it's safely synced.)")
+                .transition(.opacity)
             }
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(.ultraThinMaterial, in: Capsule())
-            .help("Green: safely in your relay or delivered to a member. Yellow: still syncing. Red: only on this device.")
         }
     }
 }
@@ -1811,7 +1816,7 @@ struct FeedView: View {
             }
             #if os(macOS)
             .sheet(isPresented: $showFilePicker) {
-                FilePicker { refs in attachedMedia.append(contentsOf: refs) }
+                FilePicker { refs in attachedMedia.append(contentsOf: refs) }.macSheetFrame()
             }
             #endif
             .sheet(isPresented: $showLocationPicker) {
@@ -1821,10 +1826,10 @@ struct FeedView: View {
                 CameraView { refs in attachedMedia.append(contentsOf: refs) }.ignoresSafeArea()
             }
             .sheet(isPresented: $showSongPicker) {
-                SongPicker { track in attachedTrack = track }
+                SongPicker { track in attachedTrack = track }.macSheetFrame()
             }
             .sheet(isPresented: $showSchedule) {
-                SchedulePicker(circleId: store.activeCircleId, isDM: false) { date in scheduleCurrentPost(at: date) }
+                SchedulePicker(circleId: store.activeCircleId, isDM: false) { date in scheduleCurrentPost(at: date) }.macSheetFrame()
             }
             .fileImporter(isPresented: $showFilesImporter,
                           allowedContentTypes: [.image, .movie], allowsMultipleSelection: true) { result in
@@ -2386,7 +2391,7 @@ struct PostCard: View {
         .onDisappear { teardownPlayers() }
         .onChange(of: audio.centeredPostId) { syncPlayback() }
         .onChange(of: currentPage) { if isActive { playVisibleVideo() } }
-        .sheet(isPresented: $showEdit) { EditPostSheet(item: item) }
+        .sheet(isPresented: $showEdit) { EditPostSheet(item: item).macSheetFrame() }
         .havenFullScreenCover(item: $zoomTarget) { t in MediaZoomViewer(refs: t.refs, index: t.index) }
         .alert("Edit comment", isPresented: Binding(get: { editCommentId != nil }, set: { if !$0 { editCommentId = nil } })) {
             TextField("Comment", text: $editCommentText)
@@ -2707,10 +2712,10 @@ struct PostCard: View {
         }
         .animation(HavenTheme.bouncy, value: item.reactions.count)
         .sheet(isPresented: $showReactionPicker) {
-            ReactionPicker { e in onReact(e) }
+            ReactionPicker { e in onReact(e) }.macSheetFrame()
         }
         .sheet(isPresented: $showReactionDetail) {
-            ReactionDetailView(reactions: item.reactions, onUnreact: { e in onUnreact(e) })
+            ReactionDetailView(reactions: item.reactions, onUnreact: { e in onUnreact(e) }).macSheetFrame()
         }
     }
 
@@ -2732,9 +2737,10 @@ struct PostCard: View {
         .sheet(isPresented: $showAllComments) {
             PostCommentsSheet(item: item, friendName: friendName,
                               onReact: onReact, onUnreact: onUnreact, onComment: onComment, onEdit: onEdit, onUnsend: onUnsend)
+                .macSheetFrame()
         }
         .sheet(item: $commentReactTarget) { t in
-            ReactionPicker { e in feed.react(t.id, e) }
+            ReactionPicker { e in feed.react(t.id, e) }.macSheetFrame()
         }
     }
 
@@ -2885,8 +2891,8 @@ struct PostCard: View {
                 .buttonStyle(PressableStyle())
             }
         }
-        .sheet(isPresented: $showCommentMediaPicker) { MediaPicker { refs in commentMedia.append(contentsOf: refs) } }
-        .sheet(isPresented: $showAudioRecorder) { AudioRecorderView { ref in commentMedia.append(ref) } }
+        .sheet(isPresented: $showCommentMediaPicker) { MediaPicker { refs in commentMedia.append(contentsOf: refs) }.macSheetFrame() }
+        .sheet(isPresented: $showAudioRecorder) { AudioRecorderView { ref in commentMedia.append(ref) }.macSheetFrame() }
     }
 
     private func commentAttachChip(_ ref: String) -> some View {

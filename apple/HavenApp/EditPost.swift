@@ -94,8 +94,8 @@ struct EditPostSheet: View {
                     .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty && media.isEmpty)
                 }
             }
-            .sheet(isPresented: $showMedia) { MediaPicker { refs in media.append(contentsOf: refs) } }
-            .sheet(isPresented: $showSongs) { SongPicker { t in track = t } }
+            .sheet(isPresented: $showMedia) { MediaPicker { refs in media.append(contentsOf: refs) }.macSheetFrame() }
+            .sheet(isPresented: $showSongs) { SongPicker { t in track = t }.macSheetFrame() }
         }
     }
 }

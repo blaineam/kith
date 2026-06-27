@@ -172,38 +172,37 @@ struct InAppBrowserView: View {
                 }
                 .tint(HavenTheme.pink)
             #else
-            WebView(url: url, model: model)
-                // WKWebView reports no intrinsic size, and a macOS .sheet sizes to its content's ideal
-                // size — so without an explicit frame the sheet collapsed to just the toolbar height (the
-                // page squished to a sliver). Give it a real browser-sized frame.
-                .frame(minWidth: 820, idealWidth: 1040, minHeight: 600, idealHeight: 740)
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        Button { dismiss() } label: { Image(systemName: "xmark") }
+            // macOS sheet toolbars rendered unreliably here (no Done, no address), so use an explicit
+            // header bar instead: back/forward/reload on the left, a non-editable address pill in the
+            // middle (shows the host like iOS), and open-in-Safari/share + a clear Done on the right.
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Button { model.goBack() } label: { Image(systemName: "chevron.left") }.disabled(!model.canGoBack)
+                    Button { model.goForward() } label: { Image(systemName: "chevron.right") }.disabled(!model.canGoForward)
+                    if model.isLoading { ProgressView().controlSize(.small) }
+                    else { Button { model.reload() } label: { Image(systemName: "arrow.clockwise") } }
+                    HStack(spacing: 6) {
+                        Image(systemName: model.currentHost.isEmpty ? "globe" : "lock.fill")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text(model.currentHost.isEmpty ? (url.host ?? url.absoluteString) : model.currentHost)
+                            .font(.subheadline.weight(.medium)).lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)   // selectable but not editable — just shows where you are
                     }
-                    ToolbarItem(placement: .principal) {
-                        HStack(spacing: 6) {
-                            Image(systemName: model.currentHost.isEmpty ? "globe" : "lock.fill")
-                                .font(.caption2).foregroundStyle(.secondary)
-                            Text(model.currentHost.isEmpty ? url.host ?? url.absoluteString : model.currentHost)
-                                .font(.subheadline.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color(.secondarySystemFill), in: Capsule())
-                    }
-                    ToolbarItemGroup {
-                        Button { model.goBack() } label: { Image(systemName: "chevron.left") }
-                            .disabled(!model.canGoBack)
-                        Button { model.goForward() } label: { Image(systemName: "chevron.right") }
-                            .disabled(!model.canGoForward)
-                        if model.isLoading { ProgressView() } else {
-                            Button { model.reload() } label: { Image(systemName: "arrow.clockwise") }
-                        }
-                        Button { openURL(url) } label: { Image(systemName: "safari") }
-                        ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
-                    }
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(.secondarySystemFill), in: Capsule())
+                    Button { openURL(url) } label: { Image(systemName: "safari") }
+                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+                    Button("Done") { dismiss() }.fontWeight(.semibold).keyboardShortcut(.cancelAction)
                 }
-                .tint(HavenTheme.pink)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .buttonStyle(.borderless)
+                Divider()
+                WebView(url: url, model: model)
+            }
+            // WKWebView reports no intrinsic size, so without a frame the sheet collapses to a sliver.
+            .frame(minWidth: 820, idealWidth: 1040, minHeight: 600, idealHeight: 740)
+            .tint(HavenTheme.pink)
             #endif
         }
     }

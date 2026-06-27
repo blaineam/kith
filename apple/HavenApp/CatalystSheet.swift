@@ -32,4 +32,15 @@ private struct MacSheetClose: ViewModifier {
 extension View {
     /// Add a Catalyst-only top-corner close button to a sheet's content.
     func macSheetClose() -> some View { modifier(MacSheetClose()) }
+
+    /// Give a macOS/Catalyst sheet a usable frame WITHOUT adding a Done button — for sheet content that
+    /// already has its own toolbar (Cancel/Done/Start). Without a frame these collapse to a sliver (the
+    /// "New message" / "Who reacted" bug). iOS is untouched.
+    func macSheetFrame() -> some View {
+        #if os(macOS) || targetEnvironment(macCatalyst)
+        return self.frame(minWidth: 480, idealWidth: 560, minHeight: 580, idealHeight: 700)
+        #else
+        return self
+        #endif
+    }
 }

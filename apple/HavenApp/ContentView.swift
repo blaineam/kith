@@ -54,14 +54,14 @@ struct YouView: View {
                 }
             }
             .sheet(isPresented: $showConnect) {
-                ConnectView(account: account, contacts: contacts)
+                ConnectView(account: account, contacts: contacts).macSheetFrame()
             }
-            .sheet(isPresented: $showEditProfile) { EditProfileSheet() }   // has its own toolbar Done
+            .sheet(isPresented: $showEditProfile) { EditProfileSheet().macSheetFrame() }   // has its own toolbar Done
             .havenFullScreenCover(isPresented: $showStories) {
                 StoryViewer(stories: feed.myStories, index: storyIndex, friendName: "Friend")
             }
             .sheet(isPresented: $showIdentity) {
-                NavigationStack { IdentityBackupView(account: account, accountStore: accountStore) }
+                NavigationStack { IdentityBackupView(account: account, accountStore: accountStore) }.macSheetFrame()
             }
             .onAppear {
                 // Screenshot harness: open the identity switcher for its hero shot.
