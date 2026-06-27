@@ -12,7 +12,6 @@ use haven_net::Node;
 use haven_net::blobstore::{BlobClient, BlobServer};
 use std::path::PathBuf;
 use p2pcore::crypto::{decapsulate, encapsulate_to, open, seal, Encapsulation};
-use p2pcore::device::{DeviceCredential, DeviceList};
 use p2pcore::identity::{Identity, HavenId};
 use p2pcore::link::HavenLink;
 use p2pcore::social::{
@@ -121,30 +120,6 @@ impl Account {
     /// The full public identity bundle (for publishing to discovery).
     pub fn public_bundle(&self) -> Vec<u8> {
         self.inner.public().to_bytes()
-    }
-
-    // ---- Multi-device (D16): delegated, revocable device authorization ----------------------------
-    // Linking a device does NOT copy the master seed. The new device makes its OWN keypair; the primary
-    // account *signs* a credential vouching for it, and maintains a signed, versioned device roster.
-    // Revoking = move the device into `revoked` + bump the version. Contacts pin the account key and
-    // honor the highest-version roster, so a relay can't inject a rogue device or hide a revocation.
-
-    /// Issue a signed credential: THIS account vouches for `device_bundle` (a new device's public
-    /// bundle). Proves the device is authorized by us; a contact who pinned our key can verify it.
-    pub fn issue_device_credential(&self, device_bundle: Vec<u8>, name: String, created_at: u64)
-        -> Result<Vec<u8>, HavenError> {
-        let device = HavenId::from_bytes(&device_bundle)
-            .map_err(|_| HavenError::Invalid { msg: "bad device bundle".into() })?;
-        Ok(DeviceCredential::issue(&self.inner, &device, &name, created_at).to_bytes())
-    }
-
-    /// Sign this account's device roster (active + revoked device node-ids, as hex). Bump `version` on
-    /// every change — that's also how you REVOKE: move the id to `revoked` and bump the version.
-    pub fn sign_device_list(&self, version: u64, updated_at: u64, devices: Vec<String>, revoked: Vec<String>)
-        -> Result<Vec<u8>, HavenError> {
-        let dev = hexvec32(&devices).ok_or_else(|| HavenError::Invalid { msg: "bad device id".into() })?;
-        let rev = hexvec32(&revoked).ok_or_else(|| HavenError::Invalid { msg: "bad revoked id".into() })?;
-        Ok(DeviceList::signed(&self.inner, version, updated_at, dev, rev).to_bytes())
     }
 
     /// Sign a push-registration challenge so the blind push worker can verify a registration really
@@ -275,60 +250,6 @@ pub fn open_sealed_with_seed(seed: Vec<u8>, sealed: Vec<u8>) -> Option<Vec<u8>> 
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Decode a 64-char hex string to 32 bytes (a device/account node id), or None if malformed.
-fn hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 { return None; }
-    let mut out = [0u8; 32];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
-    }
-    Some(out)
-}
-
-fn hexvec32(v: &[String]) -> Option<Vec<[u8; 32]>> {
-    v.iter().map(|s| hex32(s)).collect()
-}
-
-// ---- Multi-device verification (D16): anyone can check a device's authorization ------------------
-
-/// Verify a device credential against a PINNED account bundle. Returns the device's node-id hex iff the
-/// account's hybrid signature checks out (else None: forgery, wrong account, or tamper). The verifier
-/// is a contact who pinned the account key at first contact — no relay/third party can forge this.
-#[uniffi::export]
-pub fn verify_device_credential(cred: Vec<u8>, account_bundle: Vec<u8>) -> Option<String> {
-    let cred = DeviceCredential::from_bytes(&cred).ok()?;
-    let acct = HavenId::from_bytes(&account_bundle).ok()?;
-    cred.verify(&acct).ok()?;
-    Some(hex(&cred.device_id()))
-}
-
-/// Verify a signed device roster against a pinned account bundle (id match + hybrid signature).
-#[uniffi::export]
-pub fn verify_device_list(list: Vec<u8>, account_bundle: Vec<u8>) -> bool {
-    match (DeviceList::from_bytes(&list), HavenId::from_bytes(&account_bundle)) {
-        (Ok(l), Ok(a)) => l.verify(&a).is_ok(),
-        _ => false,
-    }
-}
-
-/// Is `device_id_hex` currently authorized by this signed list (present and not revoked)? Caller must
-/// have already `verify_device_list`-ed it against the pinned account key.
-#[uniffi::export]
-pub fn device_list_is_authorized(list: Vec<u8>, device_id_hex: String) -> bool {
-    let Some(id) = hex32(&device_id_hex) else { return false; };
-    DeviceList::from_bytes(&list).map(|l| l.is_authorized(&id)).unwrap_or(false)
-}
-
-/// Merge rule for two signed rosters of the SAME account: the higher `version` wins (rollback-defended).
-/// Returns whichever encoded list is newer; both must be `verify_device_list`-ed by the caller first.
-#[uniffi::export]
-pub fn device_list_newer(a: Vec<u8>, b: Vec<u8>) -> Vec<u8> {
-    match (DeviceList::from_bytes(&a), DeviceList::from_bytes(&b)) {
-        (Ok(la), Ok(lb)) if lb.account_id == la.account_id && lb.version > la.version => b,
-        _ => a,
-    }
 }
 
 /// An opened, sender-authenticated push notification (audit H2).
