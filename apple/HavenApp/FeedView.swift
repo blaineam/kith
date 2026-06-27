@@ -1570,7 +1570,7 @@ struct FeedView: View {
                 CameraView { refs in attachedMedia.append(contentsOf: refs) }.ignoresSafeArea()
             }
             .sheet(isPresented: $showSongPicker) {
-                SongPicker { track in attachedTrack = track }.macSheetClose()
+                SongPicker { track in attachedTrack = track }
             }
             .sheet(isPresented: $showSchedule) {
                 SchedulePicker(circleId: store.activeCircleId, isDM: false) { date in scheduleCurrentPost(at: date) }
@@ -1750,6 +1750,10 @@ struct FeedView: View {
                     }
                     .accessibilityIdentifier("attachMenu")
                     .menuIndicator(.hidden)   // no macOS disclosure chevron next to the + button
+                    #if os(macOS)
+                    .menuStyle(.borderlessButton)   // drop the rectangular button chrome — just the circle
+                    .fixedSize()
+                    #endif
 
                     TextField("Share something…", text: $compose, axis: .vertical)
                         .accessibilityIdentifier("composeField")
@@ -2582,6 +2586,9 @@ struct PostCard: View {
                     Button { showAudioRecorder = true } label: { Label("Audio reply", systemImage: "mic") }
                 } label: { Image(systemName: "paperclip").foregroundStyle(.secondary) }
                 .menuIndicator(.hidden)   // no macOS disclosure chevron next to the paperclip
+                #if os(macOS)
+                .menuStyle(.borderlessButton).fixedSize()
+                #endif
                 TextField("Add a reply…", text: $commentText, axis: .vertical)
                     .lineLimit(1...5)
                     .textFieldStyle(.plain)   // drop the macOS system focus ring — matches iOS

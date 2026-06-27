@@ -1,3 +1,4 @@
+import AVFoundation
 import MediaPlayer
 import MusicKit
 import SwiftUI
@@ -45,6 +46,9 @@ struct SongPicker: View {
     @State private var catalog: [MusicKit.Song] = []
     @State private var catalogNote: String?
     @State private var searchTask: Task<Void, Never>?
+    #if os(macOS)
+    private let macPreviewPlayer = AVPlayer()   // catalog preview clips (no MPMusicPlayerController on Mac)
+    #endif
 
     #if os(iOS)
     @State private var libraryDenied = false
@@ -150,22 +154,22 @@ struct SongPicker: View {
         HStack(spacing: 12) {
             ZStack {
                 artwork()
-                #if os(iOS)
-                // In-picker preview needs MPMusicPlayerController (iOS/Catalyst only). The play/pause
-                // sits on the artwork, Apple-Music-style.
+                // Tap the artwork (or the title, below) to preview; the play/pause sits on the artwork,
+                // Apple-Music-style. macOS previews via AVPlayer + the catalog preview asset.
                 Button(action: onPreview) {
                     Image(systemName: previewing == key ? "pause.circle.fill" : "play.circle.fill")
                         .font(.title2).foregroundStyle(.white)
                         .shadow(color: .black.opacity(0.5), radius: 2)
                 }
                 .buttonStyle(.plain)
-                #endif
             }
             .frame(width: 44, height: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline.weight(.medium)).lineLimit(1)
                 Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
+            .contentShape(Rectangle())
+            .onTapGesture { onPreview() }
             Spacer()
             Button("Use", action: onUse)
                 .font(.subheadline.weight(.semibold)).tint(HavenTheme.pink).buttonStyle(.bordered)
@@ -279,9 +283,20 @@ struct SongPicker: View {
         dismiss()
     }
     #else
-    // No MPMusicPlayerController on native macOS — preview is a no-op.
-    private func togglePreviewCatalog(_ song: MusicKit.Song) {}
-    private func stopPreview() { previewing = nil }
+    // Native macOS: preview the Apple Music catalog clip via AVPlayer (no MPMusicPlayerController).
+    private func togglePreviewCatalog(_ song: MusicKit.Song) {
+        let key = song.id.rawValue
+        if previewing == key { stopPreview(); return }
+        guard let url = song.previewAssets?.first?.url else { return }
+        macPreviewPlayer.replaceCurrentItem(with: AVPlayerItem(url: url))
+        macPreviewPlayer.play()
+        previewing = key
+    }
+    private func stopPreview() {
+        macPreviewPlayer.pause()
+        macPreviewPlayer.replaceCurrentItem(with: nil)
+        previewing = nil
+    }
     #endif
 
     private func chooseCatalog(_ song: MusicKit.Song) {
