@@ -127,7 +127,8 @@ final class SelfSyncCoordinator {
         }
         let cs = ContactsStore.shared
         for c in wantContacts.values { cs.syncUpsert(c) }
-        for c in cs.contacts where wantContacts[c.idHex] == nil { cs.remove(c) }
+        // ADDITIVE ONLY — do not remove contacts a peer happens not to have (see the circle note above:
+        // a freshly-restored device's empty state must never delete the primary's contacts/posts).
 
         // Blocked list: reconcile both directions.
         var wantBlocked = Set<String>()
@@ -142,30 +143,22 @@ final class SelfSyncCoordinator {
         // (so this device can seal to them), and record its relay mailbox(es). Additive in v1.
         if let social = social {
             let existing = social.circles()
-            var wantCircleIds = Set<String>()
             for e in live where e.key.hasPrefix("circle:") {
                 let id = String(e.key.dropFirst("circle:".count))
                 guard let rec = decodeCircleSync(bytes: e.value) else { continue }
-                wantCircleIds.insert(id)
                 social.createCircle(id: id, name: rec.name)   // no-op if it already exists
                 if let cur = existing.first(where: { $0.id == id }), cur.name != rec.name {
                     social.renameCircle(id: id, name: rec.name)
                 }
-                // Members are authoritative: register each synced member (addContactBundle returns
-                // their hex), then remove any local member not in the synced set.
-                var wanted = Set<String>()
+                // STRICTLY ADDITIVE: register each synced member. We do NOT remove members or leave
+                // circles based on a peer's state. Absence-based removal caused catastrophic data loss:
+                // a freshly-restored device has an empty engine, so it looked like "every circle/member
+                // was removed", which tombstoned + propagated to the primary and wiped its posts. Real
+                // circle-leave / member-removal must be driven by an explicit intent, not by absence.
                 for bundle in rec.memberBundles {
-                    if let hex = try? social.addContactBundle(circleId: id, bundle: bundle) { wanted.insert(hex) }
-                }
-                for existingHex in social.contactNodeIds(circleId: id) where !wanted.contains(existingHex) {
-                    social.removeFromCircle(circleId: id, nodeHex: existingHex)
+                    _ = try? social.addContactBundle(circleId: id, bundle: bundle)
                 }
                 for node in rec.relays { RelayMailboxStore.shared.add(circleId: id, nodeHex: node) }
-            }
-            // Circle left on another device (tombstoned → absent from the converged set) is left
-            // here too. Skip the default circle + DM pseudo-circles.
-            for ci in existing where !wantCircleIds.contains(ci.id) && ci.id != "default" && !ci.id.hasPrefix("dm:") {
-                social.leaveCircle(id: ci.id)
             }
         }
     }
@@ -212,10 +205,14 @@ final class SelfSyncCoordinator {
             }
         }
         // Detect local removals in dynamic namespaces (a contact deleted, a peer unblocked) and
-        // tombstone them so the removal propagates instead of a peer device re-adding them.
-        for e in base.entries() where Self.dynamicPrefixes.contains(where: { e.key.hasPrefix($0) }) {
-            if local[e.key] == nil {
-                _ = try? base.remove(key: e.key, ts: now, device: device)
+        // tombstone them so the removal propagates instead of a peer device re-adding them — but ONLY
+        // when the engine isn't freshly-empty (see safeToTombstone: a just-restored device must not
+        // tombstone the whole account).
+        if safeToTombstone(local: local, base: base) {
+            for e in base.entries() where Self.dynamicPrefixes.contains(where: { e.key.hasPrefix($0) }) {
+                if local[e.key] == nil {
+                    _ = try? base.remove(key: e.key, ts: now, device: device)
+                }
             }
         }
 
@@ -268,10 +265,26 @@ final class SelfSyncCoordinator {
         for (key, value) in local where base.get(key: key) != value {
             _ = try? base.set(key: key, value: value, ts: now, device: device)
         }
-        for e in base.entries() where Self.dynamicPrefixes.contains(where: { e.key.hasPrefix($0) }) {
-            if local[e.key] == nil { _ = try? base.remove(key: e.key, ts: now, device: device) }
+        if safeToTombstone(local: local, base: base) {
+            for e in base.entries() where Self.dynamicPrefixes.contains(where: { e.key.hasPrefix($0) }) {
+                if local[e.key] == nil { _ = try? base.remove(key: e.key, ts: now, device: device) }
+            }
         }
     }
+
+    /// Whether it's safe to emit removal tombstones for dynamic keys. NOT safe when the engine looks
+    /// freshly-empty (no circles) but the base still has circles — that's a just-reset / unready device,
+    /// and tombstoning there is precisely what wiped accounts. In that state we only ADD, never remove.
+    private func safeToTombstone(local: [String: Data], base: AccountStateHandle) -> Bool {
+        let localHasCircle = local.keys.contains { $0.hasPrefix("circle:") }
+        let baseHasCircle = base.entries().contains { $0.key.hasPrefix("circle:") }
+        return localHasCircle || !baseHasCircle
+    }
+
+    /// Erase this device's self-sync base. Used when adopting a DIFFERENT identity (restore/link) or on
+    /// factory reset, so a freshly-restored device never diffs its empty engine against a STALE base and
+    /// tombstones the account's circles/contacts — the bug that propagated and wiped the primary's posts.
+    func reset() { try? FileManager.default.removeItem(at: baseURL) }
 
     /// This device's sealed self-sync slot, folding in local changes first — the payload to hand a
     /// peer device directly over the nearby mesh. No relay/S3 involved.

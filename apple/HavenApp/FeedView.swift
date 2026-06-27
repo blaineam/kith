@@ -79,7 +79,16 @@ final class FeedStore: ObservableObject {
         social = nil
         items.removeAll()
         circles.removeAll()
-        try? FileManager.default.removeItem(at: stateURL)
+        // Back up (don't hard-delete) the outgoing identity's engine state, so adopting a new identity is
+        // recoverable instead of destructive. And RESET the self-sync base: a freshly-adopted (empty)
+        // identity must not diff against the previous identity's base and tombstone its circles — that
+        // bug propagated to the primary and wiped posts.
+        if FileManager.default.fileExists(atPath: stateURL.path) {
+            let backup = stateURL.deletingLastPathComponent().appendingPathComponent("haven-feed.prev.json")
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.moveItem(at: stateURL, to: backup)
+        }
+        SelfSyncCoordinator.shared.reset()
         configure(seed: seed)
     }
 
