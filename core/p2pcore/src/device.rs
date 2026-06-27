@@ -251,6 +251,61 @@ impl DeviceList {
     }
 }
 
+/// A contact's verified multi-device info: their signed [`DeviceList`] plus the per-device
+/// [`DeviceCredential`]s (which carry the routable device bundles peers seal to). The client builds
+/// this after verifying BOTH against the contact's pinned account key, then uses it to seal to the
+/// contact's *devices* instead of (only) their account key.
+#[derive(Clone)]
+pub struct ContactDevices {
+    pub list: DeviceList,
+    pub credentials: Vec<DeviceCredential>,
+}
+
+impl ContactDevices {
+    /// The device bundles currently authorized to receive this account's content (present in the list,
+    /// not revoked). A revoked device's credential is dropped here, so it never becomes a recipient.
+    pub fn authorized_bundles(&self) -> Vec<HavenId> {
+        self.credentials
+            .iter()
+            .filter(|c| self.list.is_authorized(&c.device_id()))
+            .map(|c| c.device.clone())
+            .collect()
+    }
+}
+
+/// Expand a circle's account-level member set into the actual KEY-COMMIT recipients: each member's
+/// currently-authorized **device** bundles, so a circle's epoch key seals to every device the user
+/// trusts and **never** to a revoked one. A member with no known device info falls back to its own
+/// account key, so pre-multidevice contacts (and your own not-yet-enrolled devices) keep working.
+/// Stable order, de-duplicated by node id. Pair with epoch rotation on any device add/revoke so the
+/// dropped device can't open content sealed afterward — the same revocation the audit already relies on.
+pub fn recipients_with_devices(
+    members: &[HavenId],
+    devices_by_account: &std::collections::HashMap<[u8; 32], ContactDevices>,
+) -> Vec<HavenId> {
+    let mut out: Vec<HavenId> = Vec::new();
+    let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    for m in members {
+        let acct = m.node_id_bytes();
+        let bundles = devices_by_account
+            .get(&acct)
+            .map(|d| d.authorized_bundles())
+            .unwrap_or_default();
+        if bundles.is_empty() {
+            if seen.insert(acct) {
+                out.push(m.clone()); // back-compat: no device info → seal to the account key itself.
+            }
+        } else {
+            for b in bundles {
+                if seen.insert(b.node_id_bytes()) {
+                    out.push(b);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Minimal length-prefixed byte reader for the wire formats above.
 struct Reader<'a> {
     b: &'a [u8],
@@ -395,5 +450,76 @@ mod tests {
         let stale = DeviceList::signed(&account, 2, 5, vec![phone], vec![mac]);
         assert!(!v1.adopt_if_newer(&stale));
         assert_eq!(v1.version, 3);
+    }
+
+    #[test]
+    fn recipients_expand_to_authorized_devices_excluding_revoked() {
+        let account = id(1);
+        let phone = id(2);
+        let mac = id(3);
+        let stolen = id(4);
+        let list = DeviceList::signed(
+            &account, 2, 0,
+            vec![phone.public().node_id_bytes(), mac.public().node_id_bytes()],
+            vec![stolen.public().node_id_bytes()],
+        );
+        let creds = vec![
+            DeviceCredential::issue(&account, &phone.public(), "phone", 1),
+            DeviceCredential::issue(&account, &mac.public(), "mac", 1),
+            DeviceCredential::issue(&account, &stolen.public(), "stolen", 1),
+        ];
+        let cd = ContactDevices { list, credentials: creds };
+        let mut map = std::collections::HashMap::new();
+        map.insert(account.public().node_id_bytes(), cd);
+
+        let recips = recipients_with_devices(&[account.public()], &map);
+        let ids: std::collections::HashSet<[u8; 32]> = recips.iter().map(|h| h.node_id_bytes()).collect();
+        assert!(ids.contains(&phone.public().node_id_bytes()));
+        assert!(ids.contains(&mac.public().node_id_bytes()));
+        assert!(!ids.contains(&stolen.public().node_id_bytes()), "revoked device is not a recipient");
+        assert!(!ids.contains(&account.public().node_id_bytes()), "with devices known, don't seal to the bare account key");
+    }
+
+    #[test]
+    fn no_device_info_falls_back_to_the_account_key() {
+        let alice = id(5);
+        let bob = id(6);
+        let recips = recipients_with_devices(&[alice.public(), bob.public()], &std::collections::HashMap::new());
+        let ids: std::collections::HashSet<[u8; 32]> = recips.iter().map(|h| h.node_id_bytes()).collect();
+        assert!(ids.contains(&alice.public().node_id_bytes()));
+        assert!(ids.contains(&bob.public().node_id_bytes()));
+    }
+
+    /// The end-to-end guarantee: a revoked device cannot open the circle's key commit, so it can decrypt
+    /// nothing posted after revocation — exactly what "revoke a device" must mean.
+    #[test]
+    fn revoked_device_cannot_open_the_key_commit() {
+        use crate::groupkey::{open_key_commit, seal_key_commit};
+        let account = id(1);
+        let phone = id(2);
+        let stolen = id(4);
+        let list = DeviceList::signed(
+            &account, 2, 0,
+            vec![phone.public().node_id_bytes()],
+            vec![stolen.public().node_id_bytes()],
+        );
+        let creds = vec![
+            DeviceCredential::issue(&account, &phone.public(), "phone", 1),
+            DeviceCredential::issue(&account, &stolen.public(), "stolen", 1),
+        ];
+        let cd = ContactDevices { list, credentials: creds };
+        let mut map = std::collections::HashMap::new();
+        map.insert(account.public().node_id_bytes(), cd);
+        let recips = recipients_with_devices(&[account.public()], &map);
+
+        let committer = id(7);
+        let epoch_key = [9u8; 32];
+        let circle_secret = [7u8; 32];
+        let commit = seal_key_commit(&committer, &recips, "circle", 1, &epoch_key, &circle_secret)
+            .expect("seal");
+        assert!(open_key_commit(&phone, &committer.public(), &commit).is_ok(),
+                "authorized device opens the commit");
+        assert!(open_key_commit(&stolen, &committer.public(), &commit).is_err(),
+                "REVOKED device must not open the commit");
     }
 }
