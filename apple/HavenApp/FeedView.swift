@@ -505,12 +505,16 @@ final class FeedStore: ObservableObject {
         // prefix because a feed item carries the author's short id.
         let members = social?.contactNodeIds(circleId: activeCircleId)   // nil = social not ready
         let blocked = ConnectionsStore.shared.blocked
+        let removed = ConnectionsStore.shared.removedHexes(inCircle: activeCircleId)   // explicit severances
         let showHidden = HiddenStore.shared.showHidden
         items = raw.filter { fi in
             // Personal per-post hide (reversible via the "show hidden" toggle).
             if !showHidden && HiddenStore.shared.isHidden(fi.id) { return false }
-            if fi.isMe { return true }
+            // Explicitly removed/blocked authors are ALWAYS hidden — even if the engine's membership list
+            // still lags behind the severance. (Checked before isMe so a removal can't be defeated.)
             if blocked.contains(where: { $0.hasPrefix(fi.authorShort) }) { return false }
+            if removed.contains(where: { $0.hasPrefix(fi.authorShort) }) { return false }
+            if fi.isMe { return true }
             guard let members else { return true }   // lookup unavailable — don't blank the feed
             // empty list = a genuine solo circle → hide everyone else (incl. a re-synced removed member)
             return members.contains(where: { $0.hasPrefix(fi.authorShort) })

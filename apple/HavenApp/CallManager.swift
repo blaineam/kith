@@ -164,7 +164,8 @@ final class CallManager: NSObject, ObservableObject {
     /// `others = [partnerHex]`. `name` is the group / DM-partner display name shown in the UI.
     func startCall(participants others: [String], name: String, sessionId: String? = nil) {
         guard !active else { return }
-        let invitees = others.filter { !$0.isEmpty && $0 != myHex }
+        // Never dial blocked people (defense in depth — circle calls also pre-filter removed members).
+        let invitees = others.filter { !$0.isEmpty && $0 != myHex && !ConnectionsStore.shared.isBlocked($0) }
         guard !invitees.isEmpty else { return }
         self.sessionId = sessionId ?? UUID().uuidString
         self.roster = Set(invitees).union([myHex])

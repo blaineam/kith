@@ -128,7 +128,11 @@ struct CircleView: View {
         .havenInlineNavTitle()
         .toolbar {
             ToolbarItem(placement: .havenTrailing) {
-                let members = store.memberHexes(circleId: store.activeCircleId).filter { $0 != store.myNodeHex }
+                let members = store.memberHexes(circleId: store.activeCircleId).filter {
+                    $0 != store.myNodeHex
+                    && !ConnectionsStore.shared.isRemovedFromCircle($0, circleId: store.activeCircleId)
+                    && !ConnectionsStore.shared.isBlocked($0)
+                }
                 Button {
                     CallManager.shared.startCall(participants: members, name: store.activeCircleName)
                 } label: { Image(systemName: "phone.fill") }

@@ -74,6 +74,10 @@ final class SelfSyncCoordinator {
             if let data = try? JSONEncoder().encode(c) { m["contact:\(c.idHex)"] = data }
         }
         for hex in ConnectionsStore.shared.blocked { m["blocked:\(hex)"] = Data([1]) }
+        // Explicit circle severances — propagate as ADDITIVE, grow-only records (a removal is intentional
+        // and must never be undone by a peer's absence; that's why it's NOT a dynamic prefix). Keyed
+        // removal:<circleId>|<hex>. This is the safe way to make "remove someone" stick across my devices.
+        for key in ConnectionsStore.shared.circleRemovals { m["removal:\(key)"] = Data([1]) }
         // Circles: name + member bundles + relay nodes, so another device can reconstruct each
         // circle and seal to every member. (Additive in v1 — member/circle removal is a follow-up.)
         if let social = social {
@@ -138,6 +142,18 @@ final class SelfSyncCoordinator {
         let conn = ConnectionsStore.shared
         for hex in wantBlocked.subtracting(conn.blocked) { conn.block(hex) }
         for hex in conn.blocked.subtracting(wantBlocked) { conn.unblock(hex) }
+
+        // Circle severances synced from another of my devices → apply them here too: record the removal
+        // and purge that member from the circle (so removing someone on my phone severs them on my Mac).
+        for e in live where e.key.hasPrefix("removal:") {
+            let key = String(e.key.dropFirst("removal:".count))   // "<circleId>|<hex>"
+            guard let bar = key.firstIndex(of: "|") else { continue }
+            let circleId = String(key[key.startIndex..<bar])
+            let hex = String(key[key.index(after: bar)...])
+            guard !circleId.isEmpty, !hex.isEmpty, !conn.isRemovedFromCircle(hex, circleId: circleId) else { continue }
+            conn.removeFromCircle(hex, circleId: circleId)
+            social?.removeFromCircle(circleId: circleId, nodeHex: hex)
+        }
 
         // Circles: reconstruct each synced circle — create it, register every member's bundle
         // (so this device can seal to them), and record its relay mailbox(es). Additive in v1.

@@ -55,6 +55,11 @@ final class ConnectionsStore: ObservableObject {
     func isRemovedFromCircle(_ idHex: String, circleId: String) -> Bool {
         circleRemovals.contains(removalKey(circleId, idHex))
     }
+    /// Every node hex explicitly removed from a given circle (for hiding their posts + not dialing them).
+    func removedHexes(inCircle circleId: String) -> Set<String> {
+        let prefix = circleId + "|"
+        return Set(circleRemovals.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) })
+    }
     /// Re-allow a member into a circle (clears the removal) — e.g. when you deliberately re-add them.
     func clearCircleRemoval(_ idHex: String, circleId: String) {
         circleRemovals.remove(removalKey(circleId, idHex))
