@@ -79,17 +79,21 @@ struct DMContactPicker: View {
     @ObservedObject private var store = FeedStore.shared
     @ObservedObject private var contacts = ContactsStore.shared
     @Environment(\.dismiss) private var dismiss
+    @State private var selected: Set<String> = []   // pick one → 1:1, pick several → group DM
 
     var body: some View {
         NavigationStack {
             ZStack {
                 HavenBackground()
                 List(contacts.contacts) { c in
-                    Button { onPick(store.startDM(with: c.idHex, name: c.displayName)) } label: {
+                    Button { toggle(c.idHex) } label: {
                         HStack(spacing: 12) {
                             PeerAvatar(nodeHex: c.idHex, name: c.displayName, size: 40)
                             Text(c.displayName).font(.body).foregroundStyle(.primary)
                             Spacer()
+                            if selected.contains(c.idHex) {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(HavenTheme.pink)
+                            }
                         }
                         .contentShape(Rectangle())
                     }
@@ -97,9 +101,30 @@ struct DMContactPicker: View {
                 }
                 .scrollContentBackground(.hidden)
             }
-            .navigationTitle("New message")
+            .navigationTitle(selected.count > 1 ? "New group · \(selected.count)" : "New message")
             .havenInlineNavTitle()
-            .toolbar { ToolbarItem(placement: .havenCancelLeading) { Button("Cancel") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .havenCancelLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .havenConfirmTrailing) {
+                    Button(selected.count > 1 ? "Start group" : "Start") { start() }
+                        .fontWeight(.semibold).disabled(selected.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func toggle(_ hex: String) {
+        if selected.contains(hex) { selected.remove(hex) } else { selected.insert(hex) }
+    }
+
+    private func start() {
+        let chosen = contacts.contacts.filter { selected.contains($0.idHex) }
+        guard !chosen.isEmpty else { return }
+        if chosen.count == 1 {
+            onPick(store.startDM(with: chosen[0].idHex, name: chosen[0].displayName))
+        } else {
+            let name = chosen.map(\.displayName).sorted().joined(separator: ", ")
+            onPick(store.startGroupDM(members: chosen.map(\.idHex), name: name))
         }
     }
 }
@@ -157,11 +182,13 @@ struct DMThreadView: View {
             }
             ToolbarItem(placement: .havenTrailing) {
                 Button {
-                    if let hex = store.dmPartnerHex(circleId) {
-                        CallManager.shared.startCall(peerHex: hex, name: store.dmPartnerName(circleId))
+                    // Ring EVERYONE in the thread — one person for a 1:1, the whole roster for a group DM.
+                    let members = store.dmMemberHexes(circleId)
+                    if !members.isEmpty {
+                        CallManager.shared.startCall(participants: members, name: store.dmPartnerName(circleId))
                     }
                 } label: { Image(systemName: "phone.fill") }
-                .disabled(store.dmPartnerHex(circleId) == nil)
+                .disabled(store.dmMemberHexes(circleId).isEmpty)
             }
         }
         .onAppear { store.forceSync() }

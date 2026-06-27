@@ -265,12 +265,12 @@ final class FeedStore: ObservableObject {
         return "dm:" + pair[0] + "-" + pair[1]
     }
 
-    /// True only if `nodeHex` is exactly one of the two full ids encoded in a `dm:` circle
-    /// id — the guard that stops a third party from handshaking their way into a private DM.
-    /// (Old short-prefix ids fail this and get cleaned out by purge — a fresh DM is made.)
+    /// True only if `nodeHex` is one of the full ids encoded in a `dm:` circle id — the guard that stops
+    /// a third party from handshaking their way into a private DM. Works for 1:1 (two parties) AND group
+    /// DMs (a `dm:` id encoding 3+ sorted members). Old short-prefix ids fail this and get purged.
     func dmCircleAllows(_ circleId: String, _ nodeHex: String) -> Bool {
         let parts = circleId.dropFirst(3).split(separator: "-").map(String.init)
-        guard parts.count == 2 else { return false }
+        guard parts.count >= 2 else { return false }
         return parts.contains(nodeHex)
     }
 
@@ -288,11 +288,41 @@ final class FeedStore: ObservableObject {
         return id
     }
 
-    /// The other person in a DM (resolved from the non-me member), for display.
+    /// The deterministic `dm:` id for a group DM with a specific SET of people (sorted hexes including
+    /// me) — so picking the same set again reopens the same thread instead of spawning a duplicate.
+    func groupDMCircleId(members: [String]) -> String {
+        let all = Set(members + [myNodeHex]).sorted()
+        return "dm:" + all.joined(separator: "-")
+    }
+
+    /// Start or reopen a group DM (1:n) with a subset of people; returns the dm circle id. A group DM is
+    /// just a `dm:` circle with 3+ members — every point-to-point/no-broadcast DM rule already applies.
+    @discardableResult
+    func startGroupDM(members: [String], name: String) -> String {
+        let id = groupDMCircleId(members: members)
+        guard let social else { return id }
+        social.createCircle(id: id, name: name)
+        for hex in members where hex != myNodeHex { try? social.addExistingToCircle(circleId: id, nodeHex: hex) }
+        persist(); refreshCircles(); syncWithContacts()
+        return id
+    }
+
+    /// All the OTHER members of a DM/group-DM (everyone but me) — used to ring everyone on a group call.
+    func dmMemberHexes(_ circleId: String) -> [String] {
+        (social?.contactNodeIds(circleId: circleId) ?? []).filter { $0 != myNodeHex }
+    }
+
+    /// The display title of a DM: the other person's name for a 1:1, or a joined list for a group DM
+    /// ("Alice, Bob & Carol").
     func dmPartnerName(_ circleId: String) -> String {
         let others = (social?.contactNodeIds(circleId: circleId) ?? []).filter { $0 != myNodeHex }
-        if let id = others.first { return ContactsStore.shared.name(forNodePrefix: id) ?? "Direct message" }
-        return "Direct message"
+        let names = others.map { ContactsStore.shared.name(forNodePrefix: $0) ?? "Someone" }.sorted()
+        switch names.count {
+        case 0: return "Direct message"
+        case 1: return names[0]
+        case 2: return "\(names[0]) & \(names[1])"
+        default: return names.dropLast().joined(separator: ", ") + " & " + (names.last ?? "")
+        }
     }
 
     /// The other person's node id in a DM (for placing a call).
