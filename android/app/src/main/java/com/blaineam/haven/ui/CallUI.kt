@@ -1,6 +1,8 @@
 package com.blaineam.haven.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -185,24 +187,22 @@ private fun InCall() {
                     Text("Connecting…", color = Color.White, fontSize = 18.sp)
                 }
             }
+            participants.size == 1 -> {
+                // 1:1 — the other person fills the screen edge-to-edge (no tile margin or name badge),
+                // matching iOS. Their camera fills, or the brand gradient + avatar if the camera is off.
+                CallTile(participants[0], remote, fill = true, showName = false, Modifier.fillMaxSize())
+            }
             else -> {
+                // Group — a rounded-corner grid of branded tiles, each with the person's name badge.
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(if (participants.size <= 1) 1 else 2),
+                    columns = GridCells.Fixed(2),
                     modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(participants, key = { it }) { hex ->
-                        Box(Modifier.padding(2.dp).aspectRatio(0.75f).background(HavenTheme.card)) {
-                            if (CallManager.remoteCameraOff.contains(hex)) {
-                                // Camera off → show the avatar, not a frozen last frame.
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    HavenAvatar(hex.take(8), com.blaineam.haven.core.HavenNet.displayName(hex.take(8)), size = 72.dp)
-                                }
-                            } else {
-                                CallVideoTile(remote[hex], Modifier.fillMaxSize())
-                            }
-                            Text(hex.take(6), color = Color.White, fontSize = 11.sp,
-                                modifier = Modifier.align(Alignment.BottomStart).padding(6.dp))
-                        }
+                        CallTile(hex, remote, fill = false, showName = true, Modifier.aspectRatio(0.8f))
                     }
                 }
             }
@@ -244,6 +244,41 @@ private fun InCall() {
                 }
             }
             RoundButton(Icons.Filled.CallEnd, Color(0xFFEF4444), "End") { CallManager.hangup() }
+        }
+    }
+}
+
+/** One participant's tile — matches iOS: camera fills, or the brand sunset gradient + their profile
+ *  photo centered when the camera's off. Group tiles get rounded corners + a name badge; the 1:1
+ *  `fill` tile goes edge-to-edge with no badge. (Active-speaker highlight is TODO — needs audio-level
+ *  plumbing on the Android CallManager, which doesn't track it yet.) */
+@Composable
+private fun CallTile(
+    hex: String,
+    remote: Map<String, VideoTrack?>,
+    fill: Boolean,
+    showName: Boolean,
+    modifier: Modifier,
+) {
+    val name = com.blaineam.haven.core.HavenNet.displayName(hex.take(8))
+    val shaped = if (fill) modifier else modifier.clip(RoundedCornerShape(16.dp))
+    Box(shaped) {
+        if (CallManager.remoteCameraOff.contains(hex)) {
+            Box(Modifier.fillMaxSize().background(HavenTheme.brand), contentAlignment = Alignment.Center) {
+                Box(Modifier.clip(CircleShape).border(2.dp, Color.White.copy(alpha = 0.25f), CircleShape)) {
+                    HavenAvatar(hex.take(8), name, size = if (fill) 110.dp else 78.dp)
+                }
+            }
+        } else {
+            CallVideoTile(remote[hex], Modifier.fillMaxSize())
+        }
+        if (showName) {
+            Text(
+                name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)
+                    .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.4f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
         }
     }
 }
