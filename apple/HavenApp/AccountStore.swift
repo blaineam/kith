@@ -114,18 +114,44 @@ final class AccountStore: ObservableObject {
 
     /// A one-time transfer code that encodes the master seed. Anyone holding it can
     /// become this identity — show it only to your own other device.
+    /// A transfer/link code. Carries the seed AND the device's relay list so a freshly-linked device
+    /// has a transport to bootstrap SelfSync from — without it the new device has the identity but no
+    /// way to reach the shared mailbox/slots, so content never syncs (the "macOS detached from iPhone"
+    /// bug). Falls back to the legacy seed-only form when there are no relays to share.
+    private struct TransferPayload: Codable { let s: String; let r: [String] }
+
     func transferCode() -> String {
-        "haven-seed:" + Self.base64url(account.secretSeed())
+        let seedB64 = Self.base64url(account.secretSeed())
+        let relays = RelayMailboxStore.shared.allRelays()
+        guard !relays.isEmpty,
+              let json = try? JSONEncoder().encode(TransferPayload(s: seedB64, r: relays)) else {
+            return "haven-seed:" + seedB64
+        }
+        return "haven-link:" + Self.base64url(json)
     }
 
-    /// Adopt an identity from a scanned/pasted transfer code. Returns false if invalid.
+    /// Adopt an identity from a scanned/pasted transfer code. Returns false if invalid. Understands
+    /// both the rich `haven-link:` form (seed + relays) and the legacy `haven-seed:` (seed only).
     @discardableResult
     func restore(fromTransferCode code: String) -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let prefix = ["haven-seed:"].first(where: { trimmed.hasPrefix($0) }) else { return false }
-        let body = String(trimmed.dropFirst(prefix.count))
-        guard let seed = Self.base64urlDecode(body), seed.count == 32,
-              let restored = try? Account.fromSeed(seed: seed) else { return false }
+        let seed: Data
+        var bootstrapRelays: [String] = []
+        if trimmed.hasPrefix("haven-link:") {
+            let body = String(trimmed.dropFirst("haven-link:".count))
+            guard let json = Self.base64urlDecode(body),
+                  let payload = try? JSONDecoder().decode(TransferPayload.self, from: json),
+                  let s = Self.base64urlDecode(payload.s), s.count == 32 else { return false }
+            seed = s
+            bootstrapRelays = payload.r
+        } else if trimmed.hasPrefix("haven-seed:") {
+            let body = String(trimmed.dropFirst("haven-seed:".count))
+            guard let s = Self.base64urlDecode(body), s.count == 32 else { return false }
+            seed = s
+        } else {
+            return false
+        }
+        guard let restored = try? Account.fromSeed(seed: seed) else { return false }
         Self.archive(account.secretSeed())   // keep the currently-active identity rollback-able first
         Self.deleteSeed()
         Self.saveSeed(seed, synced: Self.iCloudSyncEnabled)
@@ -135,6 +161,8 @@ final class AccountStore: ObservableObject {
         FeedStore.shared.reconfigure(seed: seed)
         _ = SharedInbox.drain()
         SharedLockedCircles.write([])
+        // Seed a transport so SelfSync can immediately bootstrap (pull slots + mailbox).
+        if !bootstrapRelays.isEmpty { RelayMailboxStore.shared.adoptBootstrapRelays(bootstrapRelays) }
         return true
     }
 

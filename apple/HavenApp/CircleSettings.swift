@@ -273,6 +273,7 @@ struct CircleSettingsView: View {
                     Text("Media in this circle")
                 } footer: {
                     Text("Override the app-wide Photos / optimize / auto-delete defaults just for this circle.")
+                        .fixedSize(horizontal: false, vertical: true)   // wrap fully; don't truncate on macOS
                 }
 
                 Section {
@@ -281,6 +282,7 @@ struct CircleSettingsView: View {
                     }
                 } footer: {
                     Text("How this circle's posts reach people when they're offline: leave a device on as your relay (the easy way), or — advanced — point at your own S3 bucket.")
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if !isDefault {

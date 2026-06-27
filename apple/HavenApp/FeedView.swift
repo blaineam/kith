@@ -668,6 +668,11 @@ final class FeedStore: ObservableObject {
     private func nearbyPeerConnected() {
         guard let social else { return }
         nearbyActive = true
+        // FIRST: offer this device's sealed self-sync slot to nearby peers. ONLY our own devices (same
+        // seed) can open it — it's how a linked Mac/phone bootstraps circles + profile + posts LOCALLY,
+        // with no relay or S3 at all (the local "handshake" sync). Sent before the post events below so
+        // the receiver learns the circles before their posts arrive.
+        if let slot = SelfSyncCoordinator.shared.sealedLocalSlot(social: social) { nearbyBroadcast(23, slot) }
         for circle in circles {
             guard let hello = helloPayload(circleId: circle.id, circleName: circle.name) else { continue }
             if circle.id == "default" { nearbyBroadcast(0, hello) }   // only the open circle broadcasts handshake
@@ -675,6 +680,15 @@ final class FeedStore: ObservableObject {
             for env in social.syncEnvelopes(circleId: circle.id) { nearbyBroadcast(1, eventPayload(circle.id, env)) }
         }
         refresh()
+    }
+
+    /// A self-sync slot arrived from another of the user's OWN devices over the nearby mesh (only our
+    /// own seed can have produced one we can open). Merge it — this is what makes a linked device's
+    /// circles/profile/posts appear locally without any relay.
+    private func handleNearbySelfSync(_ payload: Data) {
+        if SelfSyncCoordinator.shared.ingestPeerSlot(payload, social: social) {
+            refreshCircles()   // a newly-synced circle must enter the polled list + pull its history
+        }
     }
 
     private func helloPayload(circleId: String, circleName: String) -> Data? {
@@ -851,6 +865,7 @@ final class FeedStore: ObservableObject {
         case 20: handlePresignBootstrap(payload)            // pre-signed S3 pool bootstrap url
         case 21: CallManager.shared.handleGroupInvite(payload)  // WebRTC mesh group-call invite
         case 22: CallManager.shared.handleCameraState(payload)  // peer toggled their camera on/off
+        case 23: handleNearbySelfSync(payload)                  // another of MY devices' self-sync slot (local, relay-free)
         default: break
         }
     }

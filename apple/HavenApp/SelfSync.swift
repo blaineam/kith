@@ -247,6 +247,57 @@ final class SelfSyncCoordinator {
         return changed
     }
 
+    // MARK: - Direct (nearby) device-to-device sync — NO relay required
+    //
+    // Two of the user's own devices on the same Bluetooth/Wi-Fi don't need a relay or S3 to sync:
+    // they trade their sealed self-sync slots directly over the nearby mesh. This is the local
+    // "handshake" path — `sealedLocalSlot` is what a device offers, `ingestPeerSlot` is how it folds
+    // in what it receives.
+
+    private func loadBase() -> AccountStateHandle {
+        if let data = try? Data(contentsOf: baseURL), let h = try? AccountStateHandle.fromBytes(bytes: data) { return h }
+        return AccountStateHandle()
+    }
+
+    /// Fold local changes (with fresh stamps) into `base`, including removal tombstones. Mirrors the
+    /// relay `sync()`'s steps 1–2.
+    private func foldLocal(into base: AccountStateHandle, social: HavenSocial?) {
+        let now = UInt64(Date().timeIntervalSince1970 * 1000)
+        let device = SelfSyncDevice.id
+        let local = currentLocal(social: social)
+        for (key, value) in local where base.get(key: key) != value {
+            _ = try? base.set(key: key, value: value, ts: now, device: device)
+        }
+        for e in base.entries() where Self.dynamicPrefixes.contains(where: { e.key.hasPrefix($0) }) {
+            if local[e.key] == nil { _ = try? base.remove(key: e.key, ts: now, device: device) }
+        }
+    }
+
+    /// This device's sealed self-sync slot, folding in local changes first — the payload to hand a
+    /// peer device directly over the nearby mesh. No relay/S3 involved.
+    func sealedLocalSlot(social: HavenSocial?) -> Data? {
+        guard let seed = AccountStore.storedSeed() else { return nil }
+        let base = loadBase()
+        foldLocal(into: base, social: social)
+        try? base.toBytes().write(to: baseURL, options: .atomic)
+        return try? sealAccountState(accountSeed: seed, state: base)
+    }
+
+    /// Merge a peer device's sealed slot received over a direct transport, apply + persist. Returns
+    /// true if anything new arrived (so the caller can refresh the feed).
+    @discardableResult
+    func ingestPeerSlot(_ blob: Data, social: HavenSocial?) -> Bool {
+        guard let seed = AccountStore.storedSeed(),
+              let peer = try? openAccountState(accountSeed: seed, sealed: blob) else { return false }
+        let base = loadBase()
+        let before = base.toBytes()
+        base.merge(other: peer)
+        let changed = base.toBytes() != before
+        applyLocal(base, social: social)
+        try? base.toBytes().write(to: baseURL, options: .atomic)
+        return changed
+    }
+
     // MARK: transports (relay + S3 — self-sync works with either, or both)
 
     private enum Transport { case relay(String); case s3(S3Client) }

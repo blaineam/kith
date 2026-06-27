@@ -267,6 +267,15 @@ final class RelayMailboxStore: ObservableObject {
     func circlesWithRelay(excluding: String) -> [String] {
         relaysByCircle.filter { $0.key != excluding && !$0.value.isEmpty }.map(\.key)
     }
+    /// Seed this device's relays from a transfer/link code so a freshly-linked device has a transport
+    /// to bootstrap from. Stored under a synthetic circle so `allRelays()` returns them all; the first
+    /// SelfSync pull then learns the real circles and registers their relays. (Doesn't appear in the
+    /// circles UI — that comes from the social graph, not this store.)
+    func adoptBootstrapRelays(_ hexes: [String]) {
+        for h in hexes { add(circleId: "__bootstrap__", nodeHex: h) }
+        if defaultNodeHex == nil, let first = hexes.first(where: { $0.count == 64 }) { defaultNodeHex = first }
+    }
+
     /// Every distinct relay across all circles — for the settings list / mesh sync.
     func allRelays() -> [String] {
         var seen: [String] = []
