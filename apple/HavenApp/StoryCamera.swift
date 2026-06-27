@@ -974,6 +974,13 @@ struct StoryCameraView: View {
                 .animation(.spring(response: 0.3), value: cam.isRecording)
         }
         .contentShape(Circle())
+        // CLICK = photo. The LongPressGesture-only sequence needed a 0.35s hold before doing anything, so
+        // a normal click never took a photo on macOS.
+        .onTapGesture {
+            guard cam.ready, !cam.isRecording, !capture.isFull else { return }
+            cam.capturePhoto { img in finishPhoto(img) }
+        }
+        // CLICK-AND-HOLD (≥0.35s) = record; release stops it.
         .gesture(
             LongPressGesture(minimumDuration: 0.35)
                 .onEnded { _ in
@@ -983,7 +990,6 @@ struct StoryCameraView: View {
                 .sequenced(before: DragGesture(minimumDistance: 0))
                 .onEnded { _ in
                     if cam.isRecording { cam.stopRecording() }
-                    else if !capture.isFull { cam.capturePhoto { img in finishPhoto(img) } }
                 }
         )
         .disabled(!cam.ready)

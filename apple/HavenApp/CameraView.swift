@@ -156,6 +156,13 @@ struct CameraCaptureRepresentable: View {
                         .animation(.spring(response: 0.3), value: engine.isRecording)
                 }
                 .contentShape(Circle())
+                // CLICK = photo. The old code only had a LongPressGesture sequence, which needs a 0.35s
+                // hold before it fires anything — so a normal click did nothing (couldn't take a photo).
+                .onTapGesture {
+                    guard engine.ready, !engine.isRecording, !engine.capturing else { return }
+                    capture()
+                }
+                // CLICK-AND-HOLD (≥0.35s) = record video; release stops it.
                 .gesture(
                     LongPressGesture(minimumDuration: 0.35)
                         .onEnded { _ in
@@ -165,7 +172,6 @@ struct CameraCaptureRepresentable: View {
                         .sequenced(before: DragGesture(minimumDistance: 0))
                         .onEnded { _ in
                             if engine.isRecording { engine.stopRecording() }
-                            else { capture() }
                         }
                 )
                 .disabled(!engine.ready || engine.capturing)
