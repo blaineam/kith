@@ -83,7 +83,10 @@ final class WatchSessionManager: NSObject, WCSessionDelegate {
         let ordered: [FeedItemFfi] = isDM ? Array(feed.reversed().suffix(60)) : Array(feed.prefix(60))
         // Assign real media thumbnails to the most RECENT items first, within a WCSession byte budget;
         // older media-bearing items still flag hasMedia (the watch shows a light placeholder).
-        var budget = 150_000
+        // CRITICAL: the reply rides sendMessage's replyHandler, whose payload limit is ~65KB — a bigger
+        // reply silently never arrives, so a media-heavy thread spun forever. Keep the media well under
+        // that, leaving room for the message text + encoding overhead.
+        var budget = 45_000
         var mediaById: [String: [WatchMedia]] = [:]
         let recentFirst = isDM ? Array(ordered.reversed()) : ordered   // newest-first for budgeting
         for item in recentFirst where !item.media.isEmpty {

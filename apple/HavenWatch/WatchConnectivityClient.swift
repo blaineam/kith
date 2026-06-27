@@ -16,6 +16,22 @@ final class WatchConnectivityClient: NSObject, ObservableObject {
     @Published private(set) var lastSyncedAt: UInt64 = 0
     /// True while we're waiting on a reply for the currently-open thread.
     @Published private(set) var loadingThread = false
+    /// Watchdog so a thread NEVER spins forever — e.g. when a media-heavy reply exceeds
+    /// WatchConnectivity's message-size limit and the reply/error handler never fires.
+    private var loadTimeout: Task<Void, Never>?
+
+    private func beginLoadTimeout() {
+        loadTimeout?.cancel()
+        loadTimeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard let self, !Task.isCancelled else { return }
+            self.loadingThread = false   // stop the spinner; show whatever's cached/empty
+        }
+    }
+    private func finishLoading() {
+        loadTimeout?.cancel(); loadTimeout = nil
+        loadingThread = false
+    }
 
     private var session: WCSession { WCSession.default }
 
@@ -79,9 +95,10 @@ final class WatchConnectivityClient: NSObject, ObservableObject {
 
     func openThread(_ threadId: String) {
         loadingThread = true
+        beginLoadTimeout()
         // Show what we already have immediately if the same thread is cached.
         if openThread?.threadId != threadId { openThread = nil }
-        guard activated else { loadingThread = false; return }
+        guard activated else { finishLoading(); return }
         let payload = WatchCodec.encode(.requestThread, WatchThreadRequest(threadId: threadId))
         if session.isReachable {
             session.sendMessage(payload, replyHandler: { [weak self] reply in
@@ -102,17 +119,18 @@ final class WatchConnectivityClient: NSObject, ObservableObject {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, activated else { return }
         loadingThread = true
+        beginLoadTimeout()
         let payload = WatchCodec.encode(.quickReply, WatchReply(threadId: threadId, body: trimmed, targetId: targetId))
         if session.isReachable {
             session.sendMessage(payload, replyHandler: { [weak self] reply in
                 Task { @MainActor in self?.ingest(reply) }
             }, errorHandler: { [weak self] _ in
-                Task { @MainActor in self?.loadingThread = false }
+                Task { @MainActor in self?.finishLoading() }
             })
         } else {
             // Queued delivery when the phone is briefly unreachable.
             session.transferUserInfo(payload)
-            loadingThread = false
+            finishLoading()
         }
     }
 
@@ -142,7 +160,7 @@ final class WatchConnectivityClient: NSObject, ObservableObject {
         case .thread:
             if let detail = WatchCodec.decode(WatchThreadDetail.self, from: message) {
                 openThread = detail
-                loadingThread = false
+                finishLoading()
             }
         case .notify:
             if let notice = WatchCodec.decode(WatchNotice.self, from: message) {
