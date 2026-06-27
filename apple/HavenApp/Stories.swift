@@ -259,6 +259,7 @@ struct StoryViewer: View {
         let name = ContactsStore.shared.name(forNodePrefix: s.authorShort) ?? friendName
         return HStack(spacing: 10) {
             TextField("", text: $replyText, prompt: Text("Reply to \(name)…").foregroundColor(.white.opacity(0.7)))
+                .textFieldStyle(.plain)   // drop macOS's default field border so we don't double up with the capsule
                 .foregroundStyle(.white).tint(.white)
                 .focused($replyFocused)
                 .submitLabel(.send)

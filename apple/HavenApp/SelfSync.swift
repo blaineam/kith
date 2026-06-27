@@ -172,6 +172,11 @@ final class SelfSyncCoordinator {
                 // was removed", which tombstoned + propagated to the primary and wiped its posts. Real
                 // circle-leave / member-removal must be driven by an explicit intent, not by absence.
                 for bundle in rec.memberBundles {
+                    // Don't re-add someone we EXPLICITLY removed from this circle. Additive sync was
+                    // re-registering removed members from a peer's roster — which is exactly why "remove
+                    // someone" never stuck. An explicit removal wins over a peer still listing them.
+                    let hex = bundle.prefix(32).map { String(format: "%02x", $0) }.joined()
+                    if conn.isRemovedFromCircle(hex, circleId: id) { continue }
                     _ = try? social.addContactBundle(circleId: id, bundle: bundle)
                 }
                 for node in rec.relays { RelayMailboxStore.shared.add(circleId: id, nodeHex: node) }

@@ -1035,8 +1035,19 @@ final class FeedStore: ObservableObject {
     private func pushFullStateToMyDevices() {
         guard let social else { return }
         if let slot = SelfSyncCoordinator.shared.sealedLocalSlot(social: social) { sendToMyDevices(23, slot) }
-        for circle in circles where !circle.id.hasPrefix("dm:") {
-            for env in social.syncEnvelopes(circleId: circle.id) { sendToMyDevices(1, eventPayload(circle.id, env)) }
+        let myHex = social.myNodeHex()
+        for circle in circles {
+            for env in social.syncEnvelopes(circleId: circle.id) {
+                let payload = eventPayload(circle.id, env)
+                if circle.id.hasPrefix("dm:") {
+                    // DMs (incl. MY OWN sent messages) must reach my OTHER devices — but ONLY mine: send
+                    // directed over iroh to my own node id, never a nearby broadcast, which would leak the
+                    // DM relationship (the circle id encodes both parties) to nearby contacts.
+                    sendIroh(1, payload, to: myHex)
+                } else {
+                    sendToMyDevices(1, payload)
+                }
+            }
         }
         refresh()
     }
@@ -1759,10 +1770,17 @@ struct FeedView: View {
                 }
                 .scrollDismissesKeyboard(.immediately)
                 .onPreferenceChange(PostCenterKey.self) { centers in
-                    // The post nearest the vertical center of the screen becomes active.
+                    // The post nearest the vertical center becomes active — but ONLY when one is genuinely
+                    // near center (within a third of the screen). Without the tolerance, macOS layout
+                    // reported below-fold posts' positions and their song started before they were centered;
+                    // and by only switching when something IS centered, the current post keeps playing until
+                    // a *different* post takes the center (instead of going silent between posts).
                     let target = PlatformScreen.bounds.midY
-                    let nearest = centers.min { abs($0.value - target) < abs($1.value - target) }
-                    AudioCoordinator.shared.center(nearest?.key)
+                    let tolerance = PlatformScreen.bounds.height / 3
+                    if let nearest = centers.filter({ abs($0.value - target) < tolerance })
+                        .min(by: { abs($0.value - target) < abs($1.value - target) }) {
+                        AudioCoordinator.shared.center(nearest.key)
+                    }
                 }
                 }   // ScrollViewReader
                 // Hide the "Share something" composer while a comment field is focused so it

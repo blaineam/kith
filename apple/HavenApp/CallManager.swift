@@ -1495,6 +1495,7 @@ struct CallOverlay: View {
             }
         }
         .padding(.horizontal, 12)
+        .buttonStyle(.plain)   // the call buttons supply their own circles; drop macOS's rectangular chrome
         .sheet(isPresented: $showAddPicker) { AddToCallPicker().macSheetFrame() }
     }
 

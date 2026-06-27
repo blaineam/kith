@@ -119,6 +119,19 @@ struct YouView: View {
                         onEdit: { b in withAnimation(HavenTheme.smooth) { feed.edit(item.id, b) } },
                         onUnsend: { withAnimation(HavenTheme.smooth) { feed.unsend(item.id) } }
                     )
+                    // Report center position so the You-page feed drives audio too — without this the
+                    // centered post never became active, so songs animated but never actually played.
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: PostCenterKey.self, value: [item.id: geo.frame(in: .global).midY])
+                    })
+                }
+            }
+            .onPreferenceChange(PostCenterKey.self) { centers in
+                let target = PlatformScreen.bounds.midY
+                let tolerance = PlatformScreen.bounds.height / 3
+                if let nearest = centers.filter({ abs($0.value - target) < tolerance })
+                    .min(by: { abs($0.value - target) < abs($1.value - target) }) {
+                    AudioCoordinator.shared.center(nearest.key)
                 }
             }
         }

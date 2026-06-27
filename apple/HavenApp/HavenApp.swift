@@ -330,13 +330,18 @@ struct RootView: View {
                 .animation(HavenTheme.smooth, value: CallManager.shared.ringing)
                 .animation(HavenTheme.smooth, value: CallManager.shared.minimized)
         }
+        #if os(macOS)
+        // Drop macOS's rectangular button chrome app-wide so icon buttons read as clean circles/pills.
+        // Buttons that need a filled look use an explicit .bordered/.borderedProminent, which overrides this.
+        .buttonStyle(.plain)
+        #endif
         // Manual "add a friend" (onboarding / the + button) — no incoming link.
         .sheet(isPresented: $showConnect) {
-            ConnectView(account: accountStore.account, contacts: contacts, incomingLink: nil)
+            ConnectView(account: accountStore.account, contacts: contacts, incomingLink: nil).macSheetFrame()
         }
         // Invite deep link — the item carries the link, so ConnectView gets it immediately.
         .sheet(item: $pendingInvite) { invite in
-            ConnectView(account: accountStore.account, contacts: contacts, incomingLink: invite.link)
+            ConnectView(account: accountStore.account, contacts: contacts, incomingLink: invite.link).macSheetFrame()
         }
         // Share-sheet hand-off: pick DM / post / story for items shared from another app.
         #if os(iOS)

@@ -69,13 +69,17 @@ struct CircleView: View {
                             members.forEach { store.removeFromActiveCircle($0.idHex) }   // this circle only
                         }
                     }
-                } header: {
-                    Text(isDefault ? "People in your circle" : "In \(store.activeCircleName)")
-                } footer: {
+                    // The explanatory note as a ROW, not the Section's footer slot — macOS truncates
+                    // List footers to one line regardless of fixedSize, which cut off the "Waiting" text.
                     Text(isDefault
                          ? "“Waiting” means the secure handshake hasn't completed yet. Now just one of you needs to scan the other's invite — the other gets a request to approve. Swipe to remove, or swipe left to block."
                          : "Swipe to remove someone from just this circle (they stay in your other circles). Swipe left to block them everywhere.")
-                        .fixedSize(horizontal: false, vertical: true)   // wrap fully instead of truncating
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } header: {
+                    Text(isDefault ? "People in your circle" : "In \(store.activeCircleName)")
                 }
 
                 if !nonContactMembers.isEmpty {
@@ -155,7 +159,7 @@ struct CircleView: View {
         // Let the gradient show through the sheet's toolbar bars instead of their default gray.
         .toolbarBackground(.hidden, for: .windowToolbar)
         #endif
-        .sheet(isPresented: $showInvite) { ConnectView(account: account, contacts: contacts).macSheetClose() }
+        .sheet(isPresented: $showInvite) { ConnectView(account: account, contacts: contacts).macSheetFrame() }
         .alert("Nickname", isPresented: Binding(get: { nicknameTarget != nil }, set: { if !$0 { nicknameTarget = nil } })) {
             TextField("Nickname", text: $nicknameDraft)
             Button("Save") { if let c = nicknameTarget { ContactsStore.shared.setNickname(idHex: c.idHex, nicknameDraft) }; nicknameTarget = nil }
