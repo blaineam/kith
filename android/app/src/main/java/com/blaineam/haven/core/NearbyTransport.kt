@@ -57,8 +57,7 @@ object NearbyTransport {
         val c = Nearby.getConnectionsClient(appCtx)
         client = c
         active = true
-        val name = HavenNet.nodeIdHex.take(16)
-        c.startAdvertising(name, SERVICE_ID, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).build())
+        c.startAdvertising(endpointName, SERVICE_ID, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).build())
             .addOnFailureListener { Log.w(TAG, "advertise failed: ${it.message}") }
         c.startDiscovery(SERVICE_ID, discovery, DiscoveryOptions.Builder().setStrategy(strategy).build())
             .addOnFailureListener { Log.w(TAG, "discovery failed: ${it.message}") }
@@ -72,10 +71,15 @@ object NearbyTransport {
         client = null
     }
 
+    /** Per-DEVICE endpoint name (account id + this device's id) so two of the user's own seed-copies
+     *  don't advertise an identical name on the mesh and fail to disambiguate / connect. */
+    private val endpointName: String
+        get() = HavenNet.nodeIdHex.take(12) + ":" + SelfSyncCoordinator.deviceHex.take(12)
+
     private val discovery = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
             if (info.serviceId == SERVICE_ID) {
-                client?.requestConnection(HavenNet.nodeIdHex.take(16), endpointId, lifecycle)
+                client?.requestConnection(endpointName, endpointId, lifecycle)
             }
         }
         override fun onEndpointLost(endpointId: String) { endpoints.remove(endpointId) }
@@ -96,7 +100,8 @@ object NearbyTransport {
 
     private val payloads = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
-            payload.asBytes()?.let { HavenNet.onInbound(it) }   // same frame handler as iroh
+            // viaNearby = true: a Hello from an unknown node over proximity must not spawn a request.
+            payload.asBytes()?.let { HavenNet.onInbound(it, viaNearby = true) }
         }
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
     }

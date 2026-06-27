@@ -220,7 +220,12 @@ object HavenNet : InboundListener {
 
     // ---- Inbound dispatch (called off-main by the Rust node) -----------------------------
 
-    override fun onInbound(payload: ByteArray) {
+    override fun onInbound(payload: ByteArray) = onInbound(payload, viaNearby = false)
+
+    /** [viaNearby] = arrived over the local proximity mesh. A Hello from an UNKNOWN node over nearby
+     *  must NOT spawn a connection request (proximity != intent to connect — that was request spam);
+     *  only targeted iroh/relay invites prompt. */
+    fun onInbound(payload: ByteArray, viaNearby: Boolean) {
         if (payload.isEmpty()) return
         val type = payload[0].toInt() and 0xFF
         val body = payload.copyOfRange(1, payload.size)
@@ -235,7 +240,7 @@ object HavenNet : InboundListener {
         scope.launch {
             withContext(Dispatchers.Main) { internetActive.value = true }
             when (type) {
-                Wire.HELLO -> handleHello(body)
+                Wire.HELLO -> handleHello(body, viaNearby)
                 Wire.EVENT -> handleEvent(body)
                 Wire.RELAY_NODE -> handleRelayNode(body)
                 Wire.PRESIGN -> handlePresignBootstrap(body)
@@ -255,7 +260,7 @@ object HavenNet : InboundListener {
     /** Send a call signaling frame to one node (used by CallManager). */
     fun sendCallFrame(type: Int, payload: ByteArray, toNodeHex: String) = sendFrame(type, payload, toNodeHex)
 
-    private fun handleHello(payload: ByteArray) {
+    private fun handleHello(payload: ByteArray, viaNearby: Boolean = false) {
         val hello = Wire.parseHello(payload) ?: return
         val idHex = nodeHex(hello.bundle)
         if (blocked.contains(idHex)) return   // a blocked node can't handshake back in
@@ -286,7 +291,9 @@ object HavenNet : InboundListener {
             runCatching { social.addContactBundle(hello.circleId, hello.bundle) }
             return
         }
-        // Unknown sender on a non-DM circle → a request to approve.
+        // Unknown sender on a non-DM circle → a request to approve — UNLESS it merely arrived over the
+        // proximity mesh (nearby ≠ intent to connect; that flooded the user with spurious requests).
+        if (viaNearby) return
         if (!hello.circleId.startsWith("dm:")) {
             scope.launch(Dispatchers.Main) {
                 if (pending.none { it.idHex == idHex }) {

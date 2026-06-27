@@ -93,7 +93,10 @@ object SelfSyncCoordinator {
         }
     }
 
-    private val deviceHex: String get() = toHex(deviceId)
+    /** Stable per-DEVICE hex (distinct from the account/node id, which all of a user's devices share).
+     *  Used to disambiguate own devices on the proximity mesh so two seed-copies don't advertise an
+     *  identical endpoint name and fail to connect. */
+    val deviceHex: String get() = toHex(deviceId)
 
     // MARK: state <-> CRDT mapping
 
