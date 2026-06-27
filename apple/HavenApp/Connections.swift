@@ -139,12 +139,14 @@ struct ConnectionRequestsView: View {
                                 HStack(spacing: 12) {
                                     Button { approveTarget = req } label: {
                                         Label("Add", systemImage: "checkmark.circle.fill")
+                                            .foregroundStyle(.white)   // white label+symbol on the filled pink, not a pink glyph
                                     }
                                     .buttonStyle(.borderedProminent).tint(HavenTheme.pink)
                                     Button(role: .destructive) { store.blockConnection(req.idHex) } label: {
                                         Label("Block", systemImage: "hand.raised.fill")
+                                            .foregroundStyle(.white)
                                     }
-                                    .buttonStyle(.bordered)
+                                    .buttonStyle(.borderedProminent).tint(.red)   // filled red; no ambient tint flipping to iOS blue
                                 }
                             }
                             .padding(.vertical, 6)

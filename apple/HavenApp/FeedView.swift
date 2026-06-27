@@ -2736,9 +2736,9 @@ struct UserProfileView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     VStack(spacing: 8) {
-                        Circle().fill(LinearGradient(colors: [HavenTheme.amber, HavenTheme.pink], startPoint: .top, endPoint: .bottom))
-                            .frame(width: 76, height: 76)
-                            .overlay(Text(String(resolvedName.prefix(1))).font(.title.bold()).foregroundStyle(.white))
+                        // Use the contact's real signed avatar/emoji (PeerAvatar resolves it from their
+                        // card), falling back to the initial — not a hardcoded initial circle.
+                        PeerAvatar(nodeHex: authorHex, name: resolvedName, size: 76)
                         HStack(spacing: 6) {
                             Text(resolvedName).font(.title3.bold())
                             Button { nicknameDraft = contacts.contacts.first { $0.idHex.hasPrefix(authorHex) }?.nickname ?? ""; showNickname = true } label: {
