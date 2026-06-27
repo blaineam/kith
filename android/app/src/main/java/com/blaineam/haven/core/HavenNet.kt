@@ -1009,15 +1009,26 @@ object HavenNet : InboundListener {
         val entry = incomingMedia.getOrPut(ref) { IncomingMedia(total) }
         entry.chunks[index] = plain
         if (entry.chunks.size >= entry.total) {
-            val full = ByteArray(entry.chunks.values.sumOf { it.size })
-            var p = 0
-            for (i in 0 until entry.total) { val c = entry.chunks[i] ?: continue; c.copyInto(full, p); p += c.size }
-            // Free the per-chunk buffers BEFORE sealing the full blob (sealCircleMedia needs the
-            // whole thing in memory) — on a low-heap device a large iOS video otherwise OOMs holding
-            // the chunk map + full array + sealed output all at once. `full` is already exact-size,
-            // so the old `full.copyOf(p)` was a redundant whole-video copy — dropped.
-            incomingMedia.remove(ref)
-            LocalMedia.storeUnderRef(DEFAULT_CIRCLE, ref, full)
+            incomingMedia.remove(ref)   // detach first so a failure below can't leak the chunk map
+            val totalSize = entry.chunks.values.sumOf { it.size }
+            // OOM GUARD: sealCircleMedia needs the WHOLE plaintext in memory, so storing a media costs
+            // ~3× its size (chunk map + full array + sealed output). A large (e.g. 146 MB) iOS video
+            // therefore crashed the app with OutOfMemoryError mid-call. Skip anything too big to hold
+            // safely, free each chunk as we copy to halve the peak, and catch any residual OOM rather
+            // than letting it take the whole process (and the call/foreground service) down.
+            val safeCap = (Runtime.getRuntime().maxMemory() / 4)
+            if (totalSize <= 0 || totalSize > safeCap) { entry.chunks.clear(); return }
+            val ok = runCatching {
+                val full = ByteArray(totalSize)
+                var p = 0
+                for (i in 0 until entry.total) {
+                    val c = entry.chunks.remove(i) ?: continue   // free each chunk as it's copied
+                    c.copyInto(full, p); p += c.size
+                }
+                LocalMedia.storeUnderRef(DEFAULT_CIRCLE, ref, full)
+            }.isSuccess
+            entry.chunks.clear()
+            if (!ok) return
             scope.launch(Dispatchers.Main) { feedVersion.value++ }
             // "Save others' posts to Photos" — per-circle override (received media stores under the
             // default circle), falling back to the app-wide default.
