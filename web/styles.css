@@ -126,6 +126,10 @@ h1,h2,h3{line-height:1.12;letter-spacing:-.02em;margin:0}
 
 /* ── Feature grid ─────────────────────────────────────────────────────── */
 .grid{display:grid;gap:18px}
+/* Grid items default to min-width:auto and refuse to shrink below their content — so a long,
+   non-wrapping code line (curl … | sh) blew the column (and the whole page) wider than a phone
+   screen. min-width:0 lets the column shrink and the pre's own overflow:auto scroll the code. */
+.grid>*{min-width:0}
 .grid.cols-2{grid-template-columns:repeat(2,1fr)}
 .grid.cols-3{grid-template-columns:repeat(3,1fr)}
 .feature{padding:24px 22px}
