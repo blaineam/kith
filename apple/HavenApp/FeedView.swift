@@ -921,10 +921,11 @@ final class FeedStore: ObservableObject {
         var grant = Data()
         lpAppend(&grant, Data(hex.utf8))
         lpAppend(&grant, cred)
-        nearbyBroadcast(25, grant)
+        sendToMyDevices(25, grant)
         // CRITICAL: linking must SYNC STATE, not just hand over a credential. Push my full account state
-        // (profile photo/bio/link + circles + posts) to the newly-linked device right now.
-        nearbyPeerConnected()
+        // (profile photo/bio/link + circles + posts) to the newly-linked device right now, over both
+        // transports (the request reached me, but a nearby-only response may never get back).
+        pushFullStateToMyDevices()
     }
 
     /// The primary granted my device its credential. Store it, then ASK the primary to send me its full
@@ -936,7 +937,7 @@ final class FeedStore: ObservableObject {
         let targetHex = String(data: targetHexData, encoding: .utf8) ?? ""
         guard targetHex == DeviceKeyStore.deviceNodeHex() else { return }   // not for this device
         DeviceCredentialStore.save(cred)
-        nearbyBroadcast(26, Data(targetHex.utf8))   // "send me your full state"
+        sendToMyDevices(26, Data(targetHex.utf8))   // "send me your full state" (both transports)
         refresh(); requestMissingMedia()
         NotificationManager.shared.notify(title: "Device authorized",
                                           body: "This device is now a secure linked device — syncing your stuff…",
@@ -947,7 +948,26 @@ final class FeedStore: ObservableObject {
     /// + posts. (Same payload the passive nearby-connect sends, but triggered explicitly by linking.)
     private func handleRequestFullState(_ payload: Data) {
         guard AccountStore.storedSeed() != nil else { return }   // only a seed-holder can push the account state
-        nearbyPeerConnected()
+        pushFullStateToMyDevices()
+    }
+
+    /// Send to MY OWN other devices over BOTH transports — the local mesh AND iroh (directed at my own
+    /// node id, which reaches my other devices). Device-link messages must not assume the nearby mesh is
+    /// up; if the two are connected over iroh instead, nearby-only sends silently go nowhere.
+    private func sendToMyDevices(_ type: UInt8, _ payload: Data) {
+        nearbyBroadcast(type, payload)
+        if let hex = social?.myNodeHex() { sendIroh(type, payload, to: hex) }
+    }
+
+    /// Push my full account state (profile/circles/contacts slot + every circle's posts) to my other
+    /// devices over both transports, so a freshly-linked device populates regardless of which is up.
+    private func pushFullStateToMyDevices() {
+        guard let social else { return }
+        if let slot = SelfSyncCoordinator.shared.sealedLocalSlot(social: social) { sendToMyDevices(23, slot) }
+        for circle in circles where !circle.id.hasPrefix("dm:") {
+            for env in social.syncEnvelopes(circleId: circle.id) { sendToMyDevices(1, eventPayload(circle.id, env)) }
+        }
+        refresh()
     }
 
     /// Share my S3 bucket as the active circle's mailbox — WITHOUT sending the credentials.
