@@ -17,6 +17,7 @@ struct StoryViewer: View {
     @Environment(\.dismiss) private var dismiss
     @State private var progress = 0.0
     @State private var player: AVPlayer?
+    @State private var endObserver: Any?   // the loop observer's token — MUST be removed or the player leaks
     @State private var slideDuration = 5.0   // photos 5s; videos last their clip (≤15s)
     @State private var profilePeer: StoryProfile?   // tapped a sharer → peek their profile
     @State private var paused = false               // paused while the profile sheet is up
@@ -313,8 +314,13 @@ struct StoryViewer: View {
     // MARK: - Playback per story
 
     private func loadCurrent() {
-        // Stop the previous slide's audio so it never bleeds into the next.
+        // Stop the previous slide's audio so it never bleeds into the next, AND release its loop
+        // observer — otherwise the observer's closure keeps the old AVPlayer (and its video decode
+        // buffers) alive forever, looping/re-decoding off-screen. Every slide leaked one → tens of GB
+        // overnight. (Same root cause as the PostCard fix; this site was missed.)
         player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
         player = nil
         // Clear a STUCK hold-to-pause: on macOS a tap-to-navigate cancels the 0-distance DragGesture's
         // onEnded, leaving heldPaused == true, which froze the progress timer (the last/only story then
@@ -338,9 +344,11 @@ struct StoryViewer: View {
            item.kind == .video, let url = item.videoURL {
             let p = AVPlayer(url: url)
             p.isMuted = (s.music != nil)
-            NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
-                                                   object: p.currentItem, queue: .main) { _ in
-                p.seek(to: .zero); p.play()
+            // Weak capture + keep the token so loadCurrent/teardown can remove it. A strong capture +
+            // discarded token is exactly what leaked every story player forever.
+            endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
+                                                   object: p.currentItem, queue: .main) { [weak p] _ in
+                p?.seek(to: .zero); p?.play()
             }
             player = p
             p.play()
@@ -359,9 +367,12 @@ struct StoryViewer: View {
 
     private func teardown() {
         player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        // Remove the loop observer by its TOKEN. The old `removeObserver(self)` never matched a
+        // closure-based observer (it isn't registered against `self`), so the player leaked.
+        if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
         player = nil
         MusicPlayback.shared.stop()
-        NotificationCenter.default.removeObserver(self)
     }
 
     @ViewBuilder private func sharerAvatar(_ s: FeedItemFfi) -> some View {

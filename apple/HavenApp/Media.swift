@@ -88,7 +88,7 @@ struct VideoTrimmer: View {
         .padding(20)
         .frame(minWidth: 460)
         .onAppear { load() }
-        .onDisappear { player.pause() }
+        .onDisappear { player.pause(); player.replaceCurrentItem(with: nil) }   // release decode buffers
     }
 
     private func load() {

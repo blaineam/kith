@@ -135,15 +135,17 @@ private struct CarouselVideo: View {
             .onAppear {
                 let p = AVPlayer(url: url)
                 looper = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { _ in
-                    p.seek(to: .zero); p.play()
+                    forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { [weak p] _ in
+                    p?.seek(to: .zero); p?.play()
                 }
                 player = p
                 p.play()
             }
             .onDisappear {
                 player?.pause()
+                player?.replaceCurrentItem(with: nil)
                 if let o = looper { NotificationCenter.default.removeObserver(o); looper = nil }
+                player = nil
             }
     }
 }
