@@ -417,13 +417,20 @@ impl Engine {
     /// device-only, nothing will leave this machine until a transport is configured. (Desktop has no
     /// local proximity mesh, so there's no mesh-based "syncing" state.)
     pub fn sync_status(&self, circle_id: &str) -> String {
-        let prefs = self.prefs.lock().unwrap();
-        let circle_relay = prefs.relays.get(circle_id).map(|v| !v.is_empty()).unwrap_or(false);
-        let any_transport = circle_relay
-            || prefs.s3.is_some()
-            || prefs.host_on_launch
-            || prefs.relays.values().any(|v| !v.is_empty());
-        if any_transport { "synced".into() } else { "local".into() }
+        let any_transport = {
+            let prefs = self.prefs.lock().unwrap();
+            prefs.relays.get(circle_id).map(|v| !v.is_empty()).unwrap_or(false)
+                || prefs.s3.is_some()
+                || prefs.host_on_launch
+                || prefs.relays.values().any(|v| !v.is_empty())
+        };
+        if any_transport {
+            return "synced".into();
+        }
+        // No relay/bucket configured: online = best-effort direct iroh delivery done (green, no nag);
+        // only genuinely offline is the device-only warning. (Previously pinned a relay-less node to a
+        // permanent "device only" red.)
+        if self.dyn_state.lock().unwrap().internet_active { "synced".into() } else { "local".into() }
     }
 
     pub fn set_host_on_launch(self: &Arc<Self>, on: bool) {

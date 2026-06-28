@@ -1301,10 +1301,10 @@ object HavenNet : InboundListener {
      *  SYNCING = the nearby mesh is up but no peer is connected yet. LOCAL = device-only (no relay,
      *  no mesh) — the post won't leave this device until one comes online. */
     fun syncStatus(circleId: String): SyncStatus = when {
-        NearbyTransport.hasConnectedPeers() -> SyncStatus.SYNCED
-        relaysForCircle(circleId).isNotEmpty() -> SyncStatus.SYNCED
-        NearbyTransport.active -> SyncStatus.SYNCING
-        else -> SyncStatus.LOCAL
+        NearbyTransport.hasConnectedPeers() -> SyncStatus.SYNCED        // a member is right here
+        relaysForCircle(circleId).isNotEmpty() -> SyncStatus.SYNCED     // a relay holds it for offline members
+        internetActive.value -> SyncStatus.SYNCED                       // online: best-effort iroh delivery, no nag
+        else -> SyncStatus.LOCAL                                        // offline + no relay/peer = device-only
     }
 
     /** Add a relay node to a circle's redundant set + persist (additive, never replaces). Used by self-sync. */

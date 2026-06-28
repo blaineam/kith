@@ -557,10 +557,16 @@ final class FeedStore: ObservableObject {
     /// (or, with no relay, a nearby member has it); yellow = still syncing; red = only on this device.
     func syncStatus(circleId: String) -> PostSyncStatus {
         if !RelayMailboxStore.shared.relays(forCircle: circleId).isEmpty {
+            // A relay holds posts for offline members. Yellow ONLY while an upload to it is genuinely
+            // in flight (transient); otherwise green.
             return BackgroundUploader.shared.hasPending(circleId: circleId) ? .pending : .synced
         }
         if nearby?.hasConnectedPeers == true { return .synced }   // delivered directly to ≥1 nearby member
-        return online ? .pending : .stuck                          // online = trying; offline = device-only
+        // No relay + no nearby peer. Without a relay there's no "uploading" state to resolve — posts go
+        // best-effort directly to whoever's reachable over iroh. So online = done-what-we-can (green, no
+        // nag); only genuinely OFFLINE is the device-only warning. (Was `.pending` here, which pinned a
+        // relay-less node — the common P2P case — to a permanent yellow "Syncing…".)
+        return online ? .synced : .stuck
     }
 
     // MARK: - Sensitive content (federated SCA flags)
