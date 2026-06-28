@@ -157,6 +157,12 @@ async function renderFeed() {
     el("button", { class: "btn small ghost", title: "Manage circle", onclick: () => manageCircleDialog(circles.find((c) => c.id === state.activeCircle)) }, "⚙︎"),
     Hidden.ids.size ? el("button", { class: "btn small ghost", title: "Show/hide hidden posts", onclick: () => { Hidden.toggle(); renderFeed(); } },
       Hidden.showHidden ? "🙈 Hide hidden" : `👁 Show hidden (${Hidden.ids.size})`) : null,
+    el("button", { class: "btn small ghost", title: "Mute/unmute all videos", onclick: async () => {
+      state.videoSoundOn = !state.videoSoundOn;
+      await invoke("set_video_sound", { on: state.videoSoundOn }).catch(() => {});
+      document.querySelectorAll("video[data-video]").forEach((v) => { v.muted = !state.videoSoundOn; });
+      renderFeed();
+    } }, state.videoSoundOn ? "🔊" : "🔇"),
   );
 
   const composer = buildComposer(
@@ -309,7 +315,9 @@ function blobToBase64(blob) {
 
 // Render a media ref as the right element: video (v:), voice note (a:), or image.
 function mediaNode(ref, imgStyle) {
-  if (ref.startsWith("v:")) return el("video", { "data-ref": ref, controls: "" });
+  // Videos start muted unless the global "play video sound" toggle is on (iOS parity); native controls
+  // still let the user override per-video. data-video lets the toggle re-apply across all of them.
+  if (ref.startsWith("v:")) return el("video", Object.assign({ "data-ref": ref, "data-video": "1", controls: "" }, state.videoSoundOn ? {} : { muted: "" }));
   if (ref.startsWith("a:")) return el("audio", { "data-ref": ref, controls: "", style: "width:100%;margin-top:6px;display:block" });
   return el("img", Object.assign({ "data-ref": ref, loading: "lazy" }, imgStyle ? { style: imgStyle } : {}));
 }
@@ -1298,6 +1306,7 @@ async function boot() {
   if (!state.profile.name) switchView("you");
 
   try { state.contacts = await invoke("contacts"); } catch (_) {}
+  try { state.videoSoundOn = await invoke("video_sound_on"); } catch (_) { state.videoSoundOn = false; }
   listen("haven:changed", async () => {
     await refreshStatus(); await refreshBadges();
     try { state.contacts = await invoke("contacts"); } catch (_) {}

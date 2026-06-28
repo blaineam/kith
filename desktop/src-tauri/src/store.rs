@@ -132,6 +132,9 @@ pub struct Prefs {
     /// Auto-host the in-process relay on app launch (so launch-on-login = always-on relay).
     #[serde(default)]
     pub host_on_launch: bool,
+    /// Global "play video sound" toggle (iOS parity): feed videos start muted; flipping this unmutes all.
+    #[serde(default)]
+    pub video_sound_on: bool,
 }
 
 impl Prefs {

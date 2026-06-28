@@ -429,6 +429,16 @@ impl Engine {
         let _ = p.save(&self.paths);
     }
 
+    pub fn video_sound_on(&self) -> bool {
+        self.prefs.lock().unwrap().video_sound_on
+    }
+
+    pub fn set_video_sound(self: &Arc<Self>, on: bool) {
+        let mut p = self.prefs.lock().unwrap();
+        p.video_sound_on = on;
+        let _ = p.save(&self.paths);
+    }
+
     // ---- circles ------------------------------------------------------------------------
 
     pub fn feed_circles(&self) -> Vec<haven_ffi::CircleInfoFfi> {

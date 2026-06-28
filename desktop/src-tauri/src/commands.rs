@@ -328,6 +328,17 @@ pub fn sync_status(engine: Eng, circle_id: String) -> String {
     engine.sync_status(&cid)
 }
 
+/// Global "play video sound" toggle (videos start muted otherwise).
+#[tauri::command]
+pub fn video_sound_on(engine: Eng) -> bool {
+    engine.video_sound_on()
+}
+
+#[tauri::command]
+pub fn set_video_sound(engine: Eng, on: bool) {
+    engine.set_video_sound(on);
+}
+
 #[tauri::command]
 pub fn messages(engine: Eng, circle_id: String) -> Vec<FeedItemDto> {
     engine.messages(&circle_id).into_iter().map(|it| feed_item_dto(&engine, it)).collect()

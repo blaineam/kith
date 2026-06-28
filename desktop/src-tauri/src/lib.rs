@@ -211,6 +211,8 @@ pub fn run() {
             commands::start_dm,
             commands::start_group_dm,
             commands::sync_status,
+            commands::video_sound_on,
+            commands::set_video_sound,
             commands::messages,
             commands::send_dm,
             commands::connect_by_link,

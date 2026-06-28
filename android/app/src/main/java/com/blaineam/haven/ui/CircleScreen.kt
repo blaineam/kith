@@ -31,6 +31,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -73,6 +75,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import com.blaineam.haven.core.DEFAULT_CIRCLE
 import com.blaineam.haven.core.HavenNet
 import com.blaineam.haven.core.LocalMedia
+import com.blaineam.haven.core.ProfileStore
 import com.blaineam.haven.core.PendingRequest
 import com.blaineam.haven.core.loadAndDownscale
 import com.blaineam.haven.core.nowMs
@@ -802,15 +805,24 @@ private fun SyncStatusBadge(circleId: String) {
     }
 }
 
-/** Plays an attached video from its decrypted cache file (tap to start), with controls. */
+/** Plays an attached video from its decrypted cache file, with controls. Videos start MUTED; the
+ *  corner button toggles sound for ALL videos (global ProfileStore.videoSoundOn — iOS parity). */
 @Composable
 fun VideoTile(circleId: String, ref: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val profile = remember { ProfileStore.get(context) }
+    val soundOn = profile.videoSoundOn
     var file by remember(ref) { mutableStateOf<java.io.File?>(null) }
+    val player = remember(ref) { mutableStateOf<android.media.MediaPlayer?>(null) }
     LaunchedEffect(ref, circleId) {
         file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             LocalMedia.videoFile(circleId, ref)
         }
+    }
+    // Re-apply the global mute state whenever it flips or the player becomes ready.
+    LaunchedEffect(soundOn, player.value) {
+        val v = if (soundOn) 1f else 0f
+        runCatching { player.value?.setVolume(v, v) }
     }
     val f = file
     if (f == null) {
@@ -818,18 +830,36 @@ fun VideoTile(circleId: String, ref: String, modifier: Modifier = Modifier) {
             Icon(Icons.Filled.Videocam, "Video", tint = HavenTheme.textSecondary)
         }
     } else {
-        AndroidView(
-            modifier = modifier,
-            factory = { ctx ->
-                android.widget.VideoView(ctx).apply {
-                    setVideoPath(f.absolutePath)
-                    val mc = android.widget.MediaController(ctx)
-                    mc.setAnchorView(this)
-                    setMediaController(mc)
-                    setOnPreparedListener { it.isLooping = true }
-                }
-            },
-        )
+        Box(modifier) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    android.widget.VideoView(ctx).apply {
+                        setVideoPath(f.absolutePath)
+                        val mc = android.widget.MediaController(ctx)
+                        mc.setAnchorView(this)
+                        setMediaController(mc)
+                        setOnPreparedListener {
+                            it.isLooping = true
+                            val v = if (profile.videoSoundOn) 1f else 0f
+                            it.setVolume(v, v)
+                            player.value = it
+                        }
+                    }
+                },
+            )
+            Box(
+                Modifier.align(Alignment.BottomEnd).padding(8.dp).size(34.dp).clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable { profile.videoSoundOn = !profile.videoSoundOn },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (soundOn) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
+                    "Toggle sound", tint = Color.White, modifier = Modifier.size(18.dp),
+                )
+            }
+        }
     }
 }
 

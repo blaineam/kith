@@ -38,6 +38,11 @@ class ProfileStore private constructor(context: Context) {
     var autoOptimize: Boolean
         get() = _autoOptimize.value
         set(v) { _autoOptimize.value = v; prefs.edit().putBoolean(KEY_OPTIMIZE, v).apply() }
+    // Global "play video sound" toggle (iOS parity): videos start muted; tapping any video unmutes ALL.
+    private val _videoSoundOn = mutableStateOf(prefs.getBoolean(KEY_VIDEO_SOUND, false))
+    var videoSoundOn: Boolean
+        get() = _videoSoundOn.value
+        set(v) { _videoSoundOn.value = v; prefs.edit().putBoolean(KEY_VIDEO_SOUND, v).apply() }
 
     /** Retention as a seconds value for the engine's feed() call (null = keep forever). */
     fun retentionSecs(): ULong? = if (retentionDays <= 0) null else (retentionDays.toLong() * 86_400L).toULong()
@@ -104,6 +109,7 @@ class ProfileStore private constructor(context: Context) {
         private const val KEY_SAVE_MINE = "saveMyPosts"
         private const val KEY_SAVE_OTHERS = "saveOthersPosts"
         private const val KEY_OPTIMIZE = "autoOptimize"
+        private const val KEY_VIDEO_SOUND = "videoSoundOn"
 
         @Volatile private var instance: ProfileStore? = null
         fun get(context: Context): ProfileStore =
