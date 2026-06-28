@@ -198,6 +198,7 @@ pub fn run() {
             commands::rename_circle,
             commands::leave_circle,
             commands::add_to_circle,
+            commands::remove_from_circle,
             commands::feed,
             commands::post,
             commands::post_story,

@@ -456,6 +456,24 @@ impl Engine {
         self.send_hello(&circle_id, &contact_id_hex);
     }
 
+    /// Remove a member from a circle (without blocking). Records the severance so it propagates to our
+    /// own devices as an INTENTIONAL removal and survives the additive re-sync (apply_local won't re-add
+    /// anyone in `circle_removals`), then re-keys the relay mailbox to the remaining members so the
+    /// removed person can't pull future media.
+    pub fn remove_from_circle(self: &Arc<Self>, circle_id: String, contact_id_hex: String) {
+        {
+            let mut p = self.prefs.lock().unwrap();
+            let entry = format!("{circle_id}|{}", contact_id_hex.to_lowercase());
+            if !p.circle_removals.iter().any(|e| e == &entry) {
+                p.circle_removals.push(entry);
+            }
+        }
+        self.social.remove_from_circle(circle_id, contact_id_hex);
+        self.persist();
+        self.authorize_membership();
+        self.emit_changed();
+    }
+
     // ---- feed / authoring ---------------------------------------------------------------
 
     pub fn feed(&self, circle_id: &str) -> Vec<FeedItemFfi> {

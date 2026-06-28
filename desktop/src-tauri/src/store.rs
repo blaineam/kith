@@ -111,6 +111,11 @@ pub struct Prefs {
     pub contacts: Vec<Contact>,
     #[serde(default)]
     pub blocked: Vec<String>,
+    /// Members explicitly removed from a circle, as "circleId|hex". Grow-only severances — propagated to
+    /// our own devices as intentional `removal:` records (not inferred from absence) and used to suppress
+    /// re-adding the member on an additive re-sync, and to hide their posts/calls. Mirrors iOS/Android.
+    #[serde(default)]
+    pub circle_removals: Vec<String>,
     /// Legacy single-relay-per-circle map (migrated into `relays` on load; kept for back-compat).
     #[serde(default)]
     pub relay_nodes: std::collections::HashMap<String, String>,

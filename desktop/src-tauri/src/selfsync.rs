@@ -72,6 +72,12 @@ pub fn current_local(prefs: &Prefs, social: &HavenSocial) -> BTreeMap<String, Ve
         m.insert(format!("blocked:{hex}"), vec![1]);
     }
 
+    // Explicit circle severances (grow-only) — so a removal converges to our other devices as an
+    // INTENTIONAL record rather than being inferred from (strictly-additive) member absence.
+    for entry in &prefs.circle_removals {
+        m.insert(format!("removal:{entry}"), vec![1]);
+    }
+
     // Circles: name + member bundles + relay nodes, so another device can reconstruct each circle
     // and seal to every member. Encoded via the shared FFI encoder so the bytes are byte-identical
     // to iOS/Android (it base64's the RAW bundles, sorts members/relays, alphabetical-key JSON).
@@ -207,6 +213,19 @@ pub fn apply_local(
         changed = true;
     }
 
+    // Explicit circle severances synced from our other devices (grow-only): record them locally so the
+    // member isn't re-registered below, and apply the removal to the circle here too.
+    for (k, _) in entries {
+        let Some(entry) = k.strip_prefix("removal:") else { continue };
+        if !prefs.circle_removals.iter().any(|e| e == entry) {
+            prefs.circle_removals.push(entry.to_string());
+            changed = true;
+        }
+        if let Some((cid, hex)) = entry.split_once('|') {
+            social.remove_from_circle(cid.to_string(), hex.to_string());
+        }
+    }
+
     // Circles: reconstruct each synced circle — create it + register every member's bundle so this
     // device can seal to them, and record its relay mailbox(es). STRICTLY ADDITIVE (no absence-based
     // member-prune or circle-leave — that wiped accounts on a freshly-restored device).
@@ -228,8 +247,22 @@ pub fn apply_local(
             }
         }
         // Register every synced member bundle so this device can seal to them. ADDITIVE — we never
-        // remove a member just because a peer's record doesn't list them.
+        // remove a member just because a peer's record doesn't list them — but we DO skip anyone we've
+        // explicitly severed (anti-reinflation).
+        let prefix = format!("{id}|");
+        let removed_here: Vec<String> = prefs
+            .circle_removals
+            .iter()
+            .filter_map(|e| e.strip_prefix(&prefix).map(|h| h.to_string()))
+            .collect();
         for bundle in &cs.member_bundles {
+            let node_hex = p2pcore::identity::HavenId::from_bytes(bundle)
+                .ok()
+                .map(|hid| hex::encode(hid.node_id_bytes()))
+                .unwrap_or_default();
+            if !node_hex.is_empty() && removed_here.iter().any(|h| h == &node_hex) {
+                continue; // severed — never re-add
+            }
             let _ = social.add_contact_bundle(id.to_string(), bundle.clone());
         }
         if !cs.relays.is_empty() {

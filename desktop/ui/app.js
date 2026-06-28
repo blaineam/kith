@@ -583,7 +583,11 @@ async function manageCircleDialog(circle) {
       el("button", { class: "btn small", onclick: async (e) => {
         try { await invoke("add_to_circle", { circleId: circle.id, contactIdHex: c.id_hex }); e.target.textContent = "Added ✓"; e.target.disabled = true; toast(`Added ${c.name}`); }
         catch (err) { toast("Couldn't add: " + err); }
-      } }, "Add")));
+      } }, "Add"),
+      isDefault ? null : el("button", { class: "btn small ghost", title: "Remove from this circle", onclick: async (e) => {
+        try { await invoke("remove_from_circle", { circleId: circle.id, contactIdHex: c.id_hex }); e.target.textContent = "Removed ✓"; e.target.disabled = true; toast(`Removed ${c.name}`); renderFeed(); }
+        catch (err) { toast("Couldn't remove: " + err); }
+      } }, "Remove")));
   }
   modal(el("div", {},
     el("h2", {}, "Manage circle"),
@@ -591,7 +595,7 @@ async function manageCircleDialog(circle) {
       el("label", { class: "muted small" }, "Name"),
       el("div", { class: "row" }, nameInp,
         el("button", { class: "btn", onclick: async () => { const n = nameInp.value.trim(); if (n && n !== circle.name) { await invoke("rename_circle", { id: circle.id, name: n }); toast("Renamed"); $("#modal-root").replaceChildren(); renderFeed(); } } }, "Rename")),
-      el("label", { class: "muted small", style: "margin-top:6px" }, "Add members"),
+      el("label", { class: "muted small", style: "margin-top:6px" }, "Members"),
       memberList,
       isDefault ? null : el("button", { class: "btn danger", style: "margin-top:6px", onclick: async () => {
         await invoke("leave_circle", { id: circle.id }); state.activeCircle = "default"; $("#modal-root").replaceChildren(); toast("Left circle"); renderFeed();

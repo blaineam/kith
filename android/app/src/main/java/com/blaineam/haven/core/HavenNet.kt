@@ -117,6 +117,7 @@ object HavenNet : InboundListener {
         LocalMedia.init(appContext)
         Presign.init(appContext)
         CircleLock.init(appContext)
+        CircleRemovals.init(appContext)
         SelfSyncCoordinator.init(appContext)
         restoreState()
         loadContacts()
@@ -410,6 +411,9 @@ object HavenNet : InboundListener {
 
     /** Remove a member from a SPECIFIC circle (roster management). */
     fun removeFromCircle(circleId: String, idHex: String) {
+        // Record the severance so it (a) propagates to our own devices as an explicit removal and
+        // (b) survives the additive re-sync (applyLocal won't re-add anyone in CircleRemovals).
+        CircleRemovals.add(circleId, idHex)
         runCatching { social.removeFromCircle(circleId, idHex) }
         feedVersion.value++; circlesVersion.value++; persist()
         // Re-lock the relay mailbox to the remaining members so the removed person can no longer
@@ -418,6 +422,9 @@ object HavenNet : InboundListener {
         // read anything new.)
         authorizeMembership()
     }
+
+    /** True if [hex] was explicitly removed from [circleId] (severance) — don't dial / show them there. */
+    fun isRemovedFromCircle(circleId: String, hex: String): Boolean = CircleRemovals.contains(circleId, hex)
 
     /** The members of a circle, with resolved display names — for the roster/management UI. */
     fun membersOf(circleId: String): List<Contact> =

@@ -124,6 +124,11 @@ object SelfSyncCoordinator {
         for (hex in HavenNet.selfSyncBlockedSnapshot()) {
             m["blocked:$hex"] = byteArrayOf(1)
         }
+        // Explicit circle severances (grow-only) — so a removal converges to our other devices as an
+        // INTENTIONAL record rather than being inferred from (now strictly-additive) member absence.
+        for (entry in CircleRemovals.all()) {
+            m["removal:$entry"] = byteArrayOf(1)
+        }
         // Circles: name + member bundles + relay nodes, so another device can reconstruct each
         // circle and seal to every member. Encoded by the SHARED Rust encoder so the bytes are
         // identical across iOS/Android/desktop (member set is authoritative — see applyLocal).
@@ -182,6 +187,18 @@ object SelfSyncCoordinator {
         for (hex in wantBlocked - haveBlocked) HavenNet.selfSyncSetBlocked(hex, true)
         for (hex in haveBlocked - wantBlocked) HavenNet.selfSyncSetBlocked(hex, false)
 
+        // Explicit circle severances synced from our other devices (grow-only): record them locally so
+        // the member won't be re-added below, and apply the removal to the circle here too.
+        for (e in live) if (e.key.startsWith("removal:")) {
+            val body = e.key.removePrefix("removal:")
+            val cid = body.substringBefore("|")
+            val hex = body.substringAfter("|", "")
+            if (cid.isNotEmpty() && hex.isNotEmpty()) {
+                CircleRemovals.add(cid, hex)
+                if (social != null) runCatching { social.removeFromCircle(cid, hex) }
+            }
+        }
+
         // Circles: reconcile each synced circle — create it + register every member's bundle so this
         // device can seal to them, and record its relay mailbox(es). ADDITIVE in v1 (no absence-based
         // leave/prune — see the strictly-additive note below).
@@ -199,6 +216,7 @@ object SelfSyncCoordinator {
                 // what wiped accounts when a freshly-restored (empty) device synced. Explicit circle-leave
                 // / member-removal must be driven by an intentional action, not inferred from absence.
                 for (bundle in cs.memberBundles) {
+                    if (CircleRemovals.contains(id, nodeHex(bundle))) continue // severed — never re-add
                     runCatching { social.addContactBundle(id, bundle) }
                 }
                 for (node in cs.relays) HavenNet.selfSyncAddRelay(id, node)

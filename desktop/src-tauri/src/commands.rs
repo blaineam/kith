@@ -250,6 +250,11 @@ pub fn add_to_circle(engine: Eng, circle_id: String, contact_id_hex: String) {
     engine.add_to_circle(circle_id, contact_id_hex);
 }
 
+#[tauri::command]
+pub fn remove_from_circle(engine: Eng, circle_id: String, contact_id_hex: String) {
+    engine.remove_from_circle(circle_id, contact_id_hex);
+}
+
 // ---- feed / authoring --------------------------------------------------------------------
 
 #[tauri::command]
