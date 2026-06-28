@@ -1298,7 +1298,15 @@ async function boot() {
   if (!state.profile.name) switchView("you");
 
   try { state.contacts = await invoke("contacts"); } catch (_) {}
-  listen("haven:changed", async () => { await refreshStatus(); await refreshBadges(); try { state.contacts = await invoke("contacts"); } catch (_) {} await render(); });
+  listen("haven:changed", async () => {
+    await refreshStatus(); await refreshBadges();
+    try { state.contacts = await invoke("contacts"); } catch (_) {}
+    // Don't yank the profile editor out from under the user mid-type on a background sync — re-rendering
+    // the "you" view rebuilds its inputs and discards what they're typing.
+    const ae = document.activeElement;
+    if (state.view === "you" && ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") && $("#view-you").contains(ae)) return;
+    await render();
+  });
   listen("haven:notify", (e) => { const p = e.payload || {}; toast(`${p.title}: ${p.body}`); });
   listen("haven:call", (e) => onCallEvent(e.payload));
   // Drag photos/videos from the file manager onto the window → attach to the active composer.
