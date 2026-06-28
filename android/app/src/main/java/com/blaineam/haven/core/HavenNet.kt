@@ -882,6 +882,10 @@ object HavenNet : InboundListener {
 
     private suspend fun relayClientFor(nodeHex: String): RelayClient? = relayMutex.withLock {
         relayClients[nodeHex]?.let { return it }
+        // NEVER connect to our OWN hosted relay node. A node dialing itself sends iroh's path discovery
+        // into a tight loop (open_path_on_all_conns), exploding memory by tens of GB. We ARE this relay;
+        // we never need a client to it. (Same root cause + fix as iOS/macOS.)
+        if (runCatching { relayHost?.nodeIdHex() }.getOrNull() == nodeHex && nodeHex.isNotEmpty()) return null
         // Skip a relay that's in its backoff window — try the others instead.
         if (!relayAvailable(nodeHex)) return null
         val c = runCatching { RelayClient.connect(core.seed, nodeHex) }.getOrNull()

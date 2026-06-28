@@ -1257,6 +1257,14 @@ impl Engine {
                 return Some(c.clone());
             }
         }
+        // NEVER connect to our OWN hosted relay node. A node dialing itself sends iroh's path discovery
+        // into a tight loop (open_path_on_all_conns), exploding memory by tens of GB. We ARE this relay;
+        // we never need a client to it. (Same root cause + fix as iOS/macOS.)
+        if let Some(h) = self.relay_host.lock().unwrap().as_ref() {
+            if h.node_id_hex() == node_hex {
+                return None;
+            }
+        }
         // Skip a relay that's in its backoff window — try the others instead.
         if !self.relay_available(node_hex) {
             return None;
