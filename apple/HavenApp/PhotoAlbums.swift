@@ -39,22 +39,51 @@ final class HavenPhotoAlbums {
             if let existing = self.existingAlbum(kind) {
                 completion(existing); return
             }
-            self.createStructure {
-                completion(self.existingAlbum(kind))
-            }
+            // BLOCK the serial queue until creation actually finishes + the ids persist. Otherwise this
+            // block returned immediately (createStructure's performChanges is async), so a burst of saves
+            // (e.g. a batch of received photos) each saw "no album yet" and each created a whole new
+            // "Haven" folder → dozens of duplicates. The semaphore serializes creation to exactly once.
+            let sem = DispatchSemaphore(value: 0)
+            self.createStructure { sem.signal() }
+            sem.wait()
+            completion(self.existingAlbum(kind))
         }
     }
 
     // MARK: Resolve
 
     private func existingAlbum(_ kind: HavenAlbumKind) -> PHAssetCollection? {
-        guard let id = d.string(forKey: kind.defaultsKey) else { return nil }
-        return PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
+        // 1) By persisted local id (survives renames/moves).
+        if let id = d.string(forKey: kind.defaultsKey),
+           let c = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject {
+            return c
+        }
+        // 2) Fall back to an album of this title ALREADY INSIDE the Haven folder, and adopt it — so we
+        //    reuse a structure that's already present instead of creating a parallel one.
+        if let folder = existingFolder() {
+            var found: PHAssetCollection?
+            PHCollectionList.fetchCollections(in: folder, options: nil).enumerateObjects { obj, _, stop in
+                if let a = obj as? PHAssetCollection, a.localizedTitle == kind.title { found = a; stop.pointee = true }
+            }
+            if let found { d.set(found.localIdentifier, forKey: kind.defaultsKey); return found }
+        }
+        return nil
     }
 
     private func existingFolder() -> PHCollectionList? {
-        guard let id = d.string(forKey: folderKey) else { return nil }
-        return PHCollectionList.fetchCollectionLists(withLocalIdentifiers: [id], options: nil).firstObject
+        // 1) By persisted local id.
+        if let id = d.string(forKey: folderKey),
+           let f = PHCollectionList.fetchCollectionLists(withLocalIdentifiers: [id], options: nil).firstObject {
+            return f
+        }
+        // 2) Fall back to ANY existing top-level folder titled "Haven" and adopt it, so we don't add a
+        //    parallel one next to a Haven folder the user already has.
+        var found: PHCollectionList?
+        PHCollectionList.fetchCollectionLists(with: .folder, subtype: .regularFolder, options: nil).enumerateObjects { f, _, stop in
+            if f.localizedTitle == "Haven" { found = f; stop.pointee = true }
+        }
+        if let found { d.set(found.localIdentifier, forKey: folderKey) }
+        return found
     }
 
     // MARK: Create
