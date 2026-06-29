@@ -95,7 +95,7 @@ impl<T, E: std::fmt::Debug> IntoAnyhow<T> for std::result::Result<T, E> {
 /// (a) stay inside our namespace (no traversal / absolute / `..`), and (b) we don't already
 /// hold — capped at `MAX_SYNC_PULL`. Factored out so the set-difference + safety logic is
 /// unit-testable without a live network.
-fn keys_to_pull(root: &Path, peer_keys: &[String]) -> Vec<String> {
+pub(crate) fn keys_to_pull(root: &Path, peer_keys: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for key in peer_keys {
         if out.len() >= MAX_SYNC_PULL {
@@ -113,7 +113,7 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn safe_path(root: &Path, key: &str) -> Result<PathBuf> {
+pub(crate) fn safe_path(root: &Path, key: &str) -> Result<PathBuf> {
     if key.is_empty() || key.len() > MAX_KEY {
         bail!("bad key length");
     }
@@ -151,7 +151,7 @@ const MAX_SYNC_PULL: usize = 20_000;
 /// Key prefix the mailbox + media blobs all live under, so a sync only ever touches Haven's
 /// own namespace (never arbitrary peer-supplied paths). `LIST` forbids an empty key, so this
 /// non-empty root is also required by the wire protocol.
-const SYNC_PREFIX: &str = "haven";
+pub(crate) const SYNC_PREFIX: &str = "haven";
 
 /// Per-circle authorization for the mailbox (audit transport-F4). When a host populates this (the
 /// Haven apps do, from each circle's known membership), the relay serves a circle's mailbox keys ONLY
@@ -159,11 +159,42 @@ const SYNC_PREFIX: &str = "haven";
 /// or fetch a circle's blobs. Sibling relays are allowed broad LIST so mesh anti-entropy still works.
 /// An EMPTY map means "unconfigured" → fully permissive (a standalone/self-host relay is unchanged).
 #[derive(Default)]
-struct RelayAuth {
+pub(crate) struct RelayAuth {
     /// circleId → authorized member node hexes.
     members: HashMap<String, HashSet<String>>,
     /// Sibling relay node hexes allowed to replicate via broad LIST (mesh anti-entropy).
     relays: HashSet<String>,
+}
+
+impl RelayAuth {
+    /// Authorize a circle's mailbox to exactly `members` + the circle's sibling `relays`. Idempotent.
+    pub(crate) fn authorize(&mut self, circle_id: &str, members: Vec<String>, relays: Vec<String>) {
+        self.members.insert(circle_id.to_string(), members.into_iter().collect());
+        for r in relays {
+            self.relays.insert(r);
+        }
+    }
+    pub(crate) fn deauthorize(&mut self, circle_id: &str) {
+        self.members.remove(circle_id);
+    }
+}
+
+/// Store a sealed blob into a relay root directly (the in-process host's OWN events — NO iroh
+/// self-connection). Atomic temp+rename, mirrors the PUT path in `handle_request`.
+pub(crate) fn local_put(root: &Path, key: &str, data: &[u8]) -> Result<()> {
+    let path = safe_path(root, key)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let tmp = path.with_extension("part");
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// True if a relay root already holds `key` (content-addressed → idempotent puts).
+pub(crate) fn local_has(root: &Path, key: &str) -> bool {
+    safe_path(root, key).map(|p| p.exists()).unwrap_or(false)
 }
 
 pub struct BlobServer {
@@ -328,7 +359,7 @@ fn mailbox_forbidden(auth: &Arc<Mutex<RelayAuth>>, peer: &str, verb: u8, key: &s
 
 /// Serve one request stream against the on-disk store. Pure ciphertext I/O — the body is
 /// stored and returned verbatim, never inspected.
-async fn handle_request(
+pub(crate) async fn handle_request(
     root: PathBuf,
     peer: String,
     auth: Arc<Mutex<RelayAuth>>,

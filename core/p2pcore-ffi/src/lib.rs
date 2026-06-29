@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet};
 
 use haven_net::Node;
-use haven_net::blobstore::{BlobClient, BlobServer};
+use haven_net::blobstore::BlobClient;
 use std::path::PathBuf;
 use p2pcore::crypto::{decapsulate, encapsulate_to, open, seal, Encapsulation};
 use p2pcore::device::{recipients_with_devices, ContactDevices, DeviceCredential, DeviceList};
@@ -390,53 +390,62 @@ impl RelayClient {
     }
 }
 
-/// The built-in relay/mailbox the Mac app runs in-process: a blob store served from a local
-/// directory over Haven Net. Hold the object to keep it serving; drop it to stop. Its
-/// `node_id_hex` is the `volunteer_node_id` to put in the circle's relay link.
+/// The built-in relay/mailbox the app runs in-process. It now ATTACHES to the messaging node's
+/// existing endpoint (one iroh node, two ALPNs) instead of spawning its own — running a second
+/// in-process iroh node made iroh's path manager churn unboundedly (the tens-of-GB leak). Its
+/// `node_id_hex` is therefore the ACCOUNT node id; that's the `volunteer_node_id` for the relay link.
+/// Hold the object to keep serving; drop it (or call `disable`) to stop.
 #[derive(uniffi::Object)]
 pub struct RelayServerHandle {
-    inner: Arc<BlobServer>,
+    node: Arc<HavenNode>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl RelayServerHandle {
-    /// Start serving blobs from `dir`, identified by `seed` (a stable, relay-specific 32-byte
-    /// key — give it its OWN seed, distinct from the messaging identity, so its node id is
-    /// stable and separate).
+    /// Attach the relay/mailbox to a running [`HavenNode`], serving blobs from `dir` on that node's
+    /// endpoint (under the blob ALPN). No second iroh node, no self-connection, no path-churn leak.
     #[uniffi::constructor]
-    pub async fn start(seed: Vec<u8>, dir: String) -> Result<Arc<Self>, HavenError> {
-        let s: [u8; 32] = seed
-            .try_into()
-            .map_err(|_| HavenError::Invalid { msg: "seed must be 32 bytes".into() })?;
-        let inner = BlobServer::spawn(s, PathBuf::from(dir))
-            .await
-            .map_err(|e| HavenError::Invalid { msg: format!("relay start: {e}") })?;
-        Ok(Arc::new(Self { inner }))
+    pub fn attach(node: Arc<HavenNode>, dir: String) -> Arc<Self> {
+        node.node.enable_relay(PathBuf::from(dir));
+        Arc::new(Self { node })
     }
 
-    /// The relay's node id (hex) — reference it in the circle's relay link.
+    /// The relay's node id (hex) — now equal to the account/messaging node id. Put it in the relay link.
     pub fn node_id_hex(&self) -> String {
-        self.inner.node_id_hex()
+        self.node.node.node_id_hex()
     }
 
     /// Authorize a circle's mailbox to exactly `members` (node hexes) + its sibling `relays` (audit
-    /// transport-F4). Call on relay start and on every membership change. Once any circle is authorized
-    /// the relay refuses mailbox access to non-members; before that it stays permissive.
+    /// transport-F4). Call on attach and on every membership change.
     pub fn authorize_circle(&self, circle_id: String, members: Vec<String>, relays: Vec<String>) {
-        self.inner.authorize(&circle_id, members, relays);
+        self.node.node.relay_authorize(&circle_id, members, relays);
     }
 
     /// Stop serving a circle's mailbox (we left it / no longer host it).
     pub fn deauthorize_circle(&self, circle_id: String) {
-        self.inner.deauthorize(&circle_id);
+        self.node.node.relay_deauthorize(&circle_id);
     }
 
-    /// Mesh anti-entropy: pull every sealed blob a SIBLING relay holds that we lack, so the
-    /// mailbox self-replicates across relays. Call on a timer for each peer relay (≠ this one).
-    /// Returns the number of new blobs pulled (0 if the peer is unreachable). Safe set-union —
-    /// content-addressed + sealed, so it never sees content and can't conflict.
+    /// Store the host's OWN sealed event/media directly into the local mailbox — no iroh self-connection
+    /// (the thing that exploded). Returns true on success. Idempotent (content-addressed keys).
+    pub fn local_put(&self, key: String, data: Vec<u8>) -> bool {
+        self.node.node.relay_local_put(&key, &data)
+    }
+
+    /// True if our mailbox already holds `key`.
+    pub fn local_has(&self, key: String) -> bool {
+        self.node.node.relay_local_has(&key)
+    }
+
+    /// Stop hosting the relay on this node (drops the attachment).
+    pub fn disable(&self) {
+        self.node.node.disable_relay();
+    }
+
+    /// Mesh anti-entropy: pull every sealed blob a SIBLING relay holds that we lack. Returns the
+    /// number of new blobs pulled (0 if unreachable). Content-addressed + sealed → conflict-free.
     pub async fn sync_from(&self, peer_node_hex: String) -> u32 {
-        self.inner.sync_pull_from(&peer_node_hex).await.unwrap_or(0) as u32
+        self.node.node.relay_sync_from(&peer_node_hex).await as u32
     }
 }
 

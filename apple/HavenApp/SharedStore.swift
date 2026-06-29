@@ -83,6 +83,10 @@ enum SharedStore {
             // Mirror to EVERY configured relay (redundancy). Content-addressed key → idempotent
             // re-puts, and a relay in backoff is skipped (RelayClients is health-aware).
             for node in nodes {
+                // Our OWN hosted relay: store the media directly in the local mailbox (no iroh self-dial).
+                if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
+                    _ = RelayHost.shared.localPut(key(ref), sealed); continue
+                }
                 guard let c = await RelayClients.client(node) else { continue }
                 if await c.has(key: key(ref)) { RelayHealth.shared.recordSuccess(node); continue }
                 do { try await c.put(key: key(ref), data: sealed); RelayHealth.shared.recordSuccess(node) }
@@ -142,10 +146,12 @@ enum SharedStore {
             // a relay in backoff is skipped. Success on ANY relay means it's safely in a mailbox.
             var landed = false
             for node in nodes {
-                // Our OWN hosted relay: we ARE this mailbox, so count it as landed WITHOUT a self-
-                // connection (which blows up iroh's path machinery). Don't let our own posts pile up in
-                // the pending queue waiting to "upload" to ourselves.
-                if RelayHost.shared.serving, node == RelayHost.shared.nodeId { landed = true; continue }
+                // Our OWN hosted relay: store directly into the local mailbox (no iroh self-connection,
+                // which blows up iroh's path machinery) so offline members can still pull our posts.
+                if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
+                    _ = RelayHost.shared.localPut(key, env)
+                    landed = true; continue
+                }
                 guard let c = await RelayClients.client(node) else { continue }
                 if await c.has(key: key) { RelayHealth.shared.recordSuccess(node); landed = true; continue }
                 do { try await c.put(key: key, data: env); RelayHealth.shared.recordSuccess(node); landed = true }

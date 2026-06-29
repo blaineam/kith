@@ -57,6 +57,9 @@ final class FeedStore: ObservableObject {
 
     private var social: HavenSocial?
     private var node: HavenNode?
+    /// The messaging transport node — the in-process relay ATTACHES to its endpoint (one iroh node,
+    /// two ALPNs) so hosting a relay never spins up a second node (the path-churn leak).
+    var transportNode: HavenNode? { node }
     private var nearby: NearbyTransport?
     private var mailboxTimer: Timer?
     private var listener: InboundBridge?

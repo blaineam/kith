@@ -45,11 +45,22 @@ impl<T, E: std::fmt::Debug> IntoAnyhow<T> for std::result::Result<T, E> {
     }
 }
 
+/// Optional in-process relay (blob mailbox) attached to THIS node's endpoint. Hosting a relay used to
+/// spin up a SECOND iroh node in the same process, which made iroh's per-remote path manager churn
+/// unboundedly (tens-of-GB leak). Now ONE endpoint serves both the social ALPN and the blob ALPN.
+#[derive(Clone)]
+struct RelayCfg {
+    root: std::path::PathBuf,
+    auth: Arc<Mutex<blobstore::RelayAuth>>,
+}
+
 /// A peer-to-peer node.
 pub struct Node {
     endpoint: Endpoint,
     conns: Conns,
     handler: InboundHandler,
+    relay: Arc<Mutex<Option<RelayCfg>>>,
+    secret: [u8; 32], // this node's key — also the in-process relay's identity (one shared node)
 }
 
 impl Node {
@@ -57,23 +68,94 @@ impl Node {
     /// that identity's `node_id_bytes`), with the n0 preset: free public discovery +
     /// relays. Starts an accept loop that keeps each inbound connection alive.
     pub async fn spawn(secret: [u8; 32], handler: InboundHandler) -> Result<Self> {
+        // Bind ONE endpoint for BOTH protocols — social messaging and the blob relay mailbox — so an
+        // in-process relay never needs a second iroh node (the source of the path-churn leak).
         let endpoint = Endpoint::builder(N0)
             .secret_key(SecretKey::from_bytes(&secret))
-            .alpns(vec![ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec(), blobstore::BLOB_ALPN.to_vec()])
             .bind()
             .await
             .ah()?;
         let conns: Conns = Arc::new(Mutex::new(HashMap::new()));
+        let relay: Arc<Mutex<Option<RelayCfg>>> = Arc::new(Mutex::new(None));
         let ep = endpoint.clone();
         let c = conns.clone();
         let h = handler.clone();
-        tokio::spawn(async move { accept_loop(ep, c, h).await });
-        Ok(Self { endpoint, conns, handler })
+        let r = relay.clone();
+        tokio::spawn(async move { accept_loop(ep, c, h, r).await });
+        Ok(Self { endpoint, conns, handler, relay, secret })
     }
 
     /// This node's id (== the owning identity's `node_id_bytes`), as hex.
     pub fn node_id_hex(&self) -> String {
         hex(self.endpoint.id().as_bytes())
+    }
+
+    // ---- In-process relay (blob mailbox) on THIS node's endpoint (no second iroh node) ----
+
+    /// Start hosting the circle relay/mailbox in-process, rooted at `root`. Idempotent. The relay is
+    /// served on this node's existing endpoint under the blob ALPN, so its node id == this node's id.
+    pub fn enable_relay(&self, root: std::path::PathBuf) {
+        let mut g = lock(&self.relay);
+        if g.is_none() {
+            *g = Some(RelayCfg { root, auth: Arc::new(Mutex::new(blobstore::RelayAuth::default())) });
+        }
+    }
+    /// Stop hosting (drop the relay attachment).
+    pub fn disable_relay(&self) {
+        *lock(&self.relay) = None;
+    }
+    pub fn relay_enabled(&self) -> bool {
+        lock(&self.relay).is_some()
+    }
+    /// Authorize a circle's mailbox to exactly `members` + sibling `relays` (membership enforcement).
+    pub fn relay_authorize(&self, circle_id: &str, members: Vec<String>, relays: Vec<String>) {
+        if let Some(cfg) = lock(&self.relay).as_ref() {
+            lock(&cfg.auth).authorize(circle_id, members, relays);
+        }
+    }
+    pub fn relay_deauthorize(&self, circle_id: &str) {
+        if let Some(cfg) = lock(&self.relay).as_ref() {
+            lock(&cfg.auth).deauthorize(circle_id);
+        }
+    }
+    /// Store the host's OWN sealed event/media directly into the relay store — NO iroh self-connection
+    /// (which is what blew up iroh's path machinery). Returns false if the relay isn't hosted here.
+    pub fn relay_local_put(&self, key: &str, data: &[u8]) -> bool {
+        let root = lock(&self.relay).as_ref().map(|c| c.root.clone());
+        root.map(|r| blobstore::local_put(&r, key, data).is_ok()).unwrap_or(false)
+    }
+    /// True if the in-process relay store already holds `key`.
+    pub fn relay_local_has(&self, key: &str) -> bool {
+        let root = lock(&self.relay).as_ref().map(|c| c.root.clone());
+        root.map(|r| blobstore::local_has(&r, key)).unwrap_or(false)
+    }
+
+    /// Mesh anti-entropy: pull every sealed blob a SIBLING relay holds that our in-process relay lacks,
+    /// into our store (idempotent set-union). No-op if we don't host a relay. Returns blobs pulled.
+    pub async fn relay_sync_from(&self, peer_node_hex: &str) -> usize {
+        let Some(root) = lock(&self.relay).as_ref().map(|c| c.root.clone()) else { return 0 };
+        let Ok(client) = blobstore::BlobClient::connect(self.secret, peer_node_hex).await else { return 0 };
+        let mut pulled = 0usize;
+        let peer_keys = client.list(blobstore::SYNC_PREFIX).await.unwrap_or_default();
+        for key in blobstore::keys_to_pull(&root, &peer_keys) {
+            let Ok(local) = blobstore::safe_path(&root, &key) else { continue };
+            let Ok(Some(blob)) = client.get(&key).await else { continue };
+            if blob.is_empty() {
+                continue;
+            }
+            if let Some(parent) = local.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            let tmp = local.with_extension("part");
+            if std::fs::write(&tmp, &blob).and_then(|_| std::fs::rename(&tmp, &local)).is_ok() {
+                pulled += 1;
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        let _ = client.close().await;
+        pulled
     }
 
     /// Send a payload to a contact by their hex node id. Discovery resolves the live
@@ -284,14 +366,38 @@ impl RelayNode {
     }
 }
 
-async fn accept_loop(endpoint: Endpoint, conns: Conns, handler: InboundHandler) {
+async fn accept_loop(
+    endpoint: Endpoint,
+    conns: Conns,
+    handler: InboundHandler,
+    relay: Arc<Mutex<Option<RelayCfg>>>,
+) {
     while let Some(incoming) = endpoint.accept().await {
         let conns = conns.clone();
         let handler = handler.clone();
+        let relay = relay.clone();
         tokio::spawn(async move {
             let Ok(connecting) = incoming.accept() else { return };
             let Ok(conn) = connecting.await else { return };
-            // Keep the inbound connection so we can send back to a peer who dialed us
+            // Dispatch by negotiated ALPN: the blob mailbox vs social messaging — ONE endpoint, two
+            // protocols, so the relay needs no second iroh node.
+            if conn.alpn() == blobstore::BLOB_ALPN {
+                let Some(cfg) = lock(&relay).clone() else { return }; // relay not hosted here → ignore
+                let peer = hex(conn.remote_id().as_bytes());
+                loop {
+                    match conn.accept_bi().await {
+                        Ok((send, recv)) => {
+                            let (root, peer, auth) = (cfg.root.clone(), peer.clone(), cfg.auth.clone());
+                            tokio::spawn(async move {
+                                let _ = blobstore::handle_request(root, peer, auth, send, recv).await;
+                            });
+                        }
+                        Err(_) => break,
+                    }
+                }
+                return;
+            }
+            // Social: keep the inbound connection so we can send back to a peer who dialed us
             // (they may be unreachable for us to dial directly).
             lock(&conns).insert(conn.remote_id(), conn.clone());
             read_loop(conn, conns, handler).await;

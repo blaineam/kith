@@ -58,26 +58,32 @@ final class RelayHost: ObservableObject {
 
     private func start() {
         guard handle == nil else { return }
-        let seed = Self.relaySeed()
+        // The relay now ATTACHES to the messaging node's endpoint (one iroh node, two ALPNs) — running a
+        // second in-process iroh node is what made iroh churn paths unboundedly (the tens-of-GB leak).
+        guard let node = FeedStore.shared.transportNode else {
+            // Node not up yet — retry shortly; the relay can't exist without the node to attach to.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.start() }
+            return
+        }
         // Keep the screen on / device awake while relaying (essential on iOS, harmless on Mac).
         PlatformIdle.disabled = true
-        Task {
-            do {
-                let h = try await RelayServerHandle.start(seed: seed, dir: storeDir)
-                handle = h
-                nodeId = h.nodeIdHex()
-                serving = true
-                // Lock the mailbox down to circle members before announcing it (audit transport-F4).
-                authorizeMembership()
-                // Tell my circles to use this device as their mailbox.
-                FeedStore.shared.broadcastRelayNode(nodeId)
-            } catch {
-                serving = false
-            }
-        }
+        let h = RelayServerHandle.attach(node: node, dir: storeDir)
+        handle = h
+        nodeId = h.nodeIdHex()   // == the account node id now (the relay shares the node)
+        serving = true
+        // Lock the mailbox down to circle members before announcing it (audit transport-F4).
+        authorizeMembership()
+        // Tell my circles to use this device (its account node id) as their mailbox.
+        FeedStore.shared.broadcastRelayNode(nodeId)
     }
 
+    /// Store one of OUR OWN sealed events/media into the in-process mailbox directly (no iroh
+    /// self-connection). Returns false if we aren't currently hosting.
+    func localPut(_ key: String, _ data: Data) -> Bool { handle?.localPut(key: key, data: data) ?? false }
+    func localHas(_ key: String) -> Bool { handle?.localHas(key: key) ?? false }
+
     private func stop() {
+        handle?.disable()      // detach the relay from the node's endpoint
         handle = nil           // releases the FFI handle (best-effort; OS reclaims on exit)
         serving = false
         nodeId = ""
