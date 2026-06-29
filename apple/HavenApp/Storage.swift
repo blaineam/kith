@@ -205,6 +205,18 @@ struct RelayPoolSection: View {
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        // A visible Forget button — `.swipeActions` is ignored inside a Form on macOS, so
+                        // swipe-to-forget never worked there. The button works on every platform.
+                        Button(role: .destructive) { FeedStore.shared.forgetRelay(node) } label: {
+                            Image(systemName: "trash").font(.footnote)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Forget this relay everywhere")
+                    }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            FeedStore.shared.forgetRelay(node)
+                        } label: { Label("Forget", systemImage: "trash") }
                     }
                     .swipeActions {
                         Button(role: .destructive) {

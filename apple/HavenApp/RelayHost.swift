@@ -243,11 +243,14 @@ final class RelayMailboxStore: ObservableObject {
     /// First relay for a circle — back-compat convenience (some callers only need "is there one").
     func nodeId(forCircle circleId: String) -> String? { relays(forCircle: circleId).first }
 
-    /// ADD a relay to a circle (append, don't replace) — mirrors desktop `adopt_relay`. Auto-learn path:
-    /// a relay the user FORGOT is silently ignored here, so forgetting actually sticks (see `suppressed`).
+    /// ADD a relay to a circle (append, don't replace) — mirrors desktop `adopt_relay`. This is the
+    /// EXPLICIT path (user adopts / hosts), so it also CLEARS any forgotten-tombstone for the relay —
+    /// re-adding a previously-forgotten relay always works. Auto-learn callers must gate on `isForgotten`
+    /// BEFORE calling this, so a forgotten relay isn't silently resurrected (that's what makes Forget stick).
     func add(circleId: String, nodeHex: String) {
         let hex = nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard hex.count == 64, !suppressed.contains(hex) else { return }
+        guard hex.count == 64 else { return }
+        unforget(hex)
         var list = relaysByCircle[circleId] ?? []
         guard !list.contains(hex) else { return }
         list.append(hex)
@@ -255,8 +258,13 @@ final class RelayMailboxStore: ObservableObject {
         UserDefaults.standard.set(relaysByCircle, forKey: key)
     }
 
-    /// Clear a relay's FORGOTTEN tombstone — call before an EXPLICIT (user-initiated) adoption so a
-    /// previously-forgotten relay can be deliberately re-added.
+    /// Whether the user has FORGOTTEN this relay — auto-learn (frame-19 announce / SelfSync / bootstrap)
+    /// checks this and skips, so Forget isn't undone within seconds by a re-announce.
+    func isForgotten(_ nodeHex: String) -> Bool {
+        suppressed.contains(nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    /// Clear a relay's FORGOTTEN tombstone (an explicit adoption overrides a prior Forget).
     func unforget(_ nodeHex: String) {
         let hex = nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard suppressed.remove(hex) != nil else { return }

@@ -1182,6 +1182,7 @@ final class FeedStore: ObservableObject {
         guard !circleId.isEmpty, !sealed.isEmpty,
               let data = social.openCircleMedia(circleId: circleId, sealed: sealed),
               let nodeHex = String(data: data, encoding: .utf8), nodeHex.count == 64 else { return }
+        guard !RelayMailboxStore.shared.isForgotten(nodeHex) else { return }   // user forgot it — don't auto-resurrect
         // A contact advertised their circle relay → ADD it to our redundant set for this circle, so
         // members automatically pool relays (more redundancy, no manual setup) — desktop parity.
         let wasNew = !RelayMailboxStore.shared.relays(forCircle: circleId).contains(nodeHex.lowercased())

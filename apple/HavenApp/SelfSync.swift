@@ -179,7 +179,9 @@ final class SelfSyncCoordinator {
                     if conn.isRemovedFromCircle(hex, circleId: id) { continue }
                     _ = try? social.addContactBundle(circleId: id, bundle: bundle)
                 }
-                for node in rec.relays { RelayMailboxStore.shared.add(circleId: id, nodeHex: node) }
+                for node in rec.relays where !RelayMailboxStore.shared.isForgotten(node) {
+                    RelayMailboxStore.shared.add(circleId: id, nodeHex: node)   // skip relays the user forgot
+                }
             }
         }
     }
