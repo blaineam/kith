@@ -734,8 +734,10 @@ pub struct HavenNode {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl HavenNode {
-    /// Start a node bound to this account's identity (so its node id equals the
-    /// account's Haven id); inbound payloads are delivered to `listener`.
+    /// Start a node bound to the given transport seed (so its node id == that seed's Haven id); inbound
+    /// payloads are delivered to `listener`. NOTE: callers will pass the per-DEVICE transport seed
+    /// (Apple: DeviceKeyStore) once the device-id dialing path lands, so every device gets a distinct,
+    /// collision-free iroh node id; the account identity stays the trust/sealing anchor in HavenSocial.
     #[uniffi::constructor]
     pub async fn start(account_seed: Vec<u8>, listener: Arc<dyn InboundListener>) -> Result<Arc<Self>, HavenError> {
         let seed: [u8; 32] = account_seed
@@ -1406,6 +1408,21 @@ impl HavenSocial {
             .find(|c| c.id == circle_id)
             .map(|c| c.members.iter().map(|m| hex(&m.node_id_bytes())).collect())
             .unwrap_or_default()
+    }
+
+    /// Like `contact_node_ids`, but expanded to each member's currently-AUTHORIZED **device** ids (from
+    /// their signed roster), so a post is delivered to whichever of a contact's devices is online — not a
+    /// single shared account node id (which two of their devices would both answer to, breaking discovery).
+    /// Members whose roster we haven't learned yet fall back to their account id (pre-multidevice peers
+    /// keep working). De-duplicated; this is the transport dial set, distinct from the sealing set.
+    pub fn contact_device_node_ids(&self, circle_id: String) -> Vec<String> {
+        let st = self.state.lock().unwrap();
+        let Some(c) = st.circles.iter().find(|c| c.id == circle_id) else { return vec![] };
+        let members: Vec<HavenId> = c.members.clone();
+        recipients_with_devices(&members, &st.device_lists)
+            .iter()
+            .map(|h| hex(&h.node_id_bytes()))
+            .collect()
     }
 
     /// The full public **bundles** of a circle's members — for multi-device sync. Another of the
