@@ -219,7 +219,6 @@ struct AdvancedView: View {
     @State private var report: SelfTestReport?
     @State private var runCount = 0
     @State private var showResetConfirm = false
-    @State private var iCloudSync = AccountStore.iCloudSyncEnabled
 
     var body: some View {
         ZStack {
@@ -238,7 +237,8 @@ struct AdvancedView: View {
                     }
                     .buttonStyle(.plain)
                     .havenCard()
-                    identityCard
+                    // Identity (iCloud sync / move / restore) lives in Settings ▸ "Identity & iCloud
+                    // backup" (IdentityBackupView) — not duplicated here.
                     Button(role: .destructive) {
                         showResetConfirm = true
                     } label: {
@@ -263,38 +263,6 @@ struct AdvancedView: View {
         } message: {
             Text("This permanently erases your identity, your whole circle, and every post on this device — and the people you've connected with will no longer recognize you. This can't be undone.")
         }
-    }
-
-    private var identityCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Your identity on your devices").font(.headline)
-            Toggle(isOn: $iCloudSync) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label("Sync across my Apple devices", systemImage: "icloud.fill").font(.subheadline.weight(.medium))
-                    Text("Use the same identity on your iPhone, iPad, and Mac via iCloud Keychain (end-to-end encrypted by Apple). Identities you've rolled stay recoverable in iCloud too — turn this off to keep them on this device only.")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-            .tint(HavenTheme.pink)
-            .onChange(of: iCloudSync) { _, on in accountStore.setICloudSync(on) }
-            Divider()
-            NavigationLink { TransferIdentityView(accountStore: accountStore) } label: {
-                HStack {
-                    Label("Move to another device", systemImage: "qrcode").font(.subheadline.weight(.medium))
-                    Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                }
-            }
-            .buttonStyle(.plain)
-            NavigationLink { RestoreIdentityView(accountStore: accountStore, onRestored: {}) } label: {
-                HStack {
-                    Label("Restore identity here", systemImage: "arrow.down.circle").font(.subheadline.weight(.medium))
-                    Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                }
-            }
-            .buttonStyle(.plain)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .havenCard()
     }
 
     private var detailsCard: some View {
