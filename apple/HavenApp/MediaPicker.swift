@@ -37,65 +37,73 @@ struct MediaPicker: UIViewControllerRepresentable {
             guard !finished else { return }
             finished = true
             let providers = results.map(\.itemProvider)
-            // Dismiss the picker IMMEDIATELY — never block dismissal on loading. A selected VIDEO makes
-            // loadFileRepresentation copy the whole asset (hundreds of MB → many seconds); doing that
-            // BEFORE dismissing left the picker frozen on screen with no way to interact or close
-            // ("can't select a video or dismiss"). The refs attach to the post as they finish loading.
-            parent.dismiss()
-            guard !providers.isEmpty else { return }   // Cancel / empty selection: just close.
-            // Process ONE item at a time. Loading a big batch (e.g. 17 high-res photos) concurrently
-            // decoded them all into memory at once and OOM-crashed (the post itself had already been
-            // queued, so it still went through on relaunch). Serial keeps a single decoded frame alive
-            // at a time, in the user's selection order. `parent`/`onPicked` are value/closure captures,
-            // so this Task outlives the now-dismissed picker + coordinator.
             let onPicked = parent.onPicked
-            Task { @MainActor in
-                var refs: [String] = []
-                for provider in providers {
-                    if let ref = await Coordinator.loadRef(from: provider) { refs.append(ref) }
-                }
-                if !refs.isEmpty { onPicked(refs) }
+            // KICK OFF every transfer NOW, while the picker's data connection is still live — the in-flight
+            // loads survive dismissal. THEN dismiss immediately, so a big video copy never leaves the
+            // picker frozen on screen ("can't select a video or dismiss"). Loading AFTER dismiss fails —
+            // the Photos picker's out-of-process connection is gone, so nothing attaches (the build-142
+            // regression). Results are recorded in selection order and delivered once the last finishes.
+            guard !providers.isEmpty else { parent.dismiss(); return }
+            let total = providers.count
+            var slots = [String?](repeating: nil, count: total)
+            var remaining = total
+            let lock = NSLock()
+            func record(_ index: Int, _ ref: String?) {
+                lock.lock()
+                slots[index] = ref
+                remaining -= 1
+                let done = remaining == 0
+                lock.unlock()
+                guard done else { return }
+                let refs = slots.compactMap { $0 }
+                DispatchQueue.main.async { if !refs.isEmpty { onPicked(refs) } }
             }
+            for (i, provider) in providers.enumerated() {
+                Coordinator.loadRef(from: provider) { ref in record(i, ref) }
+            }
+            parent.dismiss()
         }
 
-        /// Load a single picker item to a stored media ref, holding only one decoded item at a time.
-        private static func loadRef(from provider: NSItemProvider) async -> String? {
+        /// Heavy image DECODE is serialized on this queue so picking many high-res photos can't decode
+        /// them all into memory at once (a past OOM). The lightweight data/file transfers still overlap.
+        private static let decodeQueue = DispatchQueue(label: "haven.mediapicker.decode")
+
+        /// Load one picker item to a stored media ref via completion handlers, so the transfer is
+        /// initiated synchronously (connection still live) and survives the picker's dismissal.
+        private static func loadRef(from provider: NSItemProvider, completion: @escaping (String?) -> Void) {
             if provider.canLoadObject(ofClass: PlatformImage.self) {
-                // Load the raw data (not just a decoded image) so we can read the EXIF GPS before
-                // the bytes are re-encoded (which strips it). The coord stays on-device; it's only
-                // shared if the author flips "Show location".
-                let data: Data? = await withCheckedContinuation { cont in
-                    provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { d, _ in cont.resume(returning: d) }
-                }
-                guard let data, let img = PlatformImage(data: data) else {
-                    // Fallback: some providers only vend a decoded image (no GPS available then).
-                    let img: PlatformImage? = await withCheckedContinuation { cont in
-                        provider.loadObject(ofClass: PlatformImage.self) { obj, _ in cont.resume(returning: obj as? PlatformImage) }
+                // Load the raw data (not just a decoded image) so we can read the EXIF GPS before the
+                // bytes are re-encoded (which strips it). The coord stays on-device.
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    decodeQueue.async {
+                        if let data, let img = PlatformImage(data: data) {
+                            let coord = MediaStore.gpsCoordinate(fromImageData: data)
+                            DispatchQueue.main.async {
+                                let ref = MediaStore.shared.addImage(img)
+                                if let coord { MediaStore.shared.setLocation(coord, for: ref) }
+                                completion(ref)
+                            }
+                        } else {
+                            // Fallback: some providers only vend a decoded image (no GPS available then).
+                            provider.loadObject(ofClass: PlatformImage.self) { obj, _ in
+                                guard let img = obj as? PlatformImage else { completion(nil); return }
+                                DispatchQueue.main.async { completion(MediaStore.shared.addImage(img)) }
+                            }
+                        }
                     }
-                    guard let img else { return nil }
-                    return await MainActor.run { MediaStore.shared.addImage(img) }
-                }
-                let coord = MediaStore.gpsCoordinate(fromImageData: data)
-                return await MainActor.run {
-                    let ref = MediaStore.shared.addImage(img)
-                    if let coord { MediaStore.shared.setLocation(coord, for: ref) }
-                    return ref
                 }
             } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
-                let dest: URL? = await withCheckedContinuation { cont in
-                    provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, _ in
-                        guard let url else { cont.resume(returning: nil); return }
-                        // Copy out of the temporary location before it's reclaimed.
-                        let dest = FileManager.default.temporaryDirectory
-                            .appendingPathComponent(UUID().uuidString + "." + url.pathExtension)
-                        try? FileManager.default.copyItem(at: url, to: dest)
-                        cont.resume(returning: dest)
-                    }
+                provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, _ in
+                    guard let url else { completion(nil); return }
+                    // Copy out of the temporary location before it's reclaimed.
+                    let dest = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString + "." + url.pathExtension)
+                    try? FileManager.default.copyItem(at: url, to: dest)
+                    Task { @MainActor in completion(await MediaStore.shared.addVideo(url: dest)) }
                 }
-                guard let dest else { return nil }
-                return await MediaStore.shared.addVideo(url: dest)
+            } else {
+                completion(nil)
             }
-            return nil
         }
     }
 }
@@ -132,11 +140,10 @@ struct MediaPicker: NSViewControllerRepresentable {
             guard !finished else { return }
             finished = true
             let providers = results.map(\.itemProvider)
-            // Dismiss immediately — don't block closing the picker on a big video file copy (see iOS note).
-            parent.dismiss()
-            guard !providers.isEmpty else { return }
-            let onPicked = parent.onPicked
-            Task { @MainActor in
+            // Load BEFORE dismissing — the item providers stop vending data once the picker is torn down,
+            // so dismissing first attaches nothing. Then close.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
                 var refs: [String] = []
                 for provider in providers {
                     if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
@@ -157,7 +164,8 @@ struct MediaPicker: NSViewControllerRepresentable {
                         if let img { refs.append(MediaStore.shared.addImage(img)) }
                     }
                 }
-                if !refs.isEmpty { onPicked(refs) }
+                self.parent.onPicked(refs)
+                self.parent.dismiss()
             }
         }
     }

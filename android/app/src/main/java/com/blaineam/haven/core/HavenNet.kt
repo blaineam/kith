@@ -66,6 +66,9 @@ object HavenNet : InboundListener {
     // every relay (redundancy) and read from all of them (graceful fallback if one is down) —
     // parity with the desktop `relays: HashMap<String, Vec<String>>`.
     private val relayNodes = HashMap<String, MutableList<String>>()
+    /** Relays the user explicitly FORGOT — auto-learn (frame-19 announce / SelfSync) must not resurrect
+     *  them, or Forget is a visible no-op. Cleared on explicit re-adoption. Mirrors iOS `suppressed`. */
+    private val suppressedRelays = mutableSetOf<String>()
     private val relayClients = HashMap<String, RelayClient>()
     private val relayMutex = Mutex()
     private val seenMailbox = HashSet<String>()
@@ -694,6 +697,7 @@ object HavenNet : InboundListener {
         val open = runCatching { social.openCircleMedia(circleId, sealed) }.getOrNull() ?: return
         val nodeHex = String(open, Charsets.UTF_8).trim()
         if (nodeHex.length != 64) return
+        if (suppressedRelays.contains(nodeHex)) return   // user forgot it — don't auto-resurrect
         // A contact advertised their circle relay → ADD it to our redundant set for this circle,
         // so members automatically pool relays (more redundancy, no manual setup). Append, never
         // replace — parity with desktop handle_relay_node.
@@ -730,6 +734,7 @@ object HavenNet : InboundListener {
     fun adoptRelay(nodeHex: String) {
         val hex = nodeHex.trim().lowercase()
         if (hex.length != 64) return
+        suppressedRelays.remove(hex)   // explicit adoption overrides a prior Forget
         scope.launch {
             for (c in social.circles()) {
                 val cid = c.id
@@ -755,6 +760,7 @@ object HavenNet : InboundListener {
         scope.launch {
             for (list in relayNodes.values) list.removeAll { it == hex }
             relayNodes.entries.removeAll { it.value.isEmpty() }
+            suppressedRelays.add(hex)   // tombstone so auto-learn can't resurrect it
             saveRelayNodes()
             relayMutex.withLock {
                 runCatching { relayClients.remove(hex)?.close() }
@@ -1236,6 +1242,10 @@ object HavenNet : InboundListener {
      */
     private fun loadRelayNodes() {
         relayNodes.clear()
+        suppressedRelays.clear()
+        prefs.getString("relaysSuppressed", null)?.let { raw ->
+            runCatching { val a = JSONArray(raw); for (i in 0 until a.length()) suppressedRelays.add(a.getString(i)) }
+        }
         // New multi-relay format.
         prefs.getString("relays", null)?.let { raw ->
             runCatching {
@@ -1270,7 +1280,10 @@ object HavenNet : InboundListener {
         val o = JSONObject()
         relayNodes.forEach { (k, v) -> o.put(k, JSONArray().apply { v.forEach { put(it) } }) }
         // Write the new format and clear the legacy key (completes the migration).
-        prefs.edit().putString("relays", o.toString()).remove("relayNodes").apply()
+        prefs.edit()
+            .putString("relays", o.toString())
+            .putString("relaysSuppressed", JSONArray().apply { suppressedRelays.forEach { put(it) } }.toString())
+            .remove("relayNodes").apply()
     }
 
     /** Whether any circle has a mailbox configured — Haven relay node or S3 pool (UI indicator). */
@@ -1326,6 +1339,7 @@ object HavenNet : InboundListener {
     fun selfSyncAddRelay(circleId: String, nodeHex: String) {
         val hex = nodeHex.trim().lowercase()
         if (hex.length != 64) return
+        if (suppressedRelays.contains(hex)) return   // user forgot it — don't auto-resurrect
         val list = relayNodes.getOrPut(circleId) { mutableListOf() }
         if (!list.contains(hex)) { list.add(hex); saveRelayNodes() }
     }

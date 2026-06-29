@@ -71,6 +71,7 @@ final class RelayHost: ObservableObject {
         handle = h
         nodeId = h.nodeIdHex()   // == the account node id now (the relay shares the node)
         serving = true
+        RelayMailboxStore.shared.unforget(nodeId)   // hosting is an explicit adoption of our own relay
         // Lock the mailbox down to circle members before announcing it (audit transport-F4).
         authorizeMembership()
         // Tell my circles to use this device (its account node id) as their mailbox.
@@ -199,6 +200,13 @@ final class RelayMailboxStore: ObservableObject {
     private let key = "haven.relay.relaysByCircle"
     private let legacyKey = "haven.relay.byCircle"   // old single-relay-per-circle map
     private let defaultKey = "haven.relay.default"
+    private let suppressedKey = "haven.relay.suppressed"
+    /// Relays the user explicitly FORGOT. Auto-learn paths (frame-19 announce, SelfSync, bootstrap)
+    /// must NOT resurrect these, or forgetting a relay looks like a no-op — the peer/your other device
+    /// re-announces it within seconds and it pops right back. Cleared when the relay is adopted again
+    /// EXPLICITLY (user pasting a link / tapping Connect). This is what makes Forget actually stick, and
+    /// lets stale relays (e.g. a device's pre-upgrade relay id) be cleared for good.
+    private var suppressed: Set<String>
 
     private init() {
         let d = UserDefaults.standard
@@ -213,6 +221,7 @@ final class RelayMailboxStore: ObservableObject {
             d.removeObject(forKey: legacyKey)
         }
         relaysByCircle = loaded
+        suppressed = Set((d.array(forKey: suppressedKey) as? [String]) ?? [])
         if !loaded.isEmpty { d.set(loaded, forKey: key) }
     }
 
@@ -234,15 +243,24 @@ final class RelayMailboxStore: ObservableObject {
     /// First relay for a circle — back-compat convenience (some callers only need "is there one").
     func nodeId(forCircle circleId: String) -> String? { relays(forCircle: circleId).first }
 
-    /// ADD a relay to a circle (append, don't replace) — mirrors desktop `adopt_relay`.
+    /// ADD a relay to a circle (append, don't replace) — mirrors desktop `adopt_relay`. Auto-learn path:
+    /// a relay the user FORGOT is silently ignored here, so forgetting actually sticks (see `suppressed`).
     func add(circleId: String, nodeHex: String) {
         let hex = nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard hex.count == 64 else { return }
+        guard hex.count == 64, !suppressed.contains(hex) else { return }
         var list = relaysByCircle[circleId] ?? []
         guard !list.contains(hex) else { return }
         list.append(hex)
         relaysByCircle[circleId] = list
         UserDefaults.standard.set(relaysByCircle, forKey: key)
+    }
+
+    /// Clear a relay's FORGOTTEN tombstone — call before an EXPLICIT (user-initiated) adoption so a
+    /// previously-forgotten relay can be deliberately re-added.
+    func unforget(_ nodeHex: String) {
+        let hex = nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard suppressed.remove(hex) != nil else { return }
+        UserDefaults.standard.set(Array(suppressed), forKey: suppressedKey)
     }
     /// Drop a single relay from a circle.
     func remove(circleId: String, nodeHex: String) {
@@ -260,7 +278,11 @@ final class RelayMailboxStore: ObservableObject {
             if relaysByCircle[cid]?.isEmpty == true { relaysByCircle[cid] = nil }
         }
         if defaultNodeHex == hex { defaultNodeHex = nil }
+        // Tombstone it so the frame-19 announce / SelfSync / bootstrap auto-learn can't resurrect it
+        // (otherwise Forget is a visible no-op — it reappears within seconds).
+        suppressed.insert(hex)
         UserDefaults.standard.set(relaysByCircle, forKey: key)
+        UserDefaults.standard.set(Array(suppressed), forKey: suppressedKey)
         RelayClients.forget(hex)
         RelayHealth.shared.forget(hex)
     }

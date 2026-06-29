@@ -1112,6 +1112,7 @@ final class FeedStore: ObservableObject {
     func adoptRelayNode(_ nodeHex: String, circleIds: [String], setDefault: Bool) {
         let hex = nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let social, hex.count == 64, let data = hex.data(using: .utf8) else { return }
+        RelayMailboxStore.shared.unforget(hex)   // explicit adoption overrides a prior Forget
         if setDefault { RelayMailboxStore.shared.defaultNodeHex = hex }
         for cid in circleIds {
             RelayMailboxStore.shared.add(circleId: cid, nodeHex: hex)   // ADD (append), don't replace

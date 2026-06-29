@@ -1097,6 +1097,9 @@ impl Engine {
             // A contact advertised their circle relay → ADD it to our redundant set for this
             // circle, so members automatically pool relays (more redundancy, no manual setup).
             let mut p = self.prefs.lock().unwrap();
+            if p.suppressed_relays.contains(&node_hex) {
+                return; // user forgot it — don't auto-resurrect
+            }
             let list = p.relays.entry(circle_id.clone()).or_default();
             if list.contains(&node_hex) {
                 return;
@@ -1176,6 +1179,12 @@ impl Engine {
         if hex.len() != 64 {
             return;
         }
+        {
+            // Explicit adoption overrides a prior Forget.
+            let mut p = self.prefs.lock().unwrap();
+            p.suppressed_relays.retain(|h| h != &hex);
+            let _ = p.save(&self.paths);
+        }
         for c in self.social.circles() {
             {
                 let mut p = self.prefs.lock().unwrap();
@@ -1203,6 +1212,10 @@ impl Engine {
             let mut p = self.prefs.lock().unwrap();
             for list in p.relays.values_mut() {
                 list.retain(|h| h != &hex);
+            }
+            // Tombstone so frame-19 announce / self-sync can't resurrect it.
+            if !p.suppressed_relays.contains(&hex) {
+                p.suppressed_relays.push(hex.clone());
             }
             let _ = p.save(&self.paths);
         }

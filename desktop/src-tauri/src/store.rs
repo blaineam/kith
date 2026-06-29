@@ -123,6 +123,10 @@ pub struct Prefs {
     /// (redundancy) and read from all of them (graceful fallback if one is down).
     #[serde(default)]
     pub relays: std::collections::HashMap<String, Vec<String>>,
+    /// Relays the user explicitly FORGOT — auto-learn (frame-19 announce / self-sync) must not
+    /// resurrect them, or Forget is a visible no-op. Cleared on explicit re-adoption. Mirrors iOS/Android.
+    #[serde(default)]
+    pub suppressed_relays: Vec<String>,
     /// Retention window in seconds for the viewer's own auto-prune (None = keep all).
     #[serde(default)]
     pub retention_secs: Option<u64>,

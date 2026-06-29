@@ -266,9 +266,10 @@ pub fn apply_local(
             let _ = social.add_contact_bundle(id.to_string(), bundle.clone());
         }
         if !cs.relays.is_empty() {
+            let suppressed = prefs.suppressed_relays.clone();
             let list = prefs.relays.entry(id.to_string()).or_default();
             for node in &cs.relays {
-                if !list.contains(node) {
+                if !list.contains(node) && !suppressed.contains(node) {
                     list.push(node.clone());
                     changed = true;
                 }
