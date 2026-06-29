@@ -282,14 +282,8 @@ struct CircleSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)   // wrap fully; don't truncate on macOS
                 }
 
-                Section {
-                    NavigationLink { StorageSettingsView(circleId: circleId) } label: {
-                        Label("Mailbox & storage", systemImage: "externaldrive.fill")
-                    }
-                } footer: {
-                    Text("How this circle's posts reach people when they're offline: leave a device on as your relay (the easy way), or — advanced — point at your own S3 bucket.")
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // Mailbox controls inline (the toggle + relay pool) — no longer buried under a sub-link.
+                CircleMailboxSection(circleId: circleId)
 
                 if !isDefault {
                     Section {

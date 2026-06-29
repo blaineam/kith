@@ -233,6 +233,40 @@ struct RelayPoolSection: View {
     }
 }
 
+/// Mailbox controls surfaced DIRECTLY in a circle's settings (previously buried two taps deep under a
+/// generic "Mailbox & storage" link, so the relay toggle was hard to find). Shows the "be this circle's
+/// mailbox" toggle + the circle's relay pool, with a link to advanced (external relay / S3 bucket).
+struct CircleMailboxSection: View {
+    let circleId: String
+    @ObservedObject private var relay = RelayHost.shared
+
+    var body: some View {
+        Section {
+            Toggle(isOn: Binding(get: { relay.enabled }, set: { relay.setEnabled($0) })) {
+                Label("Be this circle's mailbox", systemImage: "externaldrive.connected.to.line.below.fill")
+            }
+            .tint(HavenTheme.pink)
+            if relay.serving && !relay.nodeId.isEmpty {
+                Label("This device is relaying · \(String(relay.nodeId.prefix(8)))…", systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+            } else if relay.enabled {
+                Label("Starting…", systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Mailbox")
+        } footer: {
+            Text("Where this circle's sealed posts & media live so they reach people who were offline. Leave a device on as the mailbox (easy), or point at an external relay / your own S3 bucket under Advanced.")
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        RelayPoolSection(circleId: circleId)
+        Section {
+            NavigationLink { AdvancedStorageView(circleId: circleId) } label: {
+                Label("Advanced — external relay or S3 bucket", systemImage: "slider.horizontal.3")
+            }
+        }
+    }
+}
+
 /// Power-user storage, one tap below the simple relay toggle on the Storage screen: connect an
 /// external `haven-relay` daemon by node id, or bring your own S3-compatible bucket. Kept off the
 /// main screen so the common path (flip "Be your circle's relay") stays clean — advanced users
