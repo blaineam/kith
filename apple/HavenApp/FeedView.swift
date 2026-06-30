@@ -2,6 +2,7 @@ import SwiftUI
 import AVKit
 import AVFoundation
 import UniformTypeIdentifiers
+import CryptoKit
 
 /// Short relative time ("now", "5m", "3h", "2d") from a unix-millis SENT timestamp —
 /// so people see when something was sent, not when it reached them.
@@ -1567,6 +1568,18 @@ final class FeedStore: ObservableObject {
         if pushedNearby.count > 5000 { pushedNearby.removeAll() }
     }
 
+    /// A symmetric key derived from the ACCOUNT seed — both of the user's own devices derive the identical
+    /// key, so own-device media chunks sealed with it always open on the sibling. KEM-sealing-to-self was
+    /// unreliable (the engine's per-device identity made decap fail), which is why media between a user's
+    /// own devices never decrypted. Mirrors how the (working) self-sync slot uses an account-derived key.
+    static func ownMediaKey() -> SymmetricKey? {
+        guard let seed = AccountStore.storedSeed() else { return nil }
+        let k = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: seed),
+                                       salt: Data("haven-own-media-v1".utf8),
+                                       info: Data(), outputByteCount: 32)
+        return k
+    }
+
     /// Stream a media file to the requester as individually-sealed chunks — low memory,
     /// large-file friendly. Chunk N's plaintext goes at offset N*chunkSize on reassembly.
     private func sendMediaChunks(ref: String, fileURL url: URL, to requesterHex: String) {
@@ -1582,7 +1595,15 @@ final class FeedStore: ObservableObject {
             while true {
                 let chunk = handle.readData(ofLength: Self.mediaChunkSize)
                 if chunk.isEmpty { break }
-                guard let sealed = try? social.sealMedia(recipientNodeHex: requesterHex, data: chunk) else { break }
+                // Own-device (requester is my own account) → symmetric account-key seal (always opens on a
+                // sibling). A friend requester → per-recipient KEM seal as before.
+                let sealedOpt: Data?
+                if requesterHex == social.myNodeHex(), let ownKey = Self.ownMediaKey() {
+                    sealedOpt = try? AES.GCM.seal(chunk, using: ownKey).combined
+                } else {
+                    sealedOpt = try? social.sealMedia(recipientNodeHex: requesterHex, data: chunk)
+                }
+                guard let sealed = sealedOpt else { break }
                 let out = Data([5]) + Self.chunkFrame(refData: refData, index: index, total: total, sealed: sealed)
                 // Nearby FIRST and unconditionally — it's the instant, reliable path (and the only one that
                 // works between own devices when iroh is blocked). The iroh send is fire-and-forget so an
@@ -1619,7 +1640,17 @@ final class FeedStore: ObservableObject {
         let index = Int(Self.readU32(payload, off)); off += 4
         let total = Int(Self.readU32(payload, off)); off += 4
         let sealed = payload.subdata(in: off..<payload.count)
-        let opened = ref.isEmpty ? nil : social.openMedia(sealed: sealed)
+        // Own-device chunks are symmetric (account-key) sealed; friend chunks are KEM. Try the symmetric
+        // open first (cheap), then fall back to the engine's KEM open.
+        var opened: Data? = nil
+        if !ref.isEmpty {
+            if let ownKey = Self.ownMediaKey(), let box = try? AES.GCM.SealedBox(combined: sealed),
+               let p = try? AES.GCM.open(box, using: ownKey) {
+                opened = p
+            } else {
+                opened = social.openMedia(sealed: sealed)
+            }
+        }
         HavenLog.net("CHUNK ref=\(ref.prefix(12)) idx=\(index)/\(total) open=\(opened != nil) had=\(MediaStore.shared.has(ref))")
         guard !ref.isEmpty, total > 0, !MediaStore.shared.has(ref), let plain = opened else { return }
 
