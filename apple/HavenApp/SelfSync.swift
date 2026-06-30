@@ -55,10 +55,14 @@ final class SelfSyncCoordinator {
     private func currentLocal(social: HavenSocial?) -> [String: Data] {
         var m: [String: Data] = [:]
         let p = ProfileStore.shared
-        m["profile:name"] = Data(p.displayName.utf8)
-        m["profile:emoji"] = Data(p.emoji.utf8)
-        m["profile:bio"] = Data(p.bio.utf8)
-        m["profile:link"] = Data(p.link.utf8)
+        // Only broadcast NON-EMPTY profile scalars. A fresh/empty device must never stamp a blank value
+        // that then wins last-writer-wins and REVERTS a sibling's real profile (absence ≠ authoritative —
+        // same principle as the contact/circle tombstone rules). Clearing a field is an explicit action we
+        // can model separately; silently blanking a real profile from another device is data loss.
+        if !p.displayName.isEmpty { m["profile:name"] = Data(p.displayName.utf8) }
+        if !p.emoji.isEmpty { m["profile:emoji"] = Data(p.emoji.utf8) }
+        if !p.bio.isEmpty { m["profile:bio"] = Data(p.bio.utf8) }
+        if !p.link.isEmpty { m["profile:link"] = Data(p.link.utf8) }
         // Profile photo (small base64 JPEG) — so a freshly-linked device gets the avatar too, not just
         // the name/bio. Was missing, which is why the avatar showed on posts but not on the profile.
         let av = p.avatarBase64
@@ -101,10 +105,16 @@ final class SelfSyncCoordinator {
     /// avoid feedback loops through the stores' didSet broadcasts).
     private func applyLocal(_ h: AccountStateHandle, social: HavenSocial?) {
         let p = ProfileStore.shared
-        if let v = h.get(key: "profile:name"), let s = String(data: v, encoding: .utf8), s != p.displayName { p.displayName = s }
-        if let v = h.get(key: "profile:emoji"), let s = String(data: v, encoding: .utf8), s != p.emoji { p.emoji = s }
-        if let v = h.get(key: "profile:bio"), let s = String(data: v, encoding: .utf8), s != p.bio { p.bio = s }
-        if let v = h.get(key: "profile:link"), let s = String(data: v, encoding: .utf8), s != p.link { p.link = s }
+        // Never apply an EMPTY scalar over a non-empty local one (belt-and-suspenders against a blank
+        // overwrite — see currentLocal). Non-empty incoming values still win normally.
+        if let v = h.get(key: "profile:name"), let s = String(data: v, encoding: .utf8), !s.isEmpty, s != p.displayName {
+            HavenLog.sync("apply profile:name '\(p.displayName)' → '\(s)'"); p.displayName = s
+        }
+        if let v = h.get(key: "profile:emoji"), let s = String(data: v, encoding: .utf8), !s.isEmpty, s != p.emoji { p.emoji = s }
+        if let v = h.get(key: "profile:bio"), let s = String(data: v, encoding: .utf8), !s.isEmpty, s != p.bio {
+            HavenLog.sync("apply profile:bio (\(p.bio.count)→\(s.count) chars)"); p.bio = s
+        }
+        if let v = h.get(key: "profile:link"), let s = String(data: v, encoding: .utf8), !s.isEmpty, s != p.link { p.link = s }
         if let v = h.get(key: "profile:avatar"), let b64 = String(data: v, encoding: .utf8), b64 != p.avatarBase64,
            let data = Data(base64Encoded: b64), let img = PlatformImage(data: data) {
             p.setAvatar(img)

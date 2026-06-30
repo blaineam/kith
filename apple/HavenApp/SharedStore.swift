@@ -198,7 +198,10 @@ enum SharedStore {
                     // (self-dial guard), so this is how the host ingests what a sibling device or a
                     // friend uploaded to it (the previously-missing read-own-relay path).
                     if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
-                        for key in RelayHost.shared.localList(prefix) where !seenMailbox.contains(key) {
+                        let localKeys = RelayHost.shared.localList(prefix)
+                        let fresh = localKeys.filter { !seenMailbox.contains($0) }
+                        HavenLog.relay("poll OWN relay \(cid): \(localKeys.count) keys, \(fresh.count) new")
+                        for key in fresh {
                             seenMailbox.insert(key)
                             if let data = RelayHost.shared.localGet(key) { out.append((cid, data)) }
                         }

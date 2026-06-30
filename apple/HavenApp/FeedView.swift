@@ -98,16 +98,11 @@ final class FeedStore: ObservableObject {
     func configure(seed: Data) {
         guard social == nil else { return }
         social = try? HavenSocial(accountSeed: seed)
-        // Option 1 (device-key identity): adopt this device's transport/open key so the engine opens
-        // content sealed to THIS device's bundle (and dual-opens older account-sealed content), then
-        // self-register so contacts learn to dial + seal to this device. Account seed stays the
-        // author/contact id + roster signer. The roster rides every sync bundle, so contacts converge.
-        if let social {
-            _ = social.useDeviceIdentity(deviceSeed: DeviceKeyStore.deviceAccount().secretSeed())
-            _ = social.registerDevice(deviceBundle: DeviceKeyStore.deviceBundle(),
-                                      name: DeviceKeyStore.deviceName,
-                                      createdAt: UInt64(Date().timeIntervalSince1970))
-        }
+        // Option 1 (per-device transport identity) is DISABLED: live logs proved it made this node
+        // unreachable to existing friends (they dial our account id; binding a device id → 0 inbound) and
+        // it wasn't the cause of the friend-connectivity failure anyway (iroh dials time out regardless).
+        // Transport + sealing stay on the ACCOUNT identity (account-sealed content opens on every device).
+        if let social { HavenLog.net("configure account=\(social.myNodeHex().prefix(10)) (account-id transport)") }
         loadPersisted()
         loadLastHeard()   // so "last seen" survives an app restart
         refreshCircles()     // also purges any contaminated DM membership (see refreshCircles)
@@ -478,10 +473,11 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                // Option 1: bind the iroh transport to THIS device's key → a distinct node id per device
-                // (no more two-devices-same-id discovery collision). `accountSeed:` is the FFI param name;
-                // we pass the device transport seed. The account identity lives in HavenSocial.
-                let n = try await HavenNode.start(accountSeed: DeviceKeyStore.deviceAccount().secretSeed(), listener: bridge)
+                // Bind the iroh transport to the ACCOUNT id — that's the id friends have in their contact
+                // card and dial to reach us, so binding a per-DEVICE id (Option 1) made us unreachable for
+                // inbound (live logs: 0 inbound). The engine still adopts a device identity for OPENING
+                // (use_device_identity) + the roster, but reachability stays on the account id.
+                let n = try await HavenNode.start(accountSeed: seed, listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true
@@ -921,12 +917,13 @@ final class FeedStore: ObservableObject {
         // account ids); here we expand to that account's authorized DEVICE ids (or the account id itself
         // for a pre-multidevice peer) and deliver to each, so the post reaches whichever device is online.
         let targets = social?.deviceNodeIdsFor(accountHex: nodeHex) ?? [nodeHex]
+        HavenLog.net("sendIroh type=\(type) acct=\(nodeHex.prefix(8)) → \(targets.count) targets: \(targets.map { String($0.prefix(8)) }.joined(separator: ","))")
         Task { [weak self] in
             var anyOk = false
             var lastErr: String?
             for t in targets {
-                do { try await node.sendToNode(nodeIdHex: t, payload: f); anyOk = true }
-                catch { lastErr = error.localizedDescription }   // try the next device
+                do { try await node.sendToNode(nodeIdHex: t, payload: f); anyOk = true; HavenLog.net("  ✓ \(type)→\(t.prefix(8))") }
+                catch { lastErr = error.localizedDescription; HavenLog.net("  ✗ \(type)→\(t.prefix(8)): \(error.localizedDescription)") }
             }
             await MainActor.run { self?.lastSendError = anyOk ? nil : lastErr }
         }
@@ -937,6 +934,7 @@ final class FeedStore: ObservableObject {
 
     private func handleInbound(_ data: Data, viaNearby: Bool) {
         guard let type = data.first else { return }
+        HavenLog.net("inbound type=\(type) via=\(viaNearby ? "nearby" : "iroh") bytes=\(data.count)")
         if viaNearby { nearbyActive = true } else { internetActive = true }
         let payload = Data(data.dropFirst())
         // Frames that lead with a 64-char sender id (media req + calls + camera state): drop if

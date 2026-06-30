@@ -76,6 +76,7 @@ final class RelayHost: ObservableObject {
         authorizeMembership()
         // Tell my circles to use this device (its account node id) as their mailbox.
         FeedStore.shared.broadcastRelayNode(nodeId)
+        HavenLog.relay("hosting relay=\(nodeId.prefix(10)) serving=\(serving)")
     }
 
     /// Store one of OUR OWN sealed events/media into the in-process mailbox directly (no iroh
@@ -377,7 +378,7 @@ enum RelayClients {
         // of GB — THE runaway leak. We never need a client to ourselves: our own events go to the local
         // mailbox, and own-device sync rides the nearby mesh. Distinct per-device ids mean a SIBLING
         // device's relay is a different id, so we CAN read it (no longer stranded).
-        let mine = DeviceKeyStore.deviceNodeHex().lowercased()
+        let mine = FeedStore.shared.myNodeHex.lowercased()   // account id == our transport id (reachable by friends)
         if !mine.isEmpty, nodeHex.lowercased() == mine { return nil }
         if RelayHost.shared.serving, !RelayHost.shared.nodeId.isEmpty, nodeHex == RelayHost.shared.nodeId {
             return nil
@@ -391,9 +392,11 @@ enum RelayClients {
         guard let seed = AccountStore.storedSeed() else { return nil }
         guard let c = try? await RelayClient.connect(seed: seed, relayNodeHex: nodeHex) else {
             RelayHealth.shared.recordFailure(nodeHex)
+            HavenLog.relay("dial relay \(nodeHex.prefix(10)) → CONNECT FAIL")
             return nil
         }
         RelayHealth.shared.recordSuccess(nodeHex)
+        HavenLog.relay("dial relay \(nodeHex.prefix(10)) → ok")
         cache[nodeHex] = c
         return c
     }
