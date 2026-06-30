@@ -1586,33 +1586,43 @@ final class FeedStore: ObservableObject {
         guard let social, let handle = try? FileHandle(forReadingFrom: url) else { return }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let total = max(1, (size + Self.mediaChunkSize - 1) / Self.mediaChunkSize)
-        HavenLog.net("SERVING \(total) chunks ref=\(ref.prefix(12)) (\(size)B) to=\(requesterHex.prefix(8))")
         nbMediaOut += 1
         let refData = Data(ref.utf8)
+        let chunkSize = Self.mediaChunkSize
+        let nearby = self.nearby
+        let node = self.node
+        // OWN-device (requester is my own account): read + symmetric-seal + broadcast entirely on a
+        // BACKGROUND queue. This loop streams thousands of chunks; running it on the main actor (as it did)
+        // made the whole UI lag while syncing. It needs no engine, so it's safe off-main.
+        if requesterHex == social.myNodeHex(), let ownKey = Self.ownMediaKey() {
+            DispatchQueue.global(qos: .utility).async {
+                defer { try? handle.close() }
+                var index = 0
+                while true {
+                    let chunk = handle.readData(ofLength: chunkSize)
+                    if chunk.isEmpty { break }
+                    guard let sealed = try? AES.GCM.seal(chunk, using: ownKey).combined else { break }
+                    nearby?.broadcast(Data([5]) + Self.chunkFrame(refData: refData, index: index, total: total, sealed: sealed))
+                    index += 1
+                    Thread.sleep(forTimeInterval: 0.006)   // pace so a burst can't overflow the nearby buffer
+                }
+            }
+            return
+        }
+        // FRIEND path: per-recipient KEM seal needs the engine, so keep it on the main actor (rare +
+        // reachability-gated, so it isn't the lag source).
         Task { @MainActor in
             defer { try? handle.close() }
             var index = 0
             while true {
-                let chunk = handle.readData(ofLength: Self.mediaChunkSize)
+                let chunk = handle.readData(ofLength: chunkSize)
                 if chunk.isEmpty { break }
-                // Own-device (requester is my own account) → symmetric account-key seal (always opens on a
-                // sibling). A friend requester → per-recipient KEM seal as before.
-                let sealedOpt: Data?
-                if requesterHex == social.myNodeHex(), let ownKey = Self.ownMediaKey() {
-                    sealedOpt = try? AES.GCM.seal(chunk, using: ownKey).combined
-                } else {
-                    sealedOpt = try? social.sealMedia(recipientNodeHex: requesterHex, data: chunk)
-                }
-                guard let sealed = sealedOpt else { break }
+                guard let sealed = try? social.sealMedia(recipientNodeHex: requesterHex, data: chunk) else { break }
                 let out = Data([5]) + Self.chunkFrame(refData: refData, index: index, total: total, sealed: sealed)
-                // Nearby FIRST and unconditionally — it's the instant, reliable path (and the only one that
-                // works between own devices when iroh is blocked). The iroh send is fire-and-forget so an
-                // unreachable recipient (e.g. an account id that no longer resolves) can't block the stream
-                // on a ~30s connect timeout PER CHUNK, which is what stalled media indefinitely.
                 nearby?.broadcast(out)
                 if let node { Task.detached { try? await node.sendToNode(nodeIdHex: requesterHex, payload: out) } }
                 index += 1
-                try? await Task.sleep(nanoseconds: 12_000_000)   // pace so a burst can't overflow the nearby buffer
+                try? await Task.sleep(nanoseconds: 12_000_000)
             }
         }
     }
@@ -1640,39 +1650,56 @@ final class FeedStore: ObservableObject {
         let index = Int(Self.readU32(payload, off)); off += 4
         let total = Int(Self.readU32(payload, off)); off += 4
         let sealed = payload.subdata(in: off..<payload.count)
-        // Own-device chunks are symmetric (account-key) sealed; friend chunks are KEM. Try the symmetric
-        // open first (cheap), then fall back to the engine's KEM open.
-        var opened: Data? = nil
-        if !ref.isEmpty {
-            if let ownKey = Self.ownMediaKey(), let box = try? AES.GCM.SealedBox(combined: sealed),
-               let p = try? AES.GCM.open(box, using: ownKey) {
-                opened = p
+        guard !ref.isEmpty, total > 0, !MediaStore.shared.has(ref) else { return }
+
+        // Reassembly entry (temp file) is created on the main actor; the heavy decrypt + disk write run on a
+        // dedicated SERIAL queue (serial = no concurrent writes to the same temp file), so thousands of
+        // chunks never block the UI. Only the cheap bookkeeping returns to main.
+        let entry = incoming[ref] ?? IncomingMedia(tempURL: MediaStore.shared.makeTempFile(), total: total, got: [])
+        incoming[ref] = entry
+        let tempURL = entry.tempURL
+        let chunkSize = Self.mediaChunkSize
+        let ownKey = Self.ownMediaKey()
+        Self.mediaQueue.async { [weak self] in
+            // Own-device chunks are symmetric (account-key); friend chunks are KEM. Try symmetric first.
+            var plain: Data? = nil
+            if let ownKey, let box = try? AES.GCM.SealedBox(combined: sealed), let p = try? AES.GCM.open(box, using: ownKey) {
+                plain = p
+            }
+            if let plain {
+                if let fh = try? FileHandle(forWritingTo: tempURL) {
+                    try? fh.seek(toOffset: UInt64(index) * UInt64(chunkSize)); fh.write(plain); try? fh.close()
+                }
+                Task { @MainActor in self?.finishChunk(ref: ref, index: index) }
             } else {
-                opened = social.openMedia(sealed: sealed)
+                // KEM (friend) open needs the engine → hop to main, open + write there (rare path).
+                Task { @MainActor in
+                    guard let self, let kp = self.social?.openMedia(sealed: sealed) else { return }
+                    if let fh = try? FileHandle(forWritingTo: tempURL) {
+                        try? fh.seek(toOffset: UInt64(index) * UInt64(chunkSize)); fh.write(kp); try? fh.close()
+                    }
+                    self.finishChunk(ref: ref, index: index)
+                }
             }
         }
-        HavenLog.net("CHUNK ref=\(ref.prefix(12)) idx=\(index)/\(total) open=\(opened != nil) had=\(MediaStore.shared.has(ref))")
-        guard !ref.isEmpty, total > 0, !MediaStore.shared.has(ref), let plain = opened else { return }
+    }
 
-        var entry = incoming[ref] ?? IncomingMedia(tempURL: MediaStore.shared.makeTempFile(), total: total, got: [])
-        if let fh = try? FileHandle(forWritingTo: entry.tempURL) {
-            try? fh.seek(toOffset: UInt64(index) * UInt64(Self.mediaChunkSize))
-            fh.write(plain)
-            try? fh.close()
-        }
+    private static let mediaQueue = DispatchQueue(label: "haven.media.reassembly", qos: .utility)
+
+    /// Bookkeeping after a chunk's plaintext is written to the temp file (main-actor state).
+    @MainActor private func finishChunk(ref: String, index: Int) {
+        guard var entry = incoming[ref] else { return }
         entry.got.insert(index)
         incoming[ref] = entry
-        if entry.got.count >= entry.total {
-            MediaStore.shared.adopt(ref, from: entry.tempURL)
-            nbMediaIn += 1
-            autoSaveReceived(ref)
-            incoming[ref] = nil
-            refresh()   // re-render so the media appears
-            // If I'm the circle's backup, cache this received media to my bucket too.
-            if SharedStore.isVolunteering {
-                let circle = activeCircleId
-                Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) }
-            }
+        guard entry.got.count >= entry.total else { return }
+        MediaStore.shared.adopt(ref, from: entry.tempURL)
+        nbMediaIn += 1
+        autoSaveReceived(ref)
+        incoming[ref] = nil
+        refresh()   // re-render so the media appears
+        if SharedStore.isVolunteering, let social {
+            let circle = activeCircleId
+            Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) }
         }
     }
 
