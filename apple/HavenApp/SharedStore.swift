@@ -105,6 +105,12 @@ enum SharedStore {
         // Try every relay of every circle first (fallback reads), then the S3 bucket.
         outer: for cid in circleIds {
             for node in relayNodes(cid) {
+                // OUR OWN hosted relay: read the media from the local store (a sibling/friend uploaded it
+                // to us) — we can't dial ourselves. This is what made a host's media show "all spinners".
+                if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
+                    if let s = RelayHost.shared.localGet(key(ref)) { sealed = s; break outer }
+                    continue
+                }
                 guard let c = await RelayClients.client(node) else { continue }
                 if let s = await c.get(key: key(ref)) { RelayHealth.shared.recordSuccess(node); sealed = s; break outer }
             }
@@ -188,6 +194,16 @@ enum SharedStore {
                 // Read from ALL relays; seenMailbox is keyed by the content-addressed key, so the
                 // same envelope mirrored on several relays is ingested exactly once (dedup).
                 for node in nodes {
+                    // OUR OWN hosted relay: read the local store directly — we can't dial ourselves
+                    // (self-dial guard), so this is how the host ingests what a sibling device or a
+                    // friend uploaded to it (the previously-missing read-own-relay path).
+                    if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
+                        for key in RelayHost.shared.localList(prefix) where !seenMailbox.contains(key) {
+                            seenMailbox.insert(key)
+                            if let data = RelayHost.shared.localGet(key) { out.append((cid, data)) }
+                        }
+                        continue
+                    }
                     guard let c = await RelayClients.client(node) else { continue }
                     let keys = await c.list(prefix: prefix)
                     RelayHealth.shared.recordSuccess(node)

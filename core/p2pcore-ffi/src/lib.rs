@@ -437,6 +437,18 @@ impl RelayServerHandle {
         self.node.node.relay_local_has(&key)
     }
 
+    /// Read a blob from our OWN mailbox (what a sibling device or a friend uploaded to us), without
+    /// dialing ourselves. None if absent. Lets the host ingest its own relay store.
+    pub fn local_get(&self, key: String) -> Option<Vec<u8>> {
+        self.node.node.relay_local_get(&key)
+    }
+
+    /// Every key under `prefix` our OWN mailbox holds — so the host can enumerate + ingest blobs others
+    /// uploaded to it (it can't poll itself over iroh).
+    pub fn local_list(&self, prefix: String) -> Vec<String> {
+        self.node.node.relay_local_list(&prefix)
+    }
+
     /// Stop hosting the relay on this node (drops the attachment).
     pub fn disable(&self) {
         self.node.node.disable_relay();

@@ -197,6 +197,22 @@ pub(crate) fn local_has(root: &Path, key: &str) -> bool {
     safe_path(root, key).map(|p| p.exists()).unwrap_or(false)
 }
 
+/// Read a sealed blob the in-process relay holds — the HOST reading its OWN store (e.g. a sibling device's
+/// upload, or a friend's post landed while we were offline). No iroh self-connection.
+pub(crate) fn local_get(root: &Path, key: &str) -> Option<Vec<u8>> {
+    let path = safe_path(root, key).ok()?;
+    std::fs::read(&path).ok()
+}
+
+/// Every store-relative key the in-process relay holds under `prefix` (host enumerating its OWN store, so
+/// it can ingest blobs others uploaded to it without dialing itself). Best-effort; `.part` writes skipped.
+pub(crate) fn local_list(root: &Path, prefix: &str) -> Vec<String> {
+    let start = safe_path(root, prefix).unwrap_or_else(|_| root.to_path_buf());
+    let mut out = Vec::new();
+    collect_keys(root, &start, &mut out);
+    out
+}
+
 pub struct BlobServer {
     endpoint: Endpoint,
     secret: [u8; 32],

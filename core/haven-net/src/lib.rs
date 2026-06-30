@@ -130,6 +130,18 @@ impl Node {
         let root = lock(&self.relay).as_ref().map(|c| c.root.clone());
         root.map(|r| blobstore::local_has(&r, key)).unwrap_or(false)
     }
+    /// Read a blob from the in-process relay store — the HOST reading its OWN mailbox (a sibling device's
+    /// or a friend's upload) without dialing itself. None if not hosting or the key is absent.
+    pub fn relay_local_get(&self, key: &str) -> Option<Vec<u8>> {
+        let root = lock(&self.relay).as_ref().map(|c| c.root.clone())?;
+        blobstore::local_get(&root, key)
+    }
+    /// Every key under `prefix` the in-process relay store holds (host enumerating its OWN mailbox to
+    /// ingest what others uploaded to it). Empty if not hosting.
+    pub fn relay_local_list(&self, prefix: &str) -> Vec<String> {
+        let root = lock(&self.relay).as_ref().map(|c| c.root.clone());
+        root.map(|r| blobstore::local_list(&r, prefix)).unwrap_or_default()
+    }
 
     /// Mesh anti-entropy: pull every sealed blob a SIBLING relay holds that our in-process relay lacks,
     /// into our store (idempotent set-union). No-op if we don't host a relay. Returns blobs pulled.

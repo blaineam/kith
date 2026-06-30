@@ -82,6 +82,11 @@ final class RelayHost: ObservableObject {
     /// self-connection). Returns false if we aren't currently hosting.
     func localPut(_ key: String, _ data: Data) -> Bool { handle?.localPut(key: key, data: data) ?? false }
     func localHas(_ key: String) -> Bool { handle?.localHas(key: key) ?? false }
+    /// Read a blob from our OWN hosted mailbox (a sibling device's / friend's upload), without dialing
+    /// ourselves — the host can't poll its own relay over iroh (self-dial guard), so it reads locally.
+    func localGet(_ key: String) -> Data? { handle?.localGet(key: key) }
+    /// Keys under `prefix` in our own mailbox, so the host can ingest what others uploaded to it.
+    func localList(_ prefix: String) -> [String] { handle?.localList(prefix: prefix) ?? [] }
 
     private func stop() {
         handle?.disable()      // detach the relay from the node's endpoint
@@ -378,8 +383,12 @@ enum RelayClients {
             return nil
         }
         guard RelayHealth.shared.available(nodeHex) else { return nil }   // skip relays in backoff
-        // Connect as THIS device (its transport key), so the relay sees our authorized device id as the peer.
-        let seed = DeviceKeyStore.deviceAccount().secretSeed()
+        // Connect to the mailbox as our ACCOUNT identity, not this device's transport key. Relays are
+        // ADDRESSED by a host's device id (which we dial), but authorize by circle MEMBERSHIP (account
+        // ids), so presenting the account id is always authorized — no dependency on the host having
+        // learned our device roster yet (that gap was making a sibling's uploads get rejected → the
+        // perpetual "Syncing…" + media never landing). The messaging node still uses the device key.
+        guard let seed = AccountStore.storedSeed() else { return nil }
         guard let c = try? await RelayClient.connect(seed: seed, relayNodeHex: nodeHex) else {
             RelayHealth.shared.recordFailure(nodeHex)
             return nil
