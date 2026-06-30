@@ -1578,6 +1578,41 @@ impl HavenSocial {
         }
     }
 
+    /// Self-register THIS device (its routable bundle) into my own signed roster so contacts learn to dial
+    /// + seal to it. Each device calls this on launch with its own bundle (`my_device_bundle`). Issues an
+    /// account-signed credential, UNIONS its id into my `DeviceList` (re-signing with my account key — so
+    /// several iCloud-restored devices each accumulate rather than clobber), and returns my roster wire to
+    /// broadcast to contacts. Idempotent: a no-op when already present, but still returns the current wire
+    /// so the caller can (re)publish. Empty only if the bundle is invalid.
+    pub fn register_device(&self, device_bundle: Vec<u8>, name: String, created_at: u64) -> Vec<u8> {
+        let Ok(device) = HavenId::from_bytes(&device_bundle) else { return vec![] };
+        let mut st = self.state.lock().unwrap();
+        let me_pub = st.me.public();
+        let acct_id = me_pub.node_id_bytes();
+        let dev_id = device.node_id_bytes();
+        let base = st.device_lists.get(&acct_id).map(|cd| cd.list.clone());
+        let updated = match &base {
+            Some(b) => b.with_self_added(dev_id, &st.me, created_at),
+            None => Some(DeviceList::signed(&st.me, 1, created_at, vec![dev_id], vec![])),
+        };
+        if let Some(new_list) = updated {
+            let mut creds =
+                st.device_lists.get(&acct_id).map(|cd| cd.credentials.clone()).unwrap_or_default();
+            if !creds.iter().any(|c| c.device_id() == dev_id) {
+                creds.push(DeviceCredential::issue(&st.me, &device, &name, created_at));
+            }
+            st.device_lists.insert(acct_id, ContactDevices { list: new_list, credentials: creds });
+            for c in st.circles.iter_mut() {
+                c.rotate_epoch();
+            }
+        }
+        let me_pub = st.me.public();
+        match st.device_lists.get(&acct_id) {
+            Some(cd) => tagged(TAG_DEVICE_ROSTER, &encode_roster(&me_pub, cd)),
+            None => vec![],
+        }
+    }
+
     /// Everything a freshly-synced peer (or the relay mailbox) needs to read my contributions to a
     /// circle: the current epoch **key commit** (so they can open my epoch events) followed by my own
     /// events re-sealed under that epoch. Tagged for `receive`'s router. This is the *only* transport
@@ -1909,16 +1944,57 @@ fn verify_and_store_roster(st: &mut NetState, account: &HavenId, list_bytes: &[u
         credentials.push(cred);
     }
     let acct_id = account.node_id_bytes();
+    let my_id = st.me.public().node_id_bytes();
+
+    if acct_id == my_id {
+        // MY OWN account's roster, possibly arriving from ANOTHER of my devices (multi-master: several
+        // devices each restored the account from iCloud and self-register their own device id). A plain
+        // higher-version-wins replace would let one device clobber another's registration, so UNION-merge
+        // (grow-only devices + grow-only revoked) and re-sign with my account key. Union the credentials
+        // too, so every device's routable bundle is kept. Revocations stay sticky (revoked only grows),
+        // so this is rollback-safe without version-gating.
+        let base = st.device_lists.get(&acct_id).map(|cd| cd.list.clone());
+        let mut creds: Vec<DeviceCredential> =
+            st.device_lists.get(&acct_id).map(|cd| cd.credentials.clone()).unwrap_or_default();
+        let mut creds_grew = false;
+        for c in &credentials {
+            if !creds.iter().any(|e| e.device_id() == c.device_id()) {
+                creds.push(c.clone());
+                creds_grew = true;
+            }
+        }
+        let merged = match &base {
+            Some(b) => b.merge(&list, &st.me, list.updated_at),
+            None => Some(list.clone()),
+        };
+        return match merged {
+            Some(new_list) => {
+                st.device_lists.insert(acct_id, ContactDevices { list: new_list, credentials: creds });
+                for c in st.circles.iter_mut() {
+                    c.rotate_epoch();
+                }
+                true
+            }
+            None => {
+                if creds_grew {
+                    if let Some(cd) = st.device_lists.get_mut(&acct_id) {
+                        cd.credentials = creds;
+                    }
+                }
+                creds_grew
+            }
+        };
+    }
+
+    // A CONTACT's roster: they re-sign their own union, so higher-version-wins with rollback defense.
     if let Some(existing) = st.device_lists.get(&acct_id) {
         if existing.list.version >= list.version {
             return false; // rollback / replay of an older roster — ignore.
         }
     }
     st.device_lists.insert(acct_id, ContactDevices { list, credentials });
-    let my_id = st.me.public().node_id_bytes();
     for c in st.circles.iter_mut() {
-        let affected = acct_id == my_id || c.members.iter().any(|m| m.node_id_bytes() == acct_id);
-        if affected {
+        if c.members.iter().any(|m| m.node_id_bytes() == acct_id) {
             c.rotate_epoch();
         }
     }
@@ -2325,5 +2401,37 @@ mod net_tests {
         let feed2 = bob_phone.feed(cid.clone(), 4_000, None);
         assert!(feed2.iter().all(|m| m.body != "after revoke"),
                 "REVOKED device must not receive anything posted after revocation");
+    }
+
+    #[test]
+    fn device_identity_dual_opens_old_account_and_new_device_sealed() {
+        let alice = HavenSocial::new([1u8; 32].to_vec()).unwrap();
+        let bob = HavenSocial::new([2u8; 32].to_vec()).unwrap();
+        let cid = DEFAULT_CIRCLE.to_string();
+        alice.add_contact_bundle(cid.clone(), bob.my_bundle()).unwrap();
+        bob.add_contact_bundle(cid.clone(), alice.my_bundle()).unwrap();
+
+        // (1) No device key yet → Alice's post is account-sealed; Bob opens it via the account key.
+        alice.post(cid.clone(), "old account-sealed".into(), vec![], None, None, false, false, 1_000).unwrap();
+        sync(&alice, &bob, &cid);
+        assert!(bob.feed(cid.clone(), 2_000, None).iter().any(|m| m.body == "old account-sealed"),
+                "account-sealed content opens via the account key");
+
+        // (2) Bob adopts his DEVICE key + self-registers; his roster reaches Alice (rides the sync bundle).
+        assert!(bob.use_device_identity([99u8; 32].to_vec()));
+        assert_ne!(bob.my_device_node_hex(), hex(&Identity::from_seed(&[2u8; 32]).public().node_id_bytes()),
+                   "device transport id must differ from the account id");
+        assert!(!bob.register_device(bob.my_device_bundle(), "bob-mac".into(), 1).is_empty());
+        sync(&bob, &alice, &cid);
+
+        // (3) Alice's new post now seals to Bob's DEVICE bundle; Bob opens it with his device key —
+        //     while the older account-sealed post is STILL readable (dual-open).
+        alice.post(cid.clone(), "new device-sealed".into(), vec![], None, None, false, false, 3_000).unwrap();
+        sync(&alice, &bob, &cid);
+        let feed = bob.feed(cid.clone(), 4_000, None);
+        assert!(feed.iter().any(|m| m.body == "new device-sealed"),
+                "device-sealed content opens via the device key (Option 1)");
+        assert!(feed.iter().any(|m| m.body == "old account-sealed"),
+                "dual-open keeps older account-sealed content readable");
     }
 }
