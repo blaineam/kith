@@ -46,9 +46,8 @@ final class FeedStore: ObservableObject {
     @Published private(set) var nearbyActive = false
     // Live media-sync counters — surfaced in the feed so the user (and I) can SEE whether media is moving
     // over the nearby mesh, instead of guessing from logs we can't read on every device.
-    @Published private(set) var nbMediaOut = 0       // media items served/pushed over nearby
-    @Published private(set) var nbMediaIn = 0        // media items fully received over nearby
-    @Published private(set) var nbMediaPending = 0   // media refs still missing locally
+    // Media-sync counters live in SyncMetrics (a SEPARATE ObservableObject) so updating them does NOT
+    // re-render the whole feed/You tab — only the tap-to-open sync-detail popover observes them.
     // Diagnostics surfaced in Advanced → Connection.
     @Published private(set) var internetReady = false
     @Published private(set) var nodeError: String?
@@ -1504,7 +1503,7 @@ final class FeedStore: ObservableObject {
             for c in item.comments { for ref in c.media where !MediaStore.shared.has(ref) { missing.insert(ref) } }
         }
         let circleIds = circles.map { $0.id }
-        nbMediaPending = missing.count
+        SyncMetrics.shared.nbMediaPending = missing.count
         let nowMs = now()
         // THROTTLE: a missing ref was re-requested from every contact on every sync, so a backlog of
         // missing media flooded the network with hundreds of thousands of frames per cycle (drowning real
@@ -1619,7 +1618,7 @@ final class FeedStore: ObservableObject {
         guard let social, let handle = try? FileHandle(forReadingFrom: url) else { return }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let total = max(1, (size + Self.mediaChunkSize - 1) / Self.mediaChunkSize)
-        nbMediaOut += 1
+        SyncMetrics.shared.nbMediaOut += 1
         let refData = Data(ref.utf8)
         let chunkSize = Self.mediaChunkSize
         let nearby = self.nearby
@@ -1726,7 +1725,7 @@ final class FeedStore: ObservableObject {
         incoming[ref] = entry
         guard entry.got.count >= entry.total else { return }
         MediaStore.shared.adopt(ref, from: entry.tempURL)
-        nbMediaIn += 1
+        SyncMetrics.shared.nbMediaIn += 1
         autoSaveReceived(ref)
         incoming[ref] = nil
         refresh()   // re-render so the media appears
@@ -1901,26 +1900,66 @@ enum PostSyncStatus: Equatable {
 
 /// A small green/yellow/red light + label showing whether posts in this circle are getting out. Recomputed
 /// on a light timer so it reflects an upload finishing or a peer connecting without needing a manual refresh.
+/// Live media-sync counters, kept OUT of FeedStore so incrementing them never re-renders the feed/You
+/// tab (that was the sync-time lag). Only the tap-to-open SyncDetailView observes this.
+@MainActor final class SyncMetrics: ObservableObject {
+    static let shared = SyncMetrics()
+    private init() {}
+    @Published var nbMediaOut = 0       // media items served/pushed over nearby
+    @Published var nbMediaIn = 0        // media items fully received over nearby
+    @Published var nbMediaPending = 0   // media refs still missing locally
+}
+
 struct SyncStatusBadge: View {
     let circleId: String
     @ObservedObject private var store = FeedStore.shared
+    @State private var showDetail = false
     var body: some View {
         TimelineView(.periodic(from: .now, by: 2.5)) { _ in
             let s = store.syncStatus(circleId: circleId)
             // Only surface the pill when there's something to know — "Syncing…" or "device-only". When
             // everything's synced it collapses to nothing so it doesn't pad out the composer.
             if s != .synced {
-                HStack(spacing: 5) {
-                    Circle().fill(s.color).frame(width: 7, height: 7)
-                        .shadow(color: s.color.opacity(0.6), radius: 2)
-                    Text(s.label).font(.caption2).foregroundStyle(.secondary)
+                Button { showDetail = true } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(s.color).frame(width: 7, height: 7)
+                            .shadow(color: s.color.opacity(0.6), radius: 2)
+                        Text(s.label).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(.ultraThinMaterial, in: Capsule())
                 }
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(.ultraThinMaterial, in: Capsule())
-                .help("Yellow: still syncing. Red: only on this device. (Hidden once it's safely synced.)")
+                .buttonStyle(.plain)
+                .help("Tap for live sync detail. Yellow: still syncing. Red: only on this device.")
                 .transition(.opacity)
+                .popover(isPresented: $showDetail, arrowEdge: .bottom) { SyncDetailView() }
             }
         }
+    }
+}
+
+/// The "magical details" behind the sync light — surfaced only when the user taps the yellow/red pill, so
+/// it's there when they want to monitor a sync but never clutters (or re-renders) the feed otherwise.
+struct SyncDetailView: View {
+    @ObservedObject private var m = SyncMetrics.shared
+    @ObservedObject private var store = FeedStore.shared
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sync activity").font(.headline)
+            Label("\(m.nbMediaOut) media sent", systemImage: "arrow.up.circle")
+            Label("\(m.nbMediaIn) media received", systemImage: "arrow.down.circle")
+            Label("\(m.nbMediaPending) media waiting", systemImage: "clock")
+            Divider()
+            Label(store.nearbyActive ? "Nearby devices: connected" : "Nearby devices: not connected",
+                  systemImage: store.nearbyActive ? "antenna.radiowaves.left.and.right"
+                                                  : "antenna.radiowaves.left.and.right.slash")
+                .foregroundStyle(store.nearbyActive ? HavenTheme.pink : .secondary)
+            Text("Updates live while your devices and circles sync.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .font(.callout.monospacedDigit())
+        .padding(16)
+        .frame(minWidth: 240, alignment: .leading)
     }
 }
 
@@ -2267,16 +2306,8 @@ struct FeedView: View {
             VStack(spacing: 8) {
                 // Delivery status for this circle: green = safely in your relay / reached a member,
                 // yellow = still syncing, red = only on this device. So you know if a post got out.
-                HStack {
-                    // Live nearby media-sync readout so it's visible whether media is actually moving.
-                    if store.nearbyActive || store.nbMediaPending > 0 || store.nbMediaOut > 0 || store.nbMediaIn > 0 {
-                        Label("↑\(store.nbMediaOut) ↓\(store.nbMediaIn) · \(store.nbMediaPending) waiting",
-                              systemImage: store.nearbyActive ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(store.nearbyActive ? HavenTheme.pink : .secondary)
-                    }
-                    Spacer(); SyncStatusBadge(circleId: store.activeCircleId)
-                }
+                // Delivery light: tap the yellow/red pill to dive into live sync detail (sent/received/waiting).
+                HStack { Spacer(); SyncStatusBadge(circleId: store.activeCircleId) }
                 if !attachedMedia.isEmpty || attachedTrack != nil || composeRetention != nil { attachmentTray }
                 // Opt-in location tag — only when a photo/video with GPS is attached. Default off.
                 if MediaStore.shared.anyLocated(attachedMedia) {
