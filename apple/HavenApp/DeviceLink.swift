@@ -128,6 +128,8 @@ struct RestoreIdentityView: View {
     @State private var pasted = ""
     @State private var error = false
     @State private var scanning = true
+    @State private var backups: [AccountStore.IdentitySummary] = []
+    @State private var iCloudOn = AccountStore.iCloudSyncEnabled
 
     var body: some View {
         ZStack {
@@ -159,6 +161,46 @@ struct RestoreIdentityView: View {
                         Label("That code isn't valid. Check you copied the whole thing.", systemImage: "xmark.octagon.fill")
                             .font(.caption).foregroundStyle(.red)
                     }
+
+                    // Restore from a BACKUP already on this account — the iCloud Keychain recovery archive.
+                    // No other device / QR needed; ideal when a transfer code isn't available.
+                    Divider().padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Restore from a backup").font(.subheadline.weight(.semibold))
+                        if backups.isEmpty {
+                            if iCloudOn {
+                                Text("No backed-up identities found in your iCloud Keychain yet. Backups appear here once an identity has synced from another of your Apple devices.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("Turn on iCloud Keychain backup to recover an identity you used on another Apple device — without needing a transfer code.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Button {
+                                    accountStore.setICloudSync(true)
+                                    iCloudOn = true
+                                    reloadBackups()
+                                } label: { Label("Turn on iCloud backup", systemImage: "icloud.fill") }
+                                    .buttonStyle(BrandButtonStyle())
+                            }
+                        } else {
+                            ForEach(backups) { id in
+                                Button { restoreBackup(id) } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "clock.arrow.circlepath").foregroundStyle(HavenTheme.pink)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(id.name).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                                            Text(String(id.nodeHex.prefix(16)) + "…").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "arrow.down.circle").foregroundStyle(.secondary)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .padding(12).background(.background, in: RoundedRectangle(cornerRadius: 12))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Label(linkMode ? "This device joins your account and syncs your profile + posts. Your primary device can revoke it anytime."
                                    : "This replaces the identity on this device.", systemImage: "info.circle")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -168,6 +210,20 @@ struct RestoreIdentityView: View {
         }
         .navigationTitle("Restore")
         .havenInlineNavTitle()
+        .onAppear { reloadBackups() }
+    }
+
+    /// The backed-up identities available to restore (everything in the recovery archive except the one
+    /// already active on this device).
+    private func reloadBackups() {
+        backups = accountStore.roster().filter { !$0.isCurrent }
+    }
+
+    private func restoreBackup(_ id: AccountStore.IdentitySummary) {
+        guard accountStore.switchToIdentity(seedB64: id.seedB64) else { error = true; return }
+        FeedStore.shared.reconfigure(seed: accountStore.account.secretSeed())
+        onRestored()
+        dismiss()
     }
 
     private func attempt(_ code: String) {
