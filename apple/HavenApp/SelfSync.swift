@@ -92,6 +92,11 @@ final class SelfSyncCoordinator {
                     memberBundles: social.circleMemberBundles(circleId: ci.id),
                     relays: RelayMailboxStore.shared.relays(forCircle: ci.id))
             }
+            // Contact device ROSTERS — so a freshly-linked device (e.g. the Mac) learns which device ids to
+            // DIAL/seal for each friend directly from a sibling that already knows them, instead of dialing
+            // dead account ids and timing out (the regression that made friend comms fail on the Mac). Keyed
+            // by account hex so a newer roster version replaces the old. Additive (never tombstoned).
+            for r in social.exportContactRosters() { m["roster:\(r.accountHex)"] = r.wire }
         }
         return m
     }
@@ -163,6 +168,14 @@ final class SelfSyncCoordinator {
             guard !circleId.isEmpty, !hex.isEmpty, !conn.isRemovedFromCircle(hex, circleId: circleId) else { continue }
             conn.removeFromCircle(hex, circleId: circleId)
             social?.removeFromCircle(circleId: circleId, nodeHex: hex)
+        }
+
+        // Contact rosters synced from another of my devices → ingest so THIS device can also dial + seal to
+        // each friend's CURRENT devices (verified against the account bundle carried inside the wire). This
+        // is what lets a linked Mac reach friends it never contacted directly — it inherits their device ids
+        // from the phone. Idempotent + version-checked in the engine, so a stale roster can't roll anything back.
+        if let social = social {
+            for e in live where e.key.hasPrefix("roster:") { _ = social.ingestRosterWire(wire: e.value) }
         }
 
         // Circles: reconstruct each synced circle — create it, register every member's bundle

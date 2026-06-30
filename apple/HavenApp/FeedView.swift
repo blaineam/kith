@@ -790,13 +790,31 @@ final class FeedStore: ObservableObject {
             originateRelay(dests: Array(targets), inner: frame(0, hello))
         }
         if resendHistoryIroh { lastHistoryResendMs = nowMs }
+        reannounceOwnRelay()   // frame 19 was a one-shot at relay start; re-emit so peers reliably learn it
         requestMissingMedia()
+    }
+
+    /// Re-emit the host's OWN relay id to every circle (nearby + mesh), WITHOUT adoptRelayNode's heavy
+    /// backfill. frame 19 used to fire only once at relay start, so a sibling/friend that wasn't reachable
+    /// at that instant never learned the relay — which is why the iPhone "sees the Mac nearby but won't
+    /// show its relay." Cheap (one sealed announce per circle), so it's safe every sync tick + on connect.
+    private func reannounceOwnRelay() {
+        guard let social, RelayHost.shared.serving else { return }
+        let hex = RelayHost.shared.nodeId
+        guard hex.count == 64, let data = hex.data(using: .utf8) else { return }
+        for ci in circles {
+            guard let sealed = try? social.sealCircleMedia(circleId: ci.id, data: data) else { continue }
+            var p = Data(); lpAppend(&p, Data(ci.id.utf8)); p.append(sealed)
+            nearbyBroadcast(19, p)
+            originateRelay(dests: social.contactNodeIds(circleId: ci.id), inner: frame(19, p))
+        }
     }
 
     /// A nearby peer just connected over Bluetooth/Wi-Fi — say hello + back-fill (all circles).
     private func nearbyPeerConnected() {
         guard let social else { return }
         nearbyActive = true
+        reannounceOwnRelay()   // a freshly-connected sibling/friend immediately learns this host's relay
         // FIRST: offer this device's sealed self-sync slot to nearby peers. ONLY our own devices (same
         // seed) can open it — it's how a linked Mac/phone bootstraps circles + profile + posts LOCALLY,
         // with no relay or S3 at all (the local "handshake" sync). Sent before the post events below so

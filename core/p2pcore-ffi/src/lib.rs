@@ -255,6 +255,14 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// An opened, sender-authenticated push notification (audit H2).
+/// A contact's signed device roster, wire-tagged for sharing, plus the contact's account hex so a
+/// receiving own-device can key it in self-sync (one entry per known contact roster).
+#[derive(uniffi::Record)]
+pub struct ContactRosterWire {
+    pub account_hex: String,
+    pub wire: Vec<u8>,
+}
+
 #[derive(uniffi::Record)]
 pub struct SignedNotification {
     /// The verified author's node id (hex). The receiver should still confirm it's a known contact
@@ -1492,17 +1500,65 @@ impl HavenSocial {
         let st = self.state.lock().unwrap();
         for (id, cd) in st.device_lists.iter() {
             if hex(id) == acct {
-                let devices: Vec<String> = cd.authorized_bundles().iter().map(|b| hex(&b.node_id_bytes())).collect();
-                // Upgraded contact (we have their roster) → dial their devices ONLY; the account id is no
-                // longer a live transport id, so dialing it would just waste a connect timeout.
-                if !devices.is_empty() {
-                    return devices;
+                let mut ids: Vec<String> =
+                    cd.authorized_bundles().iter().map(|b| hex(&b.node_id_bytes())).collect();
+                // Keep the account id in the dial set too. Dropping it (the regression) stranded any peer
+                // still on its pre-multidevice account node, and — worse — a freshly-linked device that has
+                // only PARTIALLY learned a contact's roster. A dead account id only costs a connect timeout;
+                // omitting it can mean total unreachability.
+                if !ids.iter().any(|i| *i == acct) {
+                    ids.push(acct);
                 }
-                break;
+                return ids;
             }
         }
         // No roster known → the contact is still on its account node (pre-multidevice). Dial that.
         vec![acct]
+    }
+
+    /// Export every CONTACT device roster I currently hold, each as tagged wire + the contact's account
+    /// hex. My OTHER devices fold these into self-sync so a freshly-linked device learns which device ids
+    /// to dial/seal for each friend WITHOUT first having to reach that friend itself — the bootstrap gap
+    /// that left a linked Mac dialing dead account ids and timing out. Excludes my own roster.
+    pub fn export_contact_rosters(&self) -> Vec<ContactRosterWire> {
+        let st = self.state.lock().unwrap();
+        let my_id = st.me.public().node_id_bytes();
+        // Recover each contact's full account bundle (needed to wire-encode their roster) from circle members.
+        let mut bundles: HashMap<[u8; 32], HavenId> = HashMap::new();
+        for c in st.circles.iter() {
+            for m in c.members.iter() {
+                bundles.insert(m.node_id_bytes(), m.clone());
+            }
+        }
+        let mut out = Vec::new();
+        for (acct_id, cd) in st.device_lists.iter() {
+            if *acct_id == my_id {
+                continue;
+            }
+            if let Some(acct_pub) = bundles.get(acct_id) {
+                out.push(ContactRosterWire {
+                    account_hex: hex(acct_id),
+                    wire: tagged(TAG_DEVICE_ROSTER, &encode_roster(acct_pub, cd)),
+                });
+            }
+        }
+        out
+    }
+
+    /// Ingest a contact's device roster from tagged wire (what `export_contact_rosters` produces). Same
+    /// verification as `receive`'s TAG_DEVICE_ROSTER path, but account-level so no circle context is needed.
+    /// Verified against the account bundle carried in the wire; false on a forged / stale (rolled-back) roster.
+    pub fn ingest_roster_wire(&self, wire: Vec<u8>) -> bool {
+        if wire.first() != Some(&TAG_DEVICE_ROSTER) {
+            return false;
+        }
+        let mut st = self.state.lock().unwrap();
+        match decode_roster(&wire[1..]).and_then(|(acct, list, creds)| {
+            HavenId::from_bytes(&acct).ok().map(|a| (a, list, creds))
+        }) {
+            Some((account, list, creds)) => verify_and_store_roster(&mut st, &account, &list, &creds),
+            None => false,
+        }
     }
 
     /// The full public **bundles** of a circle's members — for multi-device sync. Another of the
