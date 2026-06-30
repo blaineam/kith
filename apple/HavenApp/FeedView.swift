@@ -800,6 +800,7 @@ final class FeedStore: ObservableObject {
             lastMediaBackfillMs = nowMs
             backfillMailboxMedia(circleIds: circles.map { $0.id })
         }
+        pushOwnMediaNearby()   // opportunistically push any NOT-yet-pushed media I hold to nearby siblings
         requestMissingMedia()
     }
 
@@ -835,6 +836,7 @@ final class FeedStore: ObservableObject {
             guard !circle.id.hasPrefix("dm:") else { continue }       // DM events stay point-to-point
             for env in social.syncEnvelopes(circleId: circle.id) { nearbyBroadcast(1, eventPayload(circle.id, env)) }
         }
+        pushOwnMediaNearby(freshPeer: true)   // a newly-connected sibling has nothing — push it my media now
         refresh()
     }
 
@@ -1498,6 +1500,8 @@ final class FeedStore: ObservableObject {
         let requesterHex = String(data: payload.prefix(64), encoding: .utf8) ?? ""
         let ref = String(data: payload.dropFirst(64), encoding: .utf8) ?? ""
         guard requesterHex.count == 64, !ref.isEmpty else { return }
+        let haveLocal = MediaStore.shared.storagePath(for: ref).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        HavenLog.net("media REQ ref=\(ref.prefix(12)) have=\(haveLocal) from=\(requesterHex.prefix(8))")
         if let url = MediaStore.shared.storagePath(for: ref), FileManager.default.fileExists(atPath: url.path) {
             sendMediaChunks(ref: ref, fileURL: url, to: requesterHex)
             return
@@ -1515,12 +1519,38 @@ final class FeedStore: ObservableObject {
         }
     }
 
+    private var pushedNearby = Set<String>()
+    /// Opportunistically PUSH the media I hold to nearby own devices, sealed to my account (only my own
+    /// devices can open it). Rides the nearby mesh — the reliable own-device channel when iroh is blocked —
+    /// so a linked Mac gets my photos WITHOUT relying on the request/response round-trip (which wasn't
+    /// delivering). Deduplicated (each ref pushed once per peer session) + budgeted, and every item is an
+    /// independent broadcast so one large/slow item can't stall the rest. `freshPeer` re-pushes everything
+    /// for a newly-connected sibling that has nothing yet.
+    private func pushOwnMediaNearby(freshPeer: Bool = false) {
+        guard let social, nearby != nil else { return }
+        if freshPeer { pushedNearby.removeAll() }
+        let me = social.myNodeHex()
+        var refs: [String] = []
+        for item in items { refs.append(contentsOf: item.media); for c in item.comments { refs.append(contentsOf: c.media) } }
+        var budget = 40
+        for ref in refs {
+            if budget <= 0 { break }
+            if pushedNearby.contains(ref) || SharedLocation.parse(ref) != nil { continue }
+            guard let url = MediaStore.shared.storagePath(for: ref), FileManager.default.fileExists(atPath: url.path) else { continue }
+            pushedNearby.insert(ref)
+            sendMediaChunks(ref: ref, fileURL: url, to: me)
+            budget -= 1
+        }
+        if pushedNearby.count > 5000 { pushedNearby.removeAll() }
+    }
+
     /// Stream a media file to the requester as individually-sealed chunks — low memory,
     /// large-file friendly. Chunk N's plaintext goes at offset N*chunkSize on reassembly.
     private func sendMediaChunks(ref: String, fileURL url: URL, to requesterHex: String) {
         guard let social, let handle = try? FileHandle(forReadingFrom: url) else { return }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let total = max(1, (size + Self.mediaChunkSize - 1) / Self.mediaChunkSize)
+        HavenLog.net("SERVING \(total) chunks ref=\(ref.prefix(12)) (\(size)B) to=\(requesterHex.prefix(8))")
         let refData = Data(ref.utf8)
         Task { @MainActor in
             defer { try? handle.close() }
@@ -1530,8 +1560,12 @@ final class FeedStore: ObservableObject {
                 if chunk.isEmpty { break }
                 guard let sealed = try? social.sealMedia(recipientNodeHex: requesterHex, data: chunk) else { break }
                 let out = Data([5]) + Self.chunkFrame(refData: refData, index: index, total: total, sealed: sealed)
-                if let node { try? await node.sendToNode(nodeIdHex: requesterHex, payload: out) }
+                // Nearby FIRST and unconditionally — it's the instant, reliable path (and the only one that
+                // works between own devices when iroh is blocked). The iroh send is fire-and-forget so an
+                // unreachable recipient (e.g. an account id that no longer resolves) can't block the stream
+                // on a ~30s connect timeout PER CHUNK, which is what stalled media indefinitely.
                 nearby?.broadcast(out)
+                if let node { Task.detached { try? await node.sendToNode(nodeIdHex: requesterHex, payload: out) } }
                 index += 1
             }
         }
@@ -1560,8 +1594,9 @@ final class FeedStore: ObservableObject {
         let index = Int(Self.readU32(payload, off)); off += 4
         let total = Int(Self.readU32(payload, off)); off += 4
         let sealed = payload.subdata(in: off..<payload.count)
-        guard !ref.isEmpty, total > 0, !MediaStore.shared.has(ref),
-              let plain = social.openMedia(sealed: sealed) else { return }
+        let opened = ref.isEmpty ? nil : social.openMedia(sealed: sealed)
+        HavenLog.net("CHUNK ref=\(ref.prefix(12)) idx=\(index)/\(total) open=\(opened != nil) had=\(MediaStore.shared.has(ref))")
+        guard !ref.isEmpty, total > 0, !MediaStore.shared.has(ref), let plain = opened else { return }
 
         var entry = incoming[ref] ?? IncomingMedia(tempURL: MediaStore.shared.makeTempFile(), total: total, got: [])
         if let fh = try? FileHandle(forWritingTo: entry.tempURL) {
