@@ -939,7 +939,13 @@ impl Circle {
 }
 
 struct NetState {
+    /// My ACCOUNT identity: authorship, my node id, the contact id friends pin, roster signing, AND the
+    /// fallback opener for older account-sealed content (dual-open).
     me: Identity,
+    /// This DEVICE's identity (Option 1). `None` until the app calls `use_device_identity` (then every
+    /// device on the account has a distinct transport id and opens content sealed to its own bundle, so a
+    /// revoked device is cut off cryptographically). Content is dual-opened: device key first, then `me`.
+    device: Option<Identity>,
     circles: Vec<Circle>,
     /// Verified multi-device rosters keyed by account node id — MINE (so my own linked devices receive
     /// content) and each contact's (so I seal to their devices, never a revoked one). Empty for any
@@ -1026,9 +1032,14 @@ fn receive_key_commit(st: &mut NetState, idx: usize, body: &[u8]) -> Result<bool
         authorized_device_bundle(st, idx, &sender_hex)
     };
     let Some(committer) = committer else { return Ok(false) };
-    let opened = match open_key_commit(&st.me, &committer, &env) {
-        Ok(o) => o,
-        Err(_) => return Ok(false), // not addressed to me, or I was excluded from this epoch
+    // Dual-open: try this DEVICE's key first (content sealed to my device bundle — Option 1), then fall
+    // back to the ACCOUNT key (older account-sealed content, or peers who don't know my roster yet).
+    let opened = match st.device.as_ref().and_then(|d| open_key_commit(d, &committer, &env).ok()) {
+        Some(o) => o,
+        None => match open_key_commit(&st.me, &committer, &env) {
+            Ok(o) => o,
+            Err(_) => return Ok(false), // not addressed to me, or I was excluded from this epoch
+        },
     };
     let is_new;
     {
@@ -1104,8 +1115,12 @@ fn receive_legacy(st: &mut NetState, idx: usize, body: &[u8]) -> Result<bool, Ha
         .find(|m| hex(&m.node_id_bytes()) == sender_hex)
         .cloned();
     let Some(sender) = sender else { return Ok(false) };
-    let event = open_event(&st.me, &sender, &env)
-        .map_err(|e| HavenError::Invalid { msg: format!("open failed: {e}") })?;
+    // Dual-open: device key (Option 1), then account key (legacy account-sealed).
+    let event = match st.device.as_ref().and_then(|d| open_event(d, &sender, &env).ok()) {
+        Some(e) => e,
+        None => open_event(&st.me, &sender, &env)
+            .map_err(|e| HavenError::Invalid { msg: format!("open failed: {e}") })?,
+    };
     let c = &mut st.circles[idx];
     if c.seen.contains(&event.id) {
         return Ok(false);
@@ -1199,10 +1214,40 @@ impl HavenSocial {
         Ok(Arc::new(Self {
             state: Mutex::new(NetState {
                 me: Identity::from_seed(&seed),
+                device: None,
                 circles: vec![Circle::bare(DEFAULT_CIRCLE.to_string(), "My Circle".to_string())],
                 device_lists: std::collections::HashMap::new(),
             }),
         }))
+    }
+
+    /// Adopt this DEVICE's transport/open identity (Option 1). The app passes its device-local seed
+    /// (Apple: `DeviceKeyStore`); the engine then opens content sealed to this device's bundle, while the
+    /// ACCOUNT identity stays the author/contact id + roster signer + fallback opener for older content.
+    /// Pair with `register_device` so contacts learn to seal to this device. Idempotent.
+    pub fn use_device_identity(&self, device_seed: Vec<u8>) -> bool {
+        let Ok(seed): Result<[u8; 32], _> = device_seed.try_into() else { return false };
+        self.state.lock().unwrap().device = Some(Identity::from_seed(&seed));
+        true
+    }
+
+    /// This device's transport node id hex (its device-key id when `use_device_identity` was set, else my
+    /// account id). This is what to bind the iroh node to / register in my roster / dial.
+    pub fn my_device_node_hex(&self) -> String {
+        let st = self.state.lock().unwrap();
+        match &st.device {
+            Some(d) => hex(&d.public().node_id_bytes()),
+            None => hex(&st.me.public().node_id_bytes()),
+        }
+    }
+
+    /// This device's public bundle (for `register_device` — the routable bundle contacts seal to).
+    pub fn my_device_bundle(&self) -> Vec<u8> {
+        let st = self.state.lock().unwrap();
+        match &st.device {
+            Some(d) => d.public().to_bytes(),
+            None => st.me.public().to_bytes(),
+        }
     }
 
     /// All circles (id, name, member count) for the UI switcher.
@@ -1670,7 +1715,9 @@ impl HavenSocial {
         let ct = &sealed[36 + pq_len..];
         let enc = Encapsulation { eph_x_pub, pq_ct };
         let st = self.state.lock().unwrap();
-        let key = decapsulate(&st.me, &enc).ok()?;
+        // Dual-open: device key (Option 1), then account key (legacy account-sealed media).
+        let key = st.device.as_ref().and_then(|d| decapsulate(d, &enc).ok())
+            .or_else(|| decapsulate(&st.me, &enc).ok())?;
         open(&key, ct).ok()
     }
 
@@ -1703,7 +1750,9 @@ impl HavenSocial {
         } else {
             circle.members.iter().find(|m| hex(&m.node_id_bytes()) == sender_hex)?.clone()
         };
-        open_bytes(&st.me, &sender_pub, &env).ok()
+        // Dual-open: device key (Option 1), then account key (legacy account-sealed media).
+        st.device.as_ref().and_then(|d| open_bytes(d, &sender_pub, &env).ok())
+            .or_else(|| open_bytes(&st.me, &sender_pub, &env).ok())
     }
 
     /// Serialize all circles (members + events) for on-disk persistence.
