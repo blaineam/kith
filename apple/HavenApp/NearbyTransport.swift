@@ -62,7 +62,8 @@ final class NearbyTransport: NSObject {
             guard let self else { return }
             let peers = self.session.connectedPeers
             guard !peers.isEmpty else { return }
-            try? self.session.send(frame, toPeers: peers, with: .reliable)
+            do { try self.session.send(frame, toPeers: peers, with: .reliable) }
+            catch { if frame.count > 4000 { HavenLog.net("nearby SEND FAIL \(frame.count)B → \(peers.count)p: \(error.localizedDescription)") } }
         }
     }
 }
@@ -72,6 +73,7 @@ extension NearbyTransport: MCSessionDelegate {
         if state == .connected { onPeerConnected() }
     }
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
+        if data.count > 4000 { HavenLog.net("nearby RECV \(data.count)B type=\(data.first ?? 255)") }
         onInbound(data)
     }
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}

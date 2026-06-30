@@ -1792,14 +1792,23 @@ impl HavenSocial {
     /// opens it with `open_media`. Layout: [32 eph_x_pub][u32 pq_len][pq_ct][ciphertext].
     pub fn seal_media(&self, recipient_node_hex: String, data: Vec<u8>) -> Result<Vec<u8>, HavenError> {
         let st = self.state.lock().unwrap();
-        let recipient = st
-            .circles
-            .iter()
-            .flat_map(|c| c.members.iter())
-            .find(|m| hex(&m.node_id_bytes()) == recipient_node_hex)
-            .ok_or_else(|| HavenError::Invalid { msg: "unknown recipient".into() })?;
+        // OWN account is a valid recipient — own-device media sync (a linked Mac/phone) seals media to the
+        // account so any of the user's own devices (sharing the seed) can open it. The member-list lookup
+        // alone failed here, since you aren't a member of your own circle, which silently broke ALL
+        // own-device media transfer (the seal threw → the chunk send loop bailed before broadcasting).
+        let me_pub = st.me.public();
+        let recipient: HavenId = if hex(&me_pub.node_id_bytes()) == recipient_node_hex {
+            me_pub
+        } else {
+            st.circles
+                .iter()
+                .flat_map(|c| c.members.iter())
+                .find(|m| hex(&m.node_id_bytes()) == recipient_node_hex)
+                .cloned()
+                .ok_or_else(|| HavenError::Invalid { msg: "unknown recipient".into() })?
+        };
         let (enc, key) =
-            encapsulate_to(recipient).map_err(|e| HavenError::Invalid { msg: format!("{e}") })?;
+            encapsulate_to(&recipient).map_err(|e| HavenError::Invalid { msg: format!("{e}") })?;
         let ct = seal(&key, &data);
         let mut out = Vec::with_capacity(36 + enc.pq_ct.len() + ct.len());
         out.extend_from_slice(&enc.eph_x_pub);
