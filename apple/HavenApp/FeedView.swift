@@ -741,11 +741,19 @@ final class FeedStore: ObservableObject {
 
     /// On add / online / timer: for every circle, send each member our Hello + that
     /// circle's posts, so the circle forms on their side and back-fills.
+    private var lastHistoryResendMs: UInt64 = 0
     func syncWithContacts() {
         guard let social else { return }
+        // Re-blasting our ENTIRE history (every post → every contact) on every 20s tick flooded the
+        // network with hundreds of thousands of frames (drowning real delivery). The hello goes out every
+        // tick (cheap, and it's what bootstraps + keeps connections warm); the full history re-send is
+        // throttled to occasional — offline members get history from the mailbox/relay, and a freshly-added
+        // contact is back-filled directly by the share-history flow, not this periodic sweep.
+        let nowMs = now()
+        let resendHistory = nowMs - lastHistoryResendMs > 180_000   // ~3 min, not every 20s
         for circle in circles {
             guard let hello = helloPayload(circleId: circle.id, circleName: circle.name) else { continue }
-            let envs = social.syncEnvelopes(circleId: circle.id)
+            let envs = resendHistory ? social.syncEnvelopes(circleId: circle.id) : []
             // The default circle bootstraps with ALL QR contacts (newly-added ones aren't
             // members yet — this is how we get their bundle). Other circles target members.
             var targets = Set(social.contactNodeIds(circleId: circle.id))
@@ -754,8 +762,8 @@ final class FeedStore: ObservableObject {
             }
             for nodeHex in targets {
                 sendIroh(0, hello, to: nodeHex)
-                // Back-fill history only to people we agreed to share it with.
-                if ConnectionsStore.shared.sharesHistory(nodeHex) {
+                // Back-fill history only to people we agreed to share it with (throttled).
+                if !envs.isEmpty, ConnectionsStore.shared.sharesHistory(nodeHex) {
                     for env in envs { sendIroh(1, eventPayload(circle.id, env), to: nodeHex) }
                 }
             }
@@ -764,13 +772,14 @@ final class FeedStore: ObservableObject {
             // into a circle they were never added to (membership contamination).
             if circle.id == "default" { nearbyBroadcast(0, hello) }
             // Sealed events are safe to fan out (non-members can't open them; receive() also
-            // gates on membership), so keep nearby delivery for posts — just not DMs.
-            if !circle.id.hasPrefix("dm:") {
+            // gates on membership), so keep nearby delivery for posts — just not DMs (throttled).
+            if !envs.isEmpty, !circle.id.hasPrefix("dm:") {
                 for env in envs { nearbyBroadcast(1, eventPayload(circle.id, env)) }
             }
             // Mesh: let a relay carry our handshake to members we can't reach directly.
             originateRelay(dests: Array(targets), inner: frame(0, hello))
         }
+        if resendHistory { lastHistoryResendMs = nowMs }
         requestMissingMedia()
     }
 
@@ -1404,6 +1413,7 @@ final class FeedStore: ObservableObject {
         }
     }
 
+    private var mediaReqAt: [String: UInt64] = [:]   // ref → last direct-request ms (throttle)
     private func requestMissingMedia() {
         guard let social, node != nil || nearby != nil else { return }
         let myHex = social.myNodeHex()
@@ -1413,12 +1423,23 @@ final class FeedStore: ObservableObject {
             for c in item.comments { for ref in c.media where !MediaStore.shared.has(ref) { missing.insert(ref) } }
         }
         let circleIds = circles.map { $0.id }
+        let nowMs = now()
+        // THROTTLE: a missing ref was re-requested from every contact on every sync, so a backlog of
+        // missing media flooded the network with hundreds of thousands of frames per cycle (drowning real
+        // delivery). Direct-request each ref at most once per 5 min, and only a handful per cycle — the
+        // mailbox/relay restore below is the real path and it's idempotent.
+        var directBudget = 8
         for ref in missing {
-            var payload = Data(myHex.utf8)          // 64-byte requester id
-            payload.append(Data(ref.utf8))
-            for contact in ContactsStore.shared.contacts { sendIroh(3, payload, to: contact.idHex) }
-            nearbyBroadcast(3, payload)
-            // Also try restoring it from the circle's mailbox (relay or S3), if there is one.
+            let stale = (mediaReqAt[ref].map { nowMs - $0 > 300_000 } ?? true)
+            if stale && directBudget > 0 {
+                mediaReqAt[ref] = nowMs
+                directBudget -= 1
+                var payload = Data(myHex.utf8)          // 64-byte requester id
+                payload.append(Data(ref.utf8))
+                for contact in ContactsStore.shared.contacts { sendIroh(3, payload, to: contact.idHex) }
+                nearbyBroadcast(3, payload)
+            }
+            // Always try the circle's mailbox (relay/S3) — content-addressed + idempotent, no flood.
             if circleIds.contains(where: { SharedStore.hasMailbox($0) }) {
                 Task { @MainActor in
                     if let data = await SharedStore.restore(ref: ref, circleIds: circleIds, social: social) {
@@ -1427,6 +1448,7 @@ final class FeedStore: ObservableObject {
                 }
             }
         }
+        if mediaReqAt.count > 4000 { mediaReqAt.removeAll() }   // bound the throttle map
     }
 
     private func handleMediaRequest(_ payload: Data) {
