@@ -108,17 +108,16 @@ final class FeedStore: ObservableObject {
         //  • A NON-HOST device takes a per-DEVICE transport id so it never competes with the host for the
         //    account id; friends learn it via the host's roster. (Sealing stays account-based either way.)
         if let social {
-            // Discriminate by DEVICE CLASS (not the relay toggle, which can sync between devices): the
-            // always-on DESKTOP keeps the account id (reachable relay host); MOBILE takes a device id.
-            if RelayHost.shared.isDesktopClass {
-                HavenLog.net("configure HOST account=\(social.myNodeHex().prefix(10)) (desktop keeps account id)")
-            } else {
-                _ = social.useDeviceIdentity(deviceSeed: DeviceKeyStore.deviceAccount().secretSeed())
-                _ = social.registerDevice(deviceBundle: DeviceKeyStore.deviceBundle(),
-                                          name: DeviceKeyStore.deviceName,
-                                          createdAt: UInt64(Date().timeIntervalSince1970))
-                HavenLog.net("configure CLIENT account=\(social.myNodeHex().prefix(10)) device=\(social.myDeviceNodeHex().prefix(10))")
-            }
+            // Per-INSTANCE identity: every client instance takes its OWN unique transport/relay id
+            // (DeviceKeyStore — unique per install), so any number of clients can run under ONE account id
+            // without colliding on iroh discovery. The account id is the IDENTITY only (signing + the
+            // contact card friends pin), never a transport address. Each client hosts its relay on its own
+            // id; friends reach each via the circle's relay list (the set of these ids).
+            _ = social.useDeviceIdentity(deviceSeed: DeviceKeyStore.deviceAccount().secretSeed())
+            _ = social.registerDevice(deviceBundle: DeviceKeyStore.deviceBundle(),
+                                      name: DeviceKeyStore.deviceName,
+                                      createdAt: UInt64(Date().timeIntervalSince1970))
+            HavenLog.net("configure account=\(social.myNodeHex().prefix(10)) instance=\(social.myDeviceNodeHex().prefix(10))")
         }
         loadPersisted()
         loadLastHeard()   // so "last seen" survives an app restart
@@ -490,10 +489,9 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                // DESKTOP → account id (reachable mailbox, owns discovery); MOBILE → its device id (so it
-                // doesn't collide with the desktop on the account id). One endpoint per device → no leak.
-                let transportSeed = RelayHost.shared.isDesktopClass ? seed : DeviceKeyStore.deviceAccount().secretSeed()
-                let n = try await HavenNode.start(accountSeed: transportSeed, listener: bridge)
+                // Bind to this instance's UNIQUE id (its relay id). One endpoint per client → no leak; no
+                // two clients share an id → no discovery collision. Friends reach us via the relay list.
+                let n = try await HavenNode.start(accountSeed: DeviceKeyStore.deviceAccount().secretSeed(), listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true
