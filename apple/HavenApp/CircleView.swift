@@ -63,11 +63,8 @@ struct CircleView: View {
                     }
                     .onDelete { offsets in
                         let members = offsets.map { membersInCircle[$0] }
-                        if isDefault {
-                            members.forEach(contacts.remove)        // leaves your whole circle
-                        } else {
-                            members.forEach { store.removeFromActiveCircle($0.idHex) }   // this circle only
-                        }
+                        members.forEach { store.removeFromActiveCircle($0.idHex) }   // tombstone + engine removal
+                        if isDefault { members.forEach(contacts.remove) }            // My Circle also drops the contact
                     }
                     // The explanatory note as a ROW, not the Section's footer slot — macOS truncates
                     // List footers to one line regardless of fixedSize, which cut off the "Waiting" text.
@@ -171,7 +168,8 @@ struct CircleView: View {
     /// Remove someone from this circle without blocking them. In the default circle this drops
     /// them from your contacts (My Circle); in a custom circle it removes them from just that one.
     private func removeWithoutBlocking(_ c: Contact) {
-        if isDefault { contacts.remove(c) } else { store.removeFromActiveCircle(c.idHex) }
+        store.removeFromActiveCircle(c.idHex)   // tombstone + engine removal (now authoritative for default too)
+        if isDefault { contacts.remove(c) }     // My Circle also drops them from contacts
     }
 
     private func row(_ c: Contact) -> some View {

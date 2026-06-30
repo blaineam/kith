@@ -217,10 +217,15 @@ final class FeedStore: ObservableObject {
     /// Remove a member from the active (custom) circle only — not a global block. This is durable: the
     /// member is recorded as removed so they can't auto-rejoin on their next handshake, and the core
     /// purges their posts + rotates the circle's epoch so they can't read anything posted afterward.
-    func removeFromActiveCircle(_ idHex: String) {
-        guard let social, activeCircleId != "default" else { return }
-        social.removeFromCircle(circleId: activeCircleId, nodeHex: idHex)  // purges their events + rotates epoch
-        ConnectionsStore.shared.removeFromCircle(idHex, circleId: activeCircleId)  // block handshake re-add
+    func removeFromActiveCircle(_ idHex: String) { removeFromCircle(idHex, circleId: activeCircleId) }
+
+    /// Remove a member from a specific circle — works for "default" (My Circle) too. Removing from the
+    /// default circle is legitimate ("remove from My Circle"); the early-return that used to skip it meant
+    /// no tombstone was ever written, so the member rejoined on their next handshake/self-sync.
+    func removeFromCircle(_ idHex: String, circleId: String) {
+        guard let social else { return }
+        social.removeFromCircle(circleId: circleId, nodeHex: idHex)  // purges their events + rotates epoch
+        ConnectionsStore.shared.removeFromCircle(idHex, circleId: circleId)  // authoritative tombstone: block re-add
         persist(); refreshCircles(); refresh()
     }
 
