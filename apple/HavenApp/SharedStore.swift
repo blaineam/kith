@@ -40,6 +40,31 @@ final class SharedMailboxStore: ObservableObject {
     }
 }
 
+/// Serializes media backups so they don't all load full files into memory at once. backfillMailboxMedia
+/// and the per-post backup sites used to spawn a Task PER media ref concurrently — each loading + sealing a
+/// full file (2× in RAM) — which ballooned memory to ~3.4GB and jetsam-killed iOS once a device held a lot
+/// of media. Process ONE at a time so peak memory is ~one media file, not the whole library.
+@MainActor
+final class MediaBackupQueue {
+    static let shared = MediaBackupQueue()
+    private var pending: [(ref: String, cid: String)] = []
+    private var draining = false
+    func enqueue(_ ref: String, circleId: String, social: HavenSocial) {
+        if pending.contains(where: { $0.ref == ref && $0.cid == circleId }) { return }
+        pending.append((ref, circleId))
+        if pending.count > 10_000 { pending.removeFirst(pending.count - 10_000) }   // bound the queue itself
+        guard !draining else { return }
+        draining = true
+        Task { @MainActor in
+            while !pending.isEmpty {
+                let job = pending.removeFirst()
+                await SharedStore.backup(ref: job.ref, circleId: job.cid, social: social)
+            }
+            draining = false
+        }
+    }
+}
+
 @MainActor
 enum SharedStore {
     /// The bucket to use for the circle's mailbox: the shared relay if one was set,

@@ -427,7 +427,7 @@ final class FeedStore: ObservableObject {
         broadcastEvent(circleId, env)
         postTick += 1
         let circle = circleId
-        for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) } }
+        for ref in media { MediaBackupQueue.shared.enqueue(ref, circleId: circle, social: social) }
     }
 
     /// Edit one of your own messages in a specific (DM) circle.
@@ -659,7 +659,7 @@ final class FeedStore: ObservableObject {
         guard let social, let env = try? social.post(circleId: activeCircleId, body: body, media: media, music: music, retentionSecs: retentionSecs, story: story, muteVideo: muteVideo, createdAt: now()) else { return }
         broadcastEvent(activeCircleId, env); postTick += 1; refresh()
         let circle = activeCircleId
-        for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) } }
+        for ref in media { MediaBackupQueue.shared.enqueue(ref, circleId: circle, social: social) }
     }
 
     /// Post to a SPECIFIC circle (used by the scheduler when a queued post fires — the target
@@ -668,7 +668,7 @@ final class FeedStore: ObservableObject {
         guard let social, let env = try? social.post(circleId: circleId, body: body, media: media, music: nil, retentionSecs: nil, story: false, muteVideo: false, createdAt: now()) else { return }
         broadcastEvent(circleId, env); postTick += 1
         if circleId == activeCircleId { refresh() }
-        for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circleId, social: social) } }
+        for ref in media { MediaBackupQueue.shared.enqueue(ref, circleId: circleId, social: social) }
     }
 
     /// Post text to a specific circle (used by App Intents with a circle filter).
@@ -743,7 +743,7 @@ final class FeedStore: ObservableObject {
         guard let social, let env = try? social.edit(circleId: activeCircleId, target: id, body: body, media: media, music: music, muteVideo: muteVideo, createdAt: now()) else { return }
         broadcastEvent(activeCircleId, env); refresh()
         let circle = activeCircleId
-        for ref in media { Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) } }
+        for ref in media { MediaBackupQueue.shared.enqueue(ref, circleId: circle, social: social) }
     }
     func unsend(_ id: String) {
         guard let social, let env = try? social.unsend(circleId: activeCircleId, target: id, createdAt: now()) else { return }
@@ -1288,7 +1288,7 @@ final class FeedStore: ObservableObject {
                 for c in item.comments { refs.formUnion(c.media) }
             }
             for ref in refs where MediaStore.shared.has(ref) {
-                Task { await SharedStore.backup(ref: ref, circleId: cid, social: social) }
+                MediaBackupQueue.shared.enqueue(ref, circleId: cid, social: social)
             }
         }
     }
@@ -1752,7 +1752,7 @@ final class FeedStore: ObservableObject {
         refresh()   // re-render so the media appears
         if SharedStore.isVolunteering, let social {
             let circle = activeCircleId
-            Task { await SharedStore.backup(ref: ref, circleId: circle, social: social) }
+            MediaBackupQueue.shared.enqueue(ref, circleId: circle, social: social)
         }
     }
 
