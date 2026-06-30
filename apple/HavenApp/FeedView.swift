@@ -793,10 +793,10 @@ final class FeedStore: ObservableObject {
             if circle.id == "default" { nearbyBroadcast(0, hello) }
             // Sealed events are safe to fan out (non-members can't open them; receive() also gates on
             // membership). Nearby is ONE local broadcast per env — NOT a flood — and it's how a linked
-            // Mac/phone catches up, so keep it every cycle.
-            if !circle.id.hasPrefix("dm:") {
-                for env in envs { nearbyBroadcast(1, eventPayload(circle.id, env)) }
-            }
+            // Mac/phone catches up. DMs are INCLUDED: a DM is sealed to its circle, and the user's OWN
+            // devices share the account so they're the "self" participant — broadcasting is how a DM syncs
+            // to your other device. A nearby non-participant just receives an opaque blob receive() drops.
+            for env in envs { nearbyBroadcast(1, eventPayload(circle.id, env)) }
             // Mesh: let a relay carry our handshake to members we can't reach directly.
             originateRelay(dests: Array(targets), inner: frame(0, hello))
         }
@@ -843,7 +843,8 @@ final class FeedStore: ObservableObject {
         for circle in circles {
             guard let hello = helloPayload(circleId: circle.id, circleName: circle.name) else { continue }
             if circle.id == "default" { nearbyBroadcast(0, hello) }   // only the open circle broadcasts handshake
-            guard !circle.id.hasPrefix("dm:") else { continue }       // DM events stay point-to-point
+            // DMs included — sealed, so only the recipient + the user's own devices open them; this is how a
+            // DM syncs to a freshly-connected linked device.
             for env in social.syncEnvelopes(circleId: circle.id) { nearbyBroadcast(1, eventPayload(circle.id, env)) }
         }
         pushOwnMediaNearby(freshPeer: true)   // a newly-connected sibling has nothing — push it my media now
@@ -907,7 +908,7 @@ final class FeedStore: ObservableObject {
             let sealed = notifJSON.isEmpty ? nil : try? social?.sealSignedNotification(recipientNodeHex: nodeHex, data: notifJSON)
             PushManager.shared.wake(nodeHex, ciphertext: sealed?.base64EncodedString(), event: eventB64)
         }
-        if !circleId.hasPrefix("dm:") { nearbyBroadcast(1, payload) }   // never broadcast DMs to nearby
+        nearbyBroadcast(1, payload)   // sealed — only members + the user's own devices open it, so a DM syncs to your other device too
         originateRelay(dests: members, inner: frame(1, payload))   // reach members behind a relay
         // Store-and-forward mailbox upload, queued so it finishes in the background if the user
         // leaves the app before it lands (and is retried on next launch).

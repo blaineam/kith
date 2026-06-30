@@ -517,7 +517,7 @@ struct RelaysView: View {
             }
             HStack(spacing: 8) {
                 if e.active {
-                    Button { store.forget(nodeHex: e.hex) } label: { Label("Deactivate", systemImage: "pause") }
+                    Button { store.forget(nodeHex: e.hex) } label: { Label("Deactivate", systemImage: "pause.fill") }
                 } else {
                     Button { store.reactivate(e.hex) } label: { Label("Reactivate", systemImage: "play.fill") }
                         .tint(.green)
@@ -527,12 +527,22 @@ struct RelaysView: View {
                 } else {
                     Button { store.setDefault(nil) } label: { Label("Unset default", systemImage: "star.slash") }
                 }
-                Button { renaming = e; renameText = e.name } label: { Label("Rename", systemImage: "pencil") }
-                Button(role: .destructive) { store.eraseNow(e.hex) } label: { Label("Delete", systemImage: "trash") }
+                Spacer()
+                // Secondary actions in a roomy menu so the primary buttons stay big + tappable.
+                Menu {
+                    Button { renaming = e; renameText = e.name } label: { Label("Rename", systemImage: "pencil") }
+                    Button(role: .destructive) { store.eraseNow(e.hex) } label: { Label("Delete now", systemImage: "trash") }
+                } label: {
+                    Image(systemName: "ellipsis.circle").font(.title3).foregroundStyle(.secondary)
+                }
+                .frame(width: 28)
             }
-            .font(.caption).buttonStyle(.borderless).labelStyle(.iconOnly)
+            .font(.caption.weight(.medium))
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .labelStyle(.titleAndIcon)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     private func statusLine(_ e: RelayEntry, isSelf: Bool, reachable: Bool) -> String {

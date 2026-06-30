@@ -282,12 +282,17 @@ struct CircleSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)   // wrap fully; don't truncate on macOS
                 }
 
-                // Relay controls inline (the toggle + relay pool) — no longer buried under a sub-link.
-                CircleMailboxSection(circleId: circleId)
-
                 // Per-circle relay OVERRIDE: pick which configured relays THIS circle uses, beyond the
-                // global default (which every circle inherits unless it overrides here).
+                // global default. Configuring/adding relays lives in Settings ▸ Relays — this screen only
+                // SELECTS from already-configured relays, plus a link to go manage them.
                 CircleRelayOverrideSection(circleId: circleId)
+                Section {
+                    NavigationLink { RelaysView() } label: {
+                        Label("Manage relays", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                } footer: {
+                    Text("Add, name, deactivate, or set a default relay under Settings ▸ Relays.")
+                }
 
                 if !isDefault {
                     Section {
