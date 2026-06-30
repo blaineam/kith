@@ -101,8 +101,14 @@ enum SharedStore {
     /// Seal a locally-held media blob to the circle and store it in the circle's mailbox
     /// (relay if set, else S3) — idempotent.
     static func backup(ref: String, circleId: String, social: HavenSocial) async {
-        guard let raw = MediaStore.shared.rawBytes(ref),
-              let sealed = try? social.sealCircleMedia(circleId: circleId, data: raw) else { return }
+        // Read the file + seal (encrypt MBs) OFF the main thread — doing it on the main actor janked the UI
+        // (the serial backup queue runs these back-to-back). The engine + file read are thread-safe.
+        guard let url = MediaStore.shared.storagePath(for: ref) else { return }
+        let sealed: Data? = await Task.detached(priority: .utility) { () -> Data? in
+            guard let raw = try? Data(contentsOf: url) else { return nil }
+            return try? social.sealCircleMedia(circleId: circleId, data: raw)
+        }.value
+        guard let sealed else { return }
         let nodes = relayNodes(circleId)
         if !nodes.isEmpty {
             // Mirror to EVERY configured relay (redundancy). Content-addressed key → idempotent

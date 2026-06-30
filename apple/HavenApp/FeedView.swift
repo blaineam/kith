@@ -601,6 +601,44 @@ final class FeedStore: ObservableObject {
         SpotlightIndex.reindexAll()   // no-op unless the user enabled Spotlight indexing
     }
 
+    private var refreshPending = false
+    /// Coalesced refresh — collapses a BURST of refresh requests (many media chunks / events arriving during
+    /// a sync) into a single feed rebuild ~250ms later, instead of rebuilding the whole feed per item (which
+    /// janked the UI). Use this on the high-frequency inbound/sync paths; keep refresh() for user actions.
+    func scheduleRefresh() {
+        guard !refreshPending else { return }
+        refreshPending = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            refreshPending = false
+            refresh()
+        }
+    }
+
+    private var persistPending = false
+    private var missingMediaPending = false
+    /// Coalesced persist — receiving a burst of posts called persist() (serialize + write the whole engine
+    /// state) per post. Debounce it so a sync burst writes once, not per event.
+    func schedulePersist() {
+        guard !persistPending else { return }
+        persistPending = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            persistPending = false
+            persist()
+        }
+    }
+    /// Coalesced "pull missing media" — it scans the whole feed; calling it per received event was O(events×items).
+    func scheduleRequestMissingMedia() {
+        guard !missingMediaPending else { return }
+        missingMediaPending = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            missingMediaPending = false
+            requestMissingMedia()
+        }
+    }
+
     /// Delivery status for a circle, for the composer's status light. green = a relay holds your content
     /// (or, with no relay, a nearby member has it); yellow = still syncing; red = only on this device.
     func syncStatus(circleId: String) -> PostSyncStatus {
@@ -1494,7 +1532,7 @@ final class FeedStore: ObservableObject {
         let circleIds = circles.map { $0.id }
         Task { @MainActor in   // also pull from the circle's shared store if one exists
             if let data = await SharedStore.restore(ref: ref, circleIds: circleIds, social: social) {
-                MediaStore.shared.store(ref, data); autoSaveReceived(ref); refresh()
+                MediaStore.shared.store(ref, data); autoSaveReceived(ref); scheduleRefresh()
             }
         }
     }
@@ -1535,7 +1573,7 @@ final class FeedStore: ObservableObject {
             if circleIds.contains(where: { SharedStore.hasMailbox($0) }) {
                 Task { @MainActor in
                     if let data = await SharedStore.restore(ref: ref, circleIds: circleIds, social: social) {
-                        MediaStore.shared.store(ref, data); autoSaveReceived(ref); refresh()
+                        MediaStore.shared.store(ref, data); autoSaveReceived(ref); scheduleRefresh()
                     }
                 }
             }
@@ -1749,7 +1787,7 @@ final class FeedStore: ObservableObject {
         SyncMetrics.shared.nbMediaIn += 1
         autoSaveReceived(ref)
         incoming[ref] = nil
-        refresh()   // re-render so the media appears
+        scheduleRefresh()   // re-render so the media appears (coalesced — many chunks complete in bursts)
         if SharedStore.isVolunteering, let social {
             let circle = activeCircleId
             MediaBackupQueue.shared.enqueue(ref, circleId: circle, social: social)
@@ -1870,9 +1908,9 @@ final class FeedStore: ObservableObject {
         if (try? social.receive(circleId: circleId, envelope: envelope)) == true {
             // Hearing a message is proof of life — refresh "last seen" for a DM's partner.
             if circleId.hasPrefix("dm:"), let partner = dmPartnerHex(circleId) { recordHeard(partner) }
-            persist()
-            refresh()
-            requestMissingMedia()   // pull any photos/videos it references
+            schedulePersist()             // coalesced — a sync burst writes once, not per event
+            scheduleRefresh()             // coalesced feed rebuild
+            scheduleRequestMissingMedia() // coalesced media pull (scans the whole feed)
             notifyNewest(in: circleId)
             bumpUnseen(circleId)
         }
