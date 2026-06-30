@@ -747,6 +747,7 @@ final class FeedStore: ObservableObject {
     /// On add / online / timer: for every circle, send each member our Hello + that
     /// circle's posts, so the circle forms on their side and back-fills.
     private var lastHistoryResendMs: UInt64 = 0
+    private var lastMediaBackfillMs: UInt64 = 0
     func syncWithContacts() {
         guard let social else { return }
         // Re-blasting our ENTIRE history (every post → every contact) on every 20s tick flooded the
@@ -791,6 +792,14 @@ final class FeedStore: ObservableObject {
         }
         if resendHistoryIroh { lastHistoryResendMs = nowMs }
         reannounceOwnRelay()   // frame 19 was a one-shot at relay start; re-emit so peers reliably learn it
+        // Push MY media up to every circle relay periodically. The nearby request/response (frame 3→5) was
+        // unreliable (0 chunks served), so instead each device durably mirrors its own media to the relays
+        // it knows — including a sibling's hosted relay — and the other side reads it locally via poll OWN.
+        // backup() is idempotent (skips blobs already on a relay), so this just fills gaps. Throttled.
+        if nowMs - lastMediaBackfillMs > 120_000 {
+            lastMediaBackfillMs = nowMs
+            backfillMailboxMedia(circleIds: circles.map { $0.id })
+        }
         requestMissingMedia()
     }
 
