@@ -9,6 +9,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -419,7 +420,7 @@ object HavenNet : InboundListener {
             social.post(circleId, body, media, music, retentionSecs, false, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
-        scope.launch { media.forEach { uploadMedia(circleId, it) } }
+        media.forEach { enqueueBackup(circleId, it) }   // serialized: one blob in RAM at a time
     }
 
     /**
@@ -651,7 +652,7 @@ object HavenNet : InboundListener {
             social.post(circleId, body, media, music, retentionSecs, false, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(circleId, env)
-        scope.launch { media.forEach { uploadMedia(circleId, it) } }   // push photos/videos to the relay
+        media.forEach { enqueueBackup(circleId, it) }   // serialized: push photos/videos to the relay, one blob in RAM at a time
         // "Save my posts to Photos" (per-circle override, falling back to the app-wide default).
         if (media.isNotEmpty() && CircleSettings.saveOwn(circleId))
             scope.launch { media.forEach { MediaSaver.autoSave(appContext, it) } }
@@ -671,7 +672,7 @@ object HavenNet : InboundListener {
             social.post(DEFAULT_CIRCLE, body, listOfNotNull(mediaId), music, 86_400UL, true, false, nowMs())
         }.getOrNull() ?: return
         afterAuthor(DEFAULT_CIRCLE, env)
-        scope.launch { mediaId?.let { uploadMedia(DEFAULT_CIRCLE, it) } }
+        mediaId?.let { enqueueBackup(DEFAULT_CIRCLE, it) }   // serialized: one blob in RAM at a time
     }
 
     /** React / unreact / comment on a post — author + broadcast, same as a post. */
@@ -1315,9 +1316,10 @@ object HavenNet : InboundListener {
         if (relaysFor(circleId).isEmpty() && !Presign.hasBootstrap(circleId)) return
         val envs = runCatching { social.exportMyEnvelopes(circleId) }.getOrDefault(emptyList())
         for (env in envs) uploadEvent(circleId, env)
-        // Also push the media bytes of anything I've posted here that I still hold locally.
+        // Also push the media bytes of anything I've posted here that I still hold locally — through
+        // the serial media queue so several circles backfilling at once can't stack full blobs in RAM.
         val feed = runCatching { social.feed(circleId, nowMs(), null) }.getOrDefault(emptyList())
-        for (item in feed) if (item.isMe) item.media.forEach { if (LocalMedia.has(it)) uploadMedia(circleId, it) }
+        for (item in feed) if (item.isMe) item.media.forEach { if (LocalMedia.has(it)) enqueueBackup(circleId, it) }
     }
 
     /** Ensure the relay holds this circle's FULL history (every event + every media blob I hold,
@@ -1334,7 +1336,9 @@ object HavenNet : InboundListener {
             refs.addAll(item.media)
             item.comments.forEach { refs.addAll(it.media) }
         }
-        for (ref in refs) if (LocalMedia.has(ref)) uploadMedia(circleId, ref)
+        // Serialized: enqueue each blob to the single media queue so the whole-library backfill (and
+        // any concurrent per-circle backfills) load at most one full media file into RAM at a time.
+        for (ref in refs) if (LocalMedia.has(ref)) enqueueBackup(circleId, ref)
     }
 
     /** Poll every circle's mailbox; ingest envelopes we haven't seen. */
@@ -1428,6 +1432,81 @@ object HavenNet : InboundListener {
 
     private fun mediaKey(ref: String) = "haven/media/$ref"
 
+    // ---- Serial media-transfer queue (OOM guard) ------------------------------------------------
+    // Backups (uploadMedia) and relay restores (fetchMediaFromRelay) each load a FULL media blob
+    // into memory (sealed bytes; backup also seals a copy → ~2×). These used to be fired one
+    // coroutine PER media ref (restore: requestMissingMedia) and from many concurrent backfill sites
+    // (backup), so once a device held a lot of media — own-device media sync now backfills the whole
+    // library — HUNDREDS of full blobs loaded into RAM at once. On iOS that hit ~3.4 GB → jetsam; on
+    // the far-smaller-RAM Android targets it OOM-crashes worse. Route EVERY media transfer through a
+    // single serial consumer so peak memory is ~one blob, not the whole library. Mirrors iOS
+    // SharedStore.MediaBackupQueue (enqueue(ref, circleId); one drain loop runs them one at a time).
+    private sealed class MediaJob(val ref: String, val circleId: String) {
+        class Backup(ref: String, circleId: String) : MediaJob(ref, circleId)
+        class Restore(ref: String, circleId: String) : MediaJob(ref, circleId)
+    }
+    // Unlimited buffer + a single consumer = strictly serial; the dedup set + cap below bound it.
+    private val mediaQueue = Channel<MediaJob>(Channel.UNLIMITED)
+    private val mediaQueueKeys = LinkedHashSet<String>()   // in-flight/pending de-dup ("B|ref|cid" / "R|ref|cid")
+    private val mediaQueueLock = Any()
+    @Volatile private var mediaQueueStarted = false
+
+    /** Start the single drain coroutine that processes media transfers one blob at a time. */
+    private fun ensureMediaQueueDraining() {
+        if (mediaQueueStarted) return
+        synchronized(mediaQueueLock) {
+            if (mediaQueueStarted) return
+            mediaQueueStarted = true
+        }
+        scope.launch {
+            for (job in mediaQueue) {
+                val key = jobKey(job)
+                // Process ONE blob at a time — peak memory ≈ a single media file, not the library.
+                runCatching {
+                    when (job) {
+                        is MediaJob.Backup -> uploadMedia(job.circleId, job.ref)
+                        is MediaJob.Restore -> {
+                            if (fetchMediaFromRelay(job.circleId, job.ref)) {
+                                withContext(Dispatchers.Main) { feedVersion.value++ }
+                            }
+                        }
+                    }
+                }
+                synchronized(mediaQueueLock) { mediaQueueKeys.remove(key) }
+            }
+        }
+    }
+
+    private fun jobKey(job: MediaJob) =
+        (if (job is MediaJob.Backup) "B|" else "R|") + job.ref + "|" + job.circleId
+
+    /** Enqueue a media blob to mirror to the circle's relays — serialized (one in RAM at a time). */
+    private fun enqueueBackup(circleId: String, ref: String) {
+        val job = MediaJob.Backup(ref, circleId)
+        if (!offerMediaJob(jobKey(job))) return
+        ensureMediaQueueDraining()
+        mediaQueue.trySend(job)
+    }
+
+    /** Enqueue a missing media blob to fetch from the circle's relays — serialized (one at a time). */
+    private fun enqueueRestore(circleId: String, ref: String) {
+        val job = MediaJob.Restore(ref, circleId)
+        if (!offerMediaJob(jobKey(job))) return
+        ensureMediaQueueDraining()
+        mediaQueue.trySend(job)
+    }
+
+    /** Returns true if [key] is newly accepted (dedup + bounded so the queue can't grow unbounded). */
+    private fun offerMediaJob(key: String): Boolean = synchronized(mediaQueueLock) {
+        if (!mediaQueueKeys.add(key)) return false   // already pending/in-flight → drop duplicate
+        // Bound the in-flight set itself: forget the oldest keys past the cap. Their jobs still drain
+        // (the Channel is the source of truth); we only stop deduping ancient refs to cap this set.
+        while (mediaQueueKeys.size > 20_000) {
+            val it = mediaQueueKeys.iterator(); it.next(); it.remove()
+        }
+        true
+    }
+
     /** Fetch missing feed media: try the circle relay (haven/media/<ref>) first, then ask contacts. */
     fun requestMissingMedia() {
         if (!ready) return
@@ -1448,21 +1527,19 @@ object HavenNet : InboundListener {
         val nowMs = System.currentTimeMillis()
         var directBudget = 8
         for ((ref, circleId) in missing) {
+            // SERIALIZED RESTORE: the relay fetch loads a FULL blob into RAM, so it goes through the
+            // single media-transfer queue (one blob at a time) instead of one concurrent coroutine per
+            // missing ref — which used to pull the whole library into memory at once and OOM-crash.
+            enqueueRestore(circleId, ref)
             val stale = (mediaReqAt[ref]?.let { nowMs - it > 300_000 } ?: true)
             val allowDirect = stale && directBudget > 0
-            if (allowDirect) { mediaReqAt[ref] = nowMs; directBudget-- }
-            scope.launch {
-                if (fetchMediaFromRelay(circleId, ref)) {
-                    withContext(Dispatchers.Main) { feedVersion.value++ }
-                    return@launch
-                }
-                // Relay couldn't serve it (none configured, or it doesn't hold it yet) → re-request from
-                // peers, but only within the per-ref cooldown + per-cycle budget so we never flood.
-                if (!allowDirect) return@launch
-                requestedRefs.add(ref)
-                val payload = myHex.toByteArray(Charsets.UTF_8) + ref.toByteArray(Charsets.UTF_8)
-                for (idHex in contacts.map { it.idHex }) sendFrame(Wire.MEDIA_REQ, payload, idHex)
-            }
+            if (!allowDirect) continue
+            // Peer re-request (tiny frame, no blob in RAM) stays direct but throttled/budgeted so we
+            // never flood; the content-addressed relay restore above is the real, memory-bounded path.
+            mediaReqAt[ref] = nowMs; directBudget--
+            requestedRefs.add(ref)
+            val payload = myHex.toByteArray(Charsets.UTF_8) + ref.toByteArray(Charsets.UTF_8)
+            for (idHex in contacts.map { it.idHex }) sendFrame(Wire.MEDIA_REQ, payload, idHex)
         }
         if (mediaReqAt.size > 4000) mediaReqAt.clear()   // bound the throttle map
     }
