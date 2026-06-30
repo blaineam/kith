@@ -102,24 +102,32 @@ enum SharedStore {
     /// Fetch a media blob from the circle's mailbox and open it for whichever circle it belongs to.
     static func restore(ref: String, circleIds: [String], social: HavenSocial) async -> Data? {
         var sealed: Data?
+        var src = "none"
         // Try every relay of every circle first (fallback reads), then the S3 bucket.
         outer: for cid in circleIds {
             for node in relayNodes(cid) {
                 // OUR OWN hosted relay: read the media from the local store (a sibling/friend uploaded it
                 // to us) — we can't dial ourselves. This is what made a host's media show "all spinners".
                 if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
-                    if let s = RelayHost.shared.localGet(key(ref)) { sealed = s; break outer }
+                    if let s = RelayHost.shared.localGet(key(ref)) { sealed = s; src = "own:\(node.prefix(8))"; break outer }
                     continue
                 }
                 guard let c = await RelayClients.client(node) else { continue }
-                if let s = await c.get(key: key(ref)) { RelayHealth.shared.recordSuccess(node); sealed = s; break outer }
+                if let s = await c.get(key: key(ref)) { RelayHealth.shared.recordSuccess(node); sealed = s; src = "dial:\(node.prefix(8))"; break outer }
             }
         }
-        if sealed == nil, let s3 = mailboxClient() { sealed = try? await s3.getObject(key: key(ref)) }
-        guard let blob = sealed else { return nil }
-        for cid in circleIds {
-            if let data = social.openCircleMedia(circleId: cid, sealed: blob) { return data }
+        if sealed == nil, let s3 = mailboxClient() { sealed = try? await s3.getObject(key: key(ref)); if sealed != nil { src = "s3" } }
+        guard let blob = sealed else {
+            HavenLog.relay("media restore \(ref.prefix(12)): NOT FOUND on any relay/S3")
+            return nil
         }
+        for cid in circleIds {
+            if let data = social.openCircleMedia(circleId: cid, sealed: blob) {
+                HavenLog.relay("media restore \(ref.prefix(12)): OK via \(src), \(data.count)B")
+                return data
+            }
+        }
+        HavenLog.relay("media restore \(ref.prefix(12)): found via \(src) (\(blob.count)B) but OPEN FAILED for all \(circleIds.count) circles")
         return nil
     }
 
