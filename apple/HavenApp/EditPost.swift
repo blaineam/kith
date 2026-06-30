@@ -46,6 +46,23 @@ struct EditPostSheet: View {
                                                 }
                                                 .padding(3)
                                             }
+                                        } else if SharedLocation.parse(ref) != nil {
+                                            // The attached location is a synthetic `geo:` ref, not a real
+                                            // media file — render it as a removable chip so the user can
+                                            // actually turn location off when editing.
+                                            ZStack(alignment: .topTrailing) {
+                                                VStack(spacing: 2) {
+                                                    Image(systemName: "mappin.circle.fill").font(.title3).foregroundStyle(HavenTheme.pink)
+                                                    Text("Location").font(.caption2).foregroundStyle(.secondary)
+                                                }
+                                                .frame(width: 84, height: 84)
+                                                .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                                                Button { media.removeAll { $0 == ref } } label: {
+                                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.white)
+                                                        .background(Circle().fill(.black.opacity(0.5)))
+                                                }
+                                                .padding(3)
+                                            }
                                         }
                                     }
                                 }

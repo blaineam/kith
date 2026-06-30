@@ -2508,25 +2508,35 @@ struct PostCard: View {
         }
     }
 
+    /// A shared location is encoded as a synthetic `geo:` ref inside `media` (index 0). It is NOT real
+    /// media, so it must be drawn as a map and kept OUT of the photo grid / zoom viewer — otherwise it
+    /// degrades to a forever-spinner tile (MediaStore has no file for it).
+    private var realMedia: [String] { item.media.filter { SharedLocation.parse($0) == nil } }
+
     @ViewBuilder private var mediaView: some View {
-        if item.media.count == 1, let ref = item.media.first, let loc = SharedLocation.parse(ref) {
-            LocationMapView(lat: loc.lat, lon: loc.lon, label: loc.label)
-        } else if item.media.count == 1, let ref = item.media.first {
-            let video = isVideo(ref)
-            ZStack(alignment: .bottomTrailing) {
-                mediaPage(ref)
-                if video { muteButton }
+        VStack(spacing: 8) {
+            if let geo = item.media.first(where: { SharedLocation.parse($0) != nil }),
+               let loc = SharedLocation.parse(geo) {
+                LocationMapView(lat: loc.lat, lon: loc.lon, label: loc.label)
             }
-            // Size to the media's own aspect (capped) so wide AND tall media show in full
-            // instead of being cropped to a fixed box.
-            .aspectRatio(singleAspect(ref), contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: 480)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            // Tap-to-zoom only for images. For a video, the player owns the single tap
-            // (mute) / hold (pause) / drag (scrub); a zoom tap here would swallow them.
-            .modifier(ConditionalTap(enabled: !video) { zoomTarget = ZoomTarget(refs: item.media, index: 0) })
-        } else if !item.media.isEmpty {
-            masonry   // up to 30 photos/videos in a staggered grid; tap any to zoom
+            let media = realMedia
+            if media.count == 1, let ref = media.first {
+                let video = isVideo(ref)
+                ZStack(alignment: .bottomTrailing) {
+                    mediaPage(ref)
+                    if video { muteButton }
+                }
+                // Size to the media's own aspect (capped) so wide AND tall media show in full
+                // instead of being cropped to a fixed box.
+                .aspectRatio(singleAspect(ref), contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: 480)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                // Tap-to-zoom only for images. For a video, the player owns the single tap
+                // (mute) / hold (pause) / drag (scrub); a zoom tap here would swallow them.
+                .modifier(ConditionalTap(enabled: !video) { zoomTarget = ZoomTarget(refs: media, index: 0) })
+            } else if !media.isEmpty {
+                masonry   // up to 30 photos/videos in a staggered grid; tap any to zoom
+            }
         }
     }
 
@@ -2535,8 +2545,9 @@ struct PostCard: View {
     private var masonry: some View {
         let rows = 2
         let rowHeight: CGFloat = 150
+        let media = realMedia
         let rowItems = (0..<rows).map { ri in
-            item.media.enumerated().filter { $0.offset % rows == ri }.map { $0.element }
+            media.enumerated().filter { $0.offset % rows == ri }.map { $0.element }
         }
         return ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 6) {
@@ -2568,7 +2579,8 @@ struct PostCard: View {
                 // federated flag (protects viewers whose platform has no SCA).
                 .sensitiveContentGuard(ref: ref, circleId: FeedStore.shared.activeCircleId, scan: !item.isMe)
                 .onTapGesture {
-                    if let idx = item.media.firstIndex(of: ref) { zoomTarget = ZoomTarget(refs: item.media, index: idx) }
+                    let media = realMedia
+                    if let idx = media.firstIndex(of: ref) { zoomTarget = ZoomTarget(refs: media, index: idx) }
                 }
         } else {
             // Not downloaded yet — a compact loading tile keeps the gallery layout intact.
