@@ -43,6 +43,11 @@ final class FeedStore: ObservableObject {
     /// so the UI can show whether the internet and/or nearby links are really working.
     @Published private(set) var internetActive = false
     @Published private(set) var nearbyActive = false
+    // Live media-sync counters — surfaced in the feed so the user (and I) can SEE whether media is moving
+    // over the nearby mesh, instead of guessing from logs we can't read on every device.
+    @Published private(set) var nbMediaOut = 0       // media items served/pushed over nearby
+    @Published private(set) var nbMediaIn = 0        // media items fully received over nearby
+    @Published private(set) var nbMediaPending = 0   // media refs still missing locally
     // Diagnostics surfaced in Advanced → Connection.
     @Published private(set) var internetReady = false
     @Published private(set) var nodeError: String?
@@ -1464,6 +1469,7 @@ final class FeedStore: ObservableObject {
             for c in item.comments { for ref in c.media where !MediaStore.shared.has(ref) { missing.insert(ref) } }
         }
         let circleIds = circles.map { $0.id }
+        nbMediaPending = missing.count
         let nowMs = now()
         // THROTTLE: a missing ref was re-requested from every contact on every sync, so a backlog of
         // missing media flooded the network with hundreds of thousands of frames per cycle (drowning real
@@ -1553,6 +1559,7 @@ final class FeedStore: ObservableObject {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let total = max(1, (size + Self.mediaChunkSize - 1) / Self.mediaChunkSize)
         HavenLog.net("SERVING \(total) chunks ref=\(ref.prefix(12)) (\(size)B) to=\(requesterHex.prefix(8))")
+        nbMediaOut += 1
         let refData = Data(ref.utf8)
         Task { @MainActor in
             defer { try? handle.close() }
@@ -1611,6 +1618,7 @@ final class FeedStore: ObservableObject {
         incoming[ref] = entry
         if entry.got.count >= entry.total {
             MediaStore.shared.adopt(ref, from: entry.tempURL)
+            nbMediaIn += 1
             autoSaveReceived(ref)
             incoming[ref] = nil
             refresh()   // re-render so the media appears
@@ -2153,7 +2161,16 @@ struct FeedView: View {
             VStack(spacing: 8) {
                 // Delivery status for this circle: green = safely in your relay / reached a member,
                 // yellow = still syncing, red = only on this device. So you know if a post got out.
-                HStack { Spacer(); SyncStatusBadge(circleId: store.activeCircleId) }
+                HStack {
+                    // Live nearby media-sync readout so it's visible whether media is actually moving.
+                    if store.nearbyActive || store.nbMediaPending > 0 || store.nbMediaOut > 0 || store.nbMediaIn > 0 {
+                        Label("↑\(store.nbMediaOut) ↓\(store.nbMediaIn) · \(store.nbMediaPending) waiting",
+                              systemImage: store.nearbyActive ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(store.nearbyActive ? HavenTheme.pink : .secondary)
+                    }
+                    Spacer(); SyncStatusBadge(circleId: store.activeCircleId)
+                }
                 if !attachedMedia.isEmpty || attachedTrack != nil || composeRetention != nil { attachmentTray }
                 // Opt-in location tag — only when a photo/video with GPS is attached. Default off.
                 if MediaStore.shared.anyLocated(attachedMedia) {
