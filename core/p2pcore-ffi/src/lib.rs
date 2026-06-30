@@ -1470,6 +1470,29 @@ impl HavenSocial {
             .collect()
     }
 
+    /// The transport node ids to DIAL to reach ONE account: that account's currently-authorized device ids
+    /// (from its roster), or — if we haven't learned its roster — the account id itself (pre-multidevice
+    /// fallback). Lets a sender keep its social/allow logic on account ids and expand to devices only at the
+    /// transport edge. Always includes the account id too, so an un-upgraded peer still on its account node
+    /// stays reachable during the rollout. De-duplicated.
+    pub fn device_node_ids_for(&self, account_hex: String) -> Vec<String> {
+        let acct = account_hex.to_lowercase();
+        let st = self.state.lock().unwrap();
+        let mut out = vec![acct.clone()];
+        for (id, cd) in st.device_lists.iter() {
+            if hex(id) == acct {
+                for b in cd.authorized_bundles() {
+                    let h = hex(&b.node_id_bytes());
+                    if !out.contains(&h) {
+                        out.push(h);
+                    }
+                }
+                break;
+            }
+        }
+        out
+    }
+
     /// The full public **bundles** of a circle's members — for multi-device sync. Another of the
     /// user's devices replays these through [`add_contact_bundle`] to reconstruct the circle and
     /// seal to every member. Bundles are public keys; replicating them (sealed to the user's own
