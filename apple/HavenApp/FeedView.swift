@@ -834,16 +834,28 @@ final class FeedStore: ObservableObject {
             // circles must NOT — a broadcast Hello let any nearby contact handshake their way
             // into a circle they were never added to (membership contamination).
             if circle.id == "default" { nearbyBroadcast(0, hello) }
-            // Sealed events are safe to fan out (non-members can't open them; receive() also gates on
-            // membership). Nearby is ONE local broadcast per env — NOT a flood — and it's how a linked
-            // Mac/phone catches up. DMs are INCLUDED: a DM is sealed to its circle, and the user's OWN
-            // devices share the account so they're the "self" participant — broadcasting is how a DM syncs
-            // to your other device. A nearby non-participant just receives an opaque blob receive() drops.
-            for env in envs { nearbyBroadcast(1, eventPayload(circle.id, env)) }
+            // (Own-device nearby catch-up of events moved below — every cycle, off-main.)
             // Mesh: let a relay carry our handshake to members we can't reach directly.
             originateRelay(dests: Array(targets), inner: frame(0, hello))
         }
         if resendHistory { lastHistoryResendMs = nowMs }
+        // Own-device catch-up over NEARBY, every cycle: a sibling that missed the instant broadcastEvent
+        // (e.g. nearby was reconnecting when I posted) shows my latest post within a cycle (~20s) instead of
+        // waiting for the 3-min full re-send. Re-seal (the expensive part) runs OFF the main thread; only the
+        // cheap fan-out hops back to main. Capped to recent events so it isn't a congestion/CPU sink. The
+        // receiver dedups known events, so re-broadcasting is harmless.
+        let cidsForNearby = circles.map(\.id)
+        Task.detached(priority: .utility) { [weak self, social] in
+            var work: [(String, [Data])] = []
+            for cid in cidsForNearby {
+                let envs = social.syncEnvelopes(circleId: cid).suffix(50)
+                if !envs.isEmpty { work.append((cid, Array(envs))) }
+            }
+            await MainActor.run {
+                guard let self else { return }
+                for (cid, envs) in work { for env in envs { self.nearbyBroadcast(1, self.eventPayload(cid, env)) } }
+            }
+        }
         reannounceOwnRelay()   // frame 19 was a one-shot at relay start; re-emit so peers reliably learn it
         // Push MY media up to every circle relay periodically. The nearby request/response (frame 3→5) was
         // unreliable (0 chunks served), so instead each device durably mirrors its own media to the relays
