@@ -72,6 +72,9 @@ struct GestureVideoPlayer: View {
     let player: AVPlayer
     var onTap: () -> Void = {}
     var onDoubleTap: () -> Void = {}
+    /// In a swipeable carousel, only a drag from the BOTTOM edge should scrub — a drag higher up must
+    /// swipe between carousel items. Also lifts the scrub bar above the page dots. Off = scrub anywhere.
+    var inCarousel: Bool = false
 
     @State private var progress: Double = 0      // 0…1
     @State private var duration: Double = 0
@@ -84,23 +87,39 @@ struct GestureVideoPlayer: View {
 
     var body: some View {
         GeometryReader { geo in
-            VideoSurface(player: player)
-                .overlay(alignment: .bottom) {
-                    if scrubbing { scrubBar.padding(8) }
-                }
-                .contentShape(Rectangle())
-                // Tap → mute, double-tap → heart. Double-tap registered first so a genuine
-                // double-tap isn't consumed as a single tap.
-                .onTapGesture(count: 2) { onDoubleTap() }
-                .onTapGesture(count: 1) { onTap() }
-                // Hold-to-pause + horizontal-drag-to-scrub, owned here at high priority so the
-                // ancestor contextMenu / zoom / feed-scroll can't intercept the long-press or
-                // the sideways swipe. Vertical drags fall through (feed keeps scrolling).
-                .highPriorityGesture(holdToPause)
-                .highPriorityGesture(scrub(width: geo.size.width))
+            content(geo)
         }
         .onAppear(perform: addObserver)
         .onDisappear(perform: removeObserver)
+    }
+
+    @ViewBuilder private func content(_ geo: GeometryProxy) -> some View {
+        let base = VideoSurface(player: player)
+            .overlay(alignment: .bottom) {
+                // Lift the scrub bar above the carousel's page dots so they don't collide.
+                if scrubbing { scrubBar.padding(.horizontal, 8).padding(.bottom, inCarousel ? 26 : 8) }
+            }
+            .contentShape(Rectangle())
+            // Tap → mute, double-tap → heart. Double-tap registered first so a genuine
+            // double-tap isn't consumed as a single tap.
+            .onTapGesture(count: 2) { onDoubleTap() }
+            .onTapGesture(count: 1) { onTap() }
+            // Hold-to-pause, owned here at high priority so the ancestor contextMenu / zoom / feed can't
+            // intercept the long-press.
+            .highPriorityGesture(holdToPause)
+        if inCarousel {
+            // Only a drag starting in the bottom strip scrubs; a horizontal drag higher up falls through
+            // to the carousel so it pages between items.
+            base.overlay(alignment: .bottom) {
+                Color.clear
+                    .frame(height: max(56, geo.size.height * 0.24))
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(scrub(width: geo.size.width))
+            }
+        } else {
+            // Single video (no carousel): a horizontal drag anywhere scrubs; vertical falls through to feed.
+            base.highPriorityGesture(scrub(width: geo.size.width))
+        }
     }
 
     private var scrubBar: some View {

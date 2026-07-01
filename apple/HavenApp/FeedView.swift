@@ -2867,12 +2867,22 @@ struct PostCard: View {
                 // Tap-to-zoom only for images. For a video, the player owns the single tap
                 // (mute) / hold (pause) / drag (scrub); a zoom tap here would swallow them.
                 .modifier(ConditionalTap(enabled: !video) { zoomTarget = ZoomTarget(refs: media, index: 0) })
-            } else if media.count <= 7, allSameAspect(media) {
+            } else if carouselSupported, media.count <= 7, allSameAspect(media) {
                 mediaCarousel(media)   // uniform-aspect set → a swipeable pager (autoplays the visible video)
             } else if !media.isEmpty {
-                masonry   // mixed aspects or a big set → the staggered grid; tap any to zoom
+                masonry   // mixed aspects / a big set / macOS → the staggered grid; tap any to zoom
             }
         }
+    }
+
+    /// The paged carousel uses TabView(.page), which only exists on iOS — on macOS a TabView renders its
+    /// pages as TAB-BAR items (the "dots" landed in the nav toolbar). So macOS uses the masonry grid.
+    private var carouselSupported: Bool {
+        #if os(iOS)
+        return true
+        #else
+        return false
+        #endif
     }
 
     /// True when a small media set all share (near-)equal aspect ratios — the case where a full-width
