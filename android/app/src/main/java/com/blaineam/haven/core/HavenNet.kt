@@ -165,6 +165,11 @@ object HavenNet : InboundListener {
         CircleLock.init(appContext)
         CircleRemovals.init(appContext)
         DeviceKeyStore.init(appContext)
+        // Engine runs on this device's UNIQUE identity (parity with iOS configure()); account id stays the
+        // sealing/trust anchor + contact handle. Friends resolve it to our device node id via the roster.
+        social.useDeviceIdentity(DeviceKeyStore.deviceAccount().secretSeed())
+        social.registerDevice(DeviceKeyStore.deviceBundle(), DeviceKeyStore.deviceName,
+                              (System.currentTimeMillis() / 1000).toULong())
         DeviceCredentialStore.init(appContext)
         DeviceRosterManager.init(appContext)
         SelfSyncCoordinator.init(appContext)
@@ -187,10 +192,9 @@ object HavenNet : InboundListener {
         if (node != null) return
         scope.launch {
             try {
-                // TRANSPORT = ACCOUNT seed (REVERTED from the per-device seed 2026-07-01 — device-seed
-                // re-triggered the 100GB iroh self-connect leak; redo it as a focused effort with a full
-                // self-dial audit). Parity with the iOS revert.
-                node = HavenNode.start(core.seed, this@HavenNet)
+                // TRANSPORT = per-DEVICE seed → unique per-device relay/node id (never the account id). The
+                // self-connect leak is defended at the haven-net core (Node refuses to dial our own node id).
+                node = HavenNode.start(DeviceKeyStore.deviceAccount().secretSeed(), this@HavenNet)
                 withContext(Dispatchers.Main) { started.value = true }
                 Log.i(TAG, "node started: ${node?.nodeIdHex()}")
                 syncWithContacts()

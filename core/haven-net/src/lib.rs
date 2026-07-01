@@ -191,6 +191,13 @@ impl Node {
     /// replies on it).
     async fn conn_for(&self, addr: EndpointAddr) -> Result<Connection> {
         let id = addr.id;
+        // NEVER open a connection to our OWN endpoint id. A node dialing itself sends iroh's path
+        // discovery into an unbounded loop (open_path_on_all_conns → tens of GB — THE self-connect leak).
+        // Guard it here at the single messaging dial chokepoint so NO caller (roster announce, hello,
+        // relay originate, a stale self entry in any target list) can trigger it, under any transport id.
+        if id == self.endpoint.id() {
+            anyhow::bail!("refusing to dial our own node id (self-connect guard)");
+        }
         if let Some(c) = lock(&self.conns).get(&id).cloned() {
             if c.close_reason().is_none() {
                 return Ok(c);

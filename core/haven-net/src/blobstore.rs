@@ -547,6 +547,12 @@ impl BlobClient {
             .bind()
             .await
             .ah()?;
+        // NEVER dial our OWN id. The relay client connects under our ACCOUNT identity (`secret`), so a
+        // relay-list entry equal to our account id (e.g. left over from the pre-device-seed transport, when
+        // the relay WAS the account id) would be the account dialing itself → the iroh path-discovery leak.
+        if endpoint.id() == dest.id {
+            anyhow::bail!("refusing to dial our own node id (blob self-connect guard)");
+        }
         Ok(Self { endpoint, dest })
     }
 

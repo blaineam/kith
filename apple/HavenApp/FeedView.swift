@@ -516,13 +516,12 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                // TRANSPORT = ACCOUNT seed (REVERTED from the per-device seed 2026-07-01). Binding transport to
-                // the device seed made the relay id unique per device (the right end-state for the relay-id
-                // collision), BUT it re-triggered the 100GB iroh self-connect leak via path(s) not fully closed
-                // in-session (a stale relay-list entry == our account id + roster/messaging self-dials). Reverted
-                // to the known-good account-id transport to protect the Mac; redo device-seed as a FOCUSED effort
-                // with a full self-dial audit (relay client + every messaging send + nearby-mesh path feed).
-                let n = try await HavenNode.start(accountSeed: seed, listener: bridge)
+                // TRANSPORT = per-DEVICE seed → unique per-device relay/node id (NEVER the account id). The
+                // account id is the sealing/trust anchor + contact handle only. The self-connect leak this
+                // re-triggered is defended at the CORE chokepoint now (haven-net Node refuses to open a
+                // connection to our OWN node id), so no app-level dial path can loop it.
+                let deviceSeed = DeviceKeyStore.deviceAccount().secretSeed()
+                let n = try await HavenNode.start(accountSeed: deviceSeed, listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true
