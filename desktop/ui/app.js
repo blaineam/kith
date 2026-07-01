@@ -128,6 +128,27 @@ async function refreshStatus() {
   } catch (_) {}
 }
 
+// ---- Pinned conversations --------------------------------------------------------------
+// Up to 6 pinned DM circle ids, kept at the top of the Messages list (iMessage-style). Order in the
+// array is pin order; persisted so pins survive relaunch. Mirrors iOS `DMPinStore`.
+const Pins = {
+  MAX: 6,
+  ids: JSON.parse(localStorage.getItem("haven-dm-pinned") || "[]"),
+  has(id) { return this.ids.includes(id); },
+  get full() { return this.ids.length >= this.MAX; },
+  toggle(id) {
+    const i = this.ids.indexOf(id);
+    if (i >= 0) this.ids.splice(i, 1);
+    else if (this.ids.length < this.MAX) this.ids.push(id);
+    this._save();
+  },
+  remove(id) {
+    const i = this.ids.indexOf(id);
+    if (i >= 0) { this.ids.splice(i, 1); this._save(); }
+  },
+  _save() { localStorage.setItem("haven-dm-pinned", JSON.stringify(this.ids)); },
+};
+
 // ---- Feed ------------------------------------------------------------------------------
 // Posts the user hid from their own feed — local + per-device, never touches the circle/relay.
 const Hidden = {
@@ -729,14 +750,42 @@ async function renderMessages() {
   if (state.activeDm) return renderThread(root, state.activeDm);
   const threads = await invoke("dm_threads");
   const contacts = await invoke("contacts");
-  const list = el("div", { class: "thread-list" });
-  for (const t of threads) {
-    list.append(el("div", { class: "thread-item", onclick: () => { state.activeDm = { id: t.circle_id, name: t.name }; renderMessages(); } },
+  // Backend already sorts most-recently-active first. Split pinned (in pin order) from the rest so the
+  // pinned tiles ride the top of the list; both groups keep the recency order the backend gave us.
+  const byId = new Map(threads.map((t) => [t.circle_id, t]));
+  const pinned = Pins.ids.map((id) => byId.get(id)).filter(Boolean);
+  const rest = threads.filter((t) => !Pins.has(t.circle_id));
+
+  const openDm = (t) => { state.activeDm = { id: t.circle_id, name: t.name }; renderMessages(); };
+  const del = async (t) => {
+    if (!confirm(`Delete conversation with "${t.name}"? Its local messages are cleared.`)) return;
+    Pins.remove(t.circle_id);
+    await invoke("delete_conversation", { circleId: t.circle_id });
+    renderMessages();
+  };
+
+  // Pinned grid (large avatars) above the list.
+  const grid = el("div", { class: "pin-grid" });
+  for (const t of pinned) {
+    grid.append(el("div", { class: "pin-tile", onclick: () => openDm(t) },
+      el("div", { class: "avatar big" }, initials(t.name)),
+      el("div", { class: "pin-name" }, t.name)));
+  }
+
+  const threadRow = (t) => {
+    const row = el("div", { class: "thread-item", onclick: () => openDm(t) },
       el("div", { class: "avatar" }, initials(t.name)),
       el("div", { style: "flex:1;min-width:0" }, el("div", { class: "name" }, t.name), el("div", { class: "muted small", style: "white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }, t.last_body || "No messages yet")),
       el("div", { class: "muted small" }, relTime(t.last_at)),
-    ));
-  }
+      el("button", { class: "btn small ghost", title: Pins.has(t.circle_id) ? "Unpin" : "Pin", onclick: (e) => { e.stopPropagation(); if (!Pins.has(t.circle_id) && Pins.full) { toast("You can pin up to 6 conversations."); return; } Pins.toggle(t.circle_id); renderMessages(); } }, Pins.has(t.circle_id) ? "📌" : "📍"),
+      el("button", { class: "btn small ghost danger", title: "Delete", onclick: (e) => { e.stopPropagation(); del(t); } }, "🗑"),
+    );
+    return row;
+  };
+
+  const list = el("div", { class: "thread-list" });
+  if (pinned.length) list.append(grid);
+  for (const t of rest) list.append(threadRow(t));
   if (!threads.length) list.append(el("div", { class: "empty" }, "No conversations yet. Start one from a contact below."));
   const cl = el("div", { class: "col" });
   for (const c of contacts) {
@@ -772,6 +821,14 @@ function groupMessageDialog(contacts) {
 
 async function renderThread(root, dm) {
   const msgs = await invoke("messages", { circleId: dm.id });
+  // A group DM has more than one OTHER participant (member_count > 2) → each incoming message needs a
+  // sender name so the group knows who said what (a 1:1 DM doesn't). The relay-reachability flag drives the
+  // delivery checkmark (filled = store-and-forward reachable).
+  const threads = await invoke("dm_threads");
+  const meta = threads.find((t) => t.circle_id === dm.id);
+  const isGroup = (meta?.member_count || 0) > 2;
+  let relayReachable = false;
+  try { const rs = await invoke("relay_status"); relayReachable = !!(rs.hosting || rs.relay_active || (rs.has_relay && rs.internet_active)); } catch (_) {}
   let secretOn = false;
   const chat = el("div", { class: "chat" });
   for (const m of msgs) {
@@ -782,7 +839,12 @@ async function renderThread(root, dm) {
       ? secretBubble(m.body, m.is_me)
       : el("div", { class: "chat-bubble" }, m.body || "", ...mediaEls);
     if (isSecret(m.body) && mediaEls.length) bubble.append(...mediaEls);
-    chat.append(el("div", { class: "bubble-row" + (m.is_me ? " me" : "") }, bubble));
+    // In a group DM, label each INCOMING message with who sent it.
+    const senderLabel = (isGroup && !m.is_me) ? el("div", { class: "chat-sender" }, m.author_name || "Someone") : null;
+    // A timestamp + (for my own sent messages) a delivery checkmark under every bubble.
+    const meta2 = el("div", { class: "chat-meta" }, relTime(m.created_at));
+    if (m.is_me) meta2.append(el("span", { class: "chat-check" + (relayReachable ? " on" : "") }, relayReachable ? "✓✓" : "✓"));
+    chat.append(el("div", { class: "bubble-row" + (m.is_me ? " me" : "") }, el("div", { class: "bubble-col" }, senderLabel, bubble, meta2)));
   }
   const sendText = async (input) => {
     const t = input.value.trim();

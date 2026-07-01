@@ -109,6 +109,8 @@ pub struct DmThreadDto {
     pub name: String,
     pub last_body: String,
     pub last_at: u64,
+    /// Total members (me + others). > 2 ⇒ a group DM (UI shows sender names on incoming messages).
+    pub member_count: u32,
 }
 
 #[derive(Deserialize)]
@@ -306,8 +308,21 @@ pub fn dm_threads(engine: Eng) -> Vec<DmThreadDto> {
     engine
         .dm_threads()
         .into_iter()
-        .map(|(circle_id, name, last_body, last_at)| DmThreadDto { circle_id, name, last_body, last_at })
+        .map(|(circle_id, name, last_body, last_at, member_count)| DmThreadDto {
+            circle_id,
+            name,
+            last_body,
+            last_at,
+            member_count,
+        })
         .collect()
+}
+
+/// Delete a whole DM conversation locally (records a "cleared before" watermark so re-syncing this
+/// deterministic-id DM won't restore old messages, then leaves the circle).
+#[tauri::command]
+pub fn delete_conversation(engine: Eng, circle_id: String) {
+    engine.delete_conversation(circle_id);
 }
 
 #[tauri::command]

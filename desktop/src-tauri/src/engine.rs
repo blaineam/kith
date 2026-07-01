@@ -798,8 +798,28 @@ impl Engine {
 
     pub fn messages(&self, circle_id: &str) -> Vec<FeedItemFfi> {
         let mut m = self.social.feed(circle_id.to_string(), now_ms(), None);
+        // Hide anything exchanged before this DM was cleared (see `delete_conversation`). A DM's circle id is
+        // deterministic, so a re-started/re-synced thread would otherwise resurrect the old messages.
+        if let Some(&cutoff) = self.prefs.lock().unwrap().dm_cleared_before.get(circle_id) {
+            m.retain(|i| i.created_at >= cutoff);
+        }
         m.sort_by_key(|i| i.created_at);
         m
+    }
+
+    /// Delete a whole DM conversation locally: record a "cleared before" watermark (so re-syncing or
+    /// re-starting this deterministic-id DM won't restore old messages — true network deletion is
+    /// impossible in P2P) and leave the circle. Mirrors iOS `FeedStore.deleteConversation`.
+    pub fn delete_conversation(self: &Arc<Self>, circle_id: String) {
+        if !circle_id.starts_with("dm:") {
+            return;
+        }
+        {
+            let mut p = self.prefs.lock().unwrap();
+            p.dm_cleared_before.insert(circle_id.clone(), now_ms());
+            let _ = p.save(&self.paths);
+        }
+        self.leave_circle(circle_id);
     }
 
     pub fn send_dm(self: &Arc<Self>, circle_id: String, body: String, media: Vec<String>) {
@@ -817,20 +837,25 @@ impl Engine {
         }
     }
 
-    /// DM threads as (circleId, partnerName, lastBody, lastAt).
-    pub fn dm_threads(&self) -> Vec<(String, String, String, u64)> {
+    /// DM threads as (circleId, partnerName, lastBody, lastAt, memberCount). Sorted most-recently-active
+    /// first. `memberCount` lets the UI tell a group DM (2+ others) from a 1:1.
+    pub fn dm_threads(&self) -> Vec<(String, String, String, u64, u32)> {
+        let cleared = self.prefs.lock().unwrap().dm_cleared_before.clone();
         let mut out = vec![];
         for c in self.social.circles() {
             if !c.id.starts_with("dm:") {
                 continue;
             }
-            let feed = self.social.feed(c.id.clone(), now_ms(), None);
-            let (last_body, last_at) = feed
+            let cutoff = cleared.get(&c.id).copied();
+            let (last_body, last_at) = self
+                .social
+                .feed(c.id.clone(), now_ms(), None)
                 .iter()
+                .filter(|i| cutoff.map_or(true, |cut| i.created_at >= cut))
                 .max_by_key(|i| i.created_at)
                 .map(|i| (crate::secret::preview(&i.body), i.created_at))
                 .unwrap_or_default();
-            out.push((c.id.clone(), c.name.clone(), last_body, last_at));
+            out.push((c.id.clone(), c.name.clone(), last_body, last_at, c.member_count));
         }
         out.sort_by(|a, b| b.3.cmp(&a.3));
         out

@@ -181,6 +181,12 @@ pub struct Prefs {
     /// Global "play video sound" toggle (iOS parity): feed videos start muted; flipping this unmutes all.
     #[serde(default)]
     pub video_sound_on: bool,
+    /// Per-DM "cleared before" watermark (circleId -> epoch ms). Deleting a conversation records now() here;
+    /// because a DM's circle id is deterministic, a re-started/re-synced DM would otherwise restore old
+    /// messages (true network deletion is impossible in P2P). The watermark hides everything older, so a
+    /// re-started DM shows fresh. Mirrors iOS `haven.dm.clearedBefore`.
+    #[serde(default)]
+    pub dm_cleared_before: std::collections::HashMap<String, u64>,
 }
 
 impl Prefs {

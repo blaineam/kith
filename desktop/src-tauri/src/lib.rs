@@ -208,6 +208,7 @@ pub fn run() {
             commands::edit_post,
             commands::unsend_post,
             commands::dm_threads,
+            commands::delete_conversation,
             commands::start_dm,
             commands::start_group_dm,
             commands::sync_status,

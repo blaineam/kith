@@ -261,8 +261,21 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.4;
 }
 .bubble-row.me .chat-bubble { background: var(--grad-h); color: white; border-radius: 20px 20px 6px 20px; box-shadow: 0 4px 14px rgba(236, 72, 153, 0.3); }
+.bubble-col { display: flex; flex-direction: column; max-width: 70%; }
+.bubble-row.me .bubble-col { align-items: flex-end; }
+.bubble-col .chat-bubble { max-width: 100%; }
+.chat-sender { font-size: 11px; font-weight: 700; color: var(--pink); margin: 0 4px 2px; }
+.chat-meta { display: flex; gap: 5px; align-items: center; font-size: 10px; color: var(--muted); margin: 3px 4px 0; }
+.chat-check { color: var(--muted); }
+.chat-check.on { color: var(--pink); }
 .chat-input { display: flex; gap: 8px; margin-top: 14px; }
 .chat-bubble.secret { cursor: pointer; user-select: none; border: 1px dashed var(--pink); }
+
+/* Pinned-conversation grid (iMessage-style) above the DM list */
+.pin-grid { display: flex; flex-wrap: wrap; gap: 16px; padding: 4px 4px 12px; }
+.pin-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 76px; cursor: pointer; }
+.pin-tile .avatar.big { width: 60px; height: 60px; font-size: 24px; }
+.pin-name { font-size: 11px; text-align: center; max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- Connect / QR ---- */
 .qr-box { background: white; padding: 16px; border-radius: var(--r-md); width: max-content; box-shadow: var(--shadow); }
