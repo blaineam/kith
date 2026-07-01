@@ -973,29 +973,44 @@ fun VideoTile(circleId: String, ref: String, modifier: Modifier = Modifier) {
         }
     } else {
         Box(modifier) {
+            // A TextureView (NOT VideoView/SurfaceView): a SurfaceView doesn't composite inside a Compose
+            // overlay/Dialog (z-order + surface-lifecycle issues), so the old player showed a play glyph but
+            // never rendered/played anything. A TextureView renders into the normal view hierarchy + we drive
+            // playback with MediaPlayer directly, autoplaying + looping.
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    android.widget.VideoView(ctx).apply {
-                        // Listeners BEFORE setVideoPath so onError catches prepare/decode failures.
-                        setOnPreparedListener {
-                            it.isLooping = true
-                            val v = if (profile.videoSoundOn) 1f else 0f
-                            it.setVolume(v, v)
-                            player.value = it
-                            start()   // AUTOPLAY (iOS parity) — VideoView does NOT auto-start on setVideoPath,
-                                      // so feed videos just sat on a black frame and looked like they never loaded.
+                    android.view.TextureView(ctx).apply {
+                        surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                                val mp = android.media.MediaPlayer()
+                                runCatching {
+                                    mp.setDataSource(f.absolutePath)
+                                    mp.setSurface(android.view.Surface(st))
+                                    mp.isLooping = true
+                                    mp.setOnPreparedListener {
+                                        val vol = if (profile.videoSoundOn) 1f else 0f
+                                        it.setVolume(vol, vol)
+                                        it.start()   // autoplay (iOS parity)
+                                        android.util.Log.i("VideoTile", "playing ref=$ref ${it.videoWidth}x${it.videoHeight}")
+                                    }
+                                    mp.setOnErrorListener { _, what, extra ->
+                                        android.util.Log.e("VideoTile", "error what=$what extra=$extra ref=$ref path=${f.absolutePath}")
+                                        false
+                                    }
+                                    mp.prepareAsync()
+                                    player.value = mp
+                                }.onFailure {
+                                    android.util.Log.e("VideoTile", "setup failed ref=$ref path=${f.absolutePath}", it)
+                                    runCatching { mp.release() }
+                                }
+                            }
+                            override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                                runCatching { player.value?.release() }; player.value = null; return true
+                            }
+                            override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
                         }
-                        setOnErrorListener { _, what, extra ->
-                            // Surface decode failures (e.g. an HEVC clip this device can't decode) instead of
-                            // failing silently — visible in logcat as tag VideoTile.
-                            android.util.Log.e("VideoTile", "playback error what=$what extra=$extra ref=$ref path=${f.absolutePath}")
-                            false
-                        }
-                        val mc = android.widget.MediaController(ctx)
-                        mc.setAnchorView(this)
-                        setMediaController(mc)
-                        setVideoPath(f.absolutePath)
                     }
                 },
             )
