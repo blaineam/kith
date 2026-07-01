@@ -150,6 +150,7 @@ object HavenNet : InboundListener {
         DeviceCredentialStore.init(appContext)
         DeviceRosterManager.init(appContext)
         SelfSyncCoordinator.init(appContext)
+        DmPins.init(appContext)
         restoreState()
         loadContacts()
         loadBlocked()
@@ -395,6 +396,10 @@ object HavenNet : InboundListener {
             .filter { it.id.startsWith("dm:") && dmMemberHexes(it.id).size > 2 }
             .map { it.id to dmPartnerName(it.id) }
 
+    /** Newest message time (ms) in a DM circle, honoring the cleared-before watermark; 0 if empty. */
+    fun lastActivity(circleId: String): ULong =
+        messages(circleId).maxOfOrNull { it.createdAt } ?: 0UL
+
     /** Open (or create) a GROUP DM with 2+ contacts; returns the dm circle id. */
     fun startGroupDM(contacts: List<Contact>): String {
         if (contacts.size == 1) return startDm(contacts[0])
@@ -407,9 +412,44 @@ object HavenNet : InboundListener {
         return id
     }
 
-    /** The messages of a circle (a DM thread), oldest→newest for chat display. */
-    fun messages(circleId: String): List<uniffi.haven_ffi.FeedItemFfi> =
-        runCatching { social.feed(circleId, nowMs(), null) }.getOrDefault(emptyList()).sortedBy { it.createdAt }
+    /** The messages of a circle (a DM thread), oldest→newest for chat display. Hides anything older
+     *  than this DM's "cleared before" watermark so re-starting a (deterministic-id) DM shows fresh. */
+    fun messages(circleId: String): List<uniffi.haven_ffi.FeedItemFfi> {
+        val all = runCatching { social.feed(circleId, nowMs(), null) }.getOrDefault(emptyList())
+            .sortedBy { it.createdAt }
+        val cutoff = dmClearedBefore(circleId) ?: return all
+        return all.filter { it.createdAt >= cutoff }
+    }
+
+    // ---- DM "cleared before" watermark ------------------------------------------------------------
+    // Deleting a DM records now() here (persisted). Because a DM's circle id is deterministic,
+    // re-starting/re-syncing it re-fetches the old messages (true network deletion is impossible in
+    // P2P); the watermark hides everything from before the clear so a re-started DM shows fresh.
+    private val dmPrefs get() = appContext.getSharedPreferences("haven.dm", Context.MODE_PRIVATE)
+
+    /** The "cleared before" watermark (ms) for a DM circle, or null if never cleared. */
+    fun dmClearedBefore(circleId: String): ULong? {
+        val v = dmPrefs.getLong("cleared.$circleId", -1L)
+        return if (v < 0L) null else v.toULong()
+    }
+
+    private fun clearDmBefore(circleId: String) {
+        dmPrefs.edit().putLong("cleared.$circleId", nowMs().toLong()).apply()
+    }
+
+    /** True if [circleId] is a GROUP dm (3+ members including me), for per-message sender labels. */
+    fun isGroupDm(circleId: String): Boolean =
+        circleId.startsWith("dm:") && dmMemberHexes(circleId).size > 2
+
+    /** Delete a whole DM conversation locally: watermark it (so re-syncing/re-starting won't restore
+     *  the old thread) and leave the circle. */
+    fun deleteConversation(circleId: String) {
+        if (!circleId.startsWith("dm:")) return
+        clearDmBefore(circleId)
+        runCatching { social.leaveCircle(circleId) }
+        if (activeCircle.value == circleId) activeCircle.value = DEFAULT_CIRCLE
+        persist(); bumpCircles(); scope.launch(Dispatchers.Main) { feedVersion.value++ }
+    }
 
     /** Send a text DM into a circle and deliver it to the partner. */
     fun sendDm(circleId: String, body: String, media: List<String> = emptyList(),

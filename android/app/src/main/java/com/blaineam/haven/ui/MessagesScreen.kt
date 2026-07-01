@@ -33,6 +33,9 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
@@ -97,12 +100,41 @@ fun MessagesScreen() {
     }
 }
 
+/** A row in the Messages list: a 1:1 DM (with a [contact]) or a group DM (contact == null). */
+private data class Conversation(
+    val circleId: String,
+    val title: String,
+    val contact: Contact?,   // non-null for a 1:1 (drives the avatar + opening the thread)
+    val lastActivity: ULong,
+)
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadList(onOpen: (Contact) -> Unit, onOpenGroup: (String, String) -> Unit) {
     val contacts = HavenNet.contacts
     val version by HavenNet.feedVersion
-    val groups = remember(version) { HavenNet.groupDmThreads() }
+    val pins = com.blaineam.haven.core.DmPins.pinned
     var showGroupPicker by remember { mutableStateOf(false) }
+
+    // Unified conversation list: every 1:1 (one per contact) + every existing group DM, each with its
+    // last-activity time. Sorted newest-first; pinned (up to 6) float to the top in pin order.
+    val conversations = remember(version, contacts, pins.toList()) {
+        val oneToOnes = contacts.map { c ->
+            val cid = HavenNet.dmCircleId(c.idHex)
+            Conversation(cid, c.name, c, HavenNet.lastActivity(cid))
+        }
+        val groups = HavenNet.groupDmThreads().map { (cid, title) ->
+            Conversation(cid, title, null, HavenNet.lastActivity(cid))
+        }
+        val all = oneToOnes + groups
+        val byId = all.associateBy { it.circleId }
+        val pinned = pins.mapNotNull { byId[it] }   // pin order, still-present only
+        val rest = all.filter { !pins.contains(it.circleId) }.sortedByDescending { it.lastActivity }
+        pinned to rest
+    }
+    val pinnedConvos = conversations.first
+    val restConvos = conversations.second
+
     if (showGroupPicker) {
         GroupMessagePicker(
             onDismiss = { showGroupPicker = false },
@@ -127,28 +159,6 @@ private fun ThreadList(onOpen: (Contact) -> Unit, onOpenGroup: (String, String) 
                     }
                 }
             }
-            if (groups.isNotEmpty()) {
-                LazyColumn(
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(bottom = 8.dp),
-                ) {
-                    items(groups, key = { it.first }) { (cid, title) ->
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                                .clickable { onOpenGroup(cid, title) }.havenCard().padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(Modifier.size(40.dp).clip(CircleShape).background(HavenTheme.card),
-                                contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.Group, null, tint = HavenTheme.pink, modifier = Modifier.size(22.dp))
-                            }
-                            Spacer(Modifier.size(12.dp))
-                            Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                        }
-                    }
-                }
-            }
             if (contacts.isEmpty()) {
                 Column(
                     Modifier.fillMaxSize().padding(32.dp),
@@ -161,24 +171,85 @@ private fun ThreadList(onOpen: (Contact) -> Unit, onOpenGroup: (String, String) 
                         color = HavenTheme.textSecondary, fontSize = 14.sp, textAlign = TextAlign.Center)
                 }
             } else {
+                val open: (Conversation) -> Unit = { conv ->
+                    if (conv.contact != null) onOpen(conv.contact) else onOpenGroup(conv.circleId, conv.title)
+                }
                 LazyColumn(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(contacts, key = { it.idHex }) { c ->
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                                .clickable { onOpen(c) }.havenCard().padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            HavenAvatar(idOrShort = c.idHex, name = c.name, size = 40.dp)
-                            Spacer(Modifier.size(12.dp))
-                            Text(c.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                        }
+                    items(pinnedConvos, key = { "pin:" + it.circleId }) { conv ->
+                        ConversationRow(conv, pinned = true, onOpen = { open(conv) })
+                    }
+                    items(restConvos, key = { it.circleId }) { conv ->
+                        ConversationRow(conv, pinned = false, onOpen = { open(conv) })
                     }
                 }
             }
         }
+    }
+}
+
+/** One conversation row. Tap to open; long-press for pin/unpin (max 6) + delete. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ConversationRow(conv: Conversation, pinned: Boolean, onOpen: () -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .combinedClickable(onClick = onOpen, onLongClick = { showMenu = true })
+                .havenCard().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (conv.contact != null) {
+                HavenAvatar(idOrShort = conv.contact.idHex, name = conv.contact.name, size = 40.dp)
+            } else {
+                Box(Modifier.size(40.dp).clip(CircleShape).background(HavenTheme.card),
+                    contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.Group, null, tint = HavenTheme.pink, modifier = Modifier.size(22.dp))
+                }
+            }
+            Spacer(Modifier.size(12.dp))
+            Text(conv.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1, modifier = Modifier.weight(1f))
+            if (pinned) {
+                Icon(Icons.Filled.PushPin, "Pinned", tint = HavenTheme.pink, modifier = Modifier.size(16.dp))
+            }
+        }
+        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+            val isPinned = com.blaineam.haven.core.DmPins.isPinned(conv.circleId)
+            val canPin = isPinned || !com.blaineam.haven.core.DmPins.isFull
+            DropdownMenuItem(
+                enabled = canPin,
+                text = { Text(if (isPinned) "Unpin" else "Pin") },
+                onClick = { com.blaineam.haven.core.DmPins.toggle(conv.circleId); showMenu = false },
+            )
+            DropdownMenuItem(
+                text = { Text("Delete conversation", color = HavenTheme.pink) },
+                onClick = { showMenu = false; confirmDelete = true },
+            )
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            containerColor = HavenTheme.card,
+            title = { Text("Delete conversation?", color = Color.White) },
+            text = { Text("This hides the messages on this device. Re-starting the chat won't restore them.",
+                color = HavenTheme.textSecondary) },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.blaineam.haven.core.DmPins.unpin(conv.circleId)
+                    HavenNet.deleteConversation(conv.circleId)
+                    confirmDelete = false
+                }) { Text("Delete", color = HavenTheme.pink) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Cancel", color = HavenTheme.textSecondary) }
+            },
+        )
     }
 }
 
@@ -243,6 +314,8 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
     var showOptions by remember { mutableStateOf(false) }
     val version by HavenNet.feedVersion
     val msgs = remember(version, circleId) { HavenNet.messages(circleId) }
+    val isGroup = remember(circleId) { HavenNet.isGroupDm(circleId) }
+    val relayReachable by HavenNet.relayActive
     val picker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
@@ -288,7 +361,7 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(msgs, key = { it.id }) { m ->
-                    Bubble(m, circleId = circleId, onEdit = { msg ->
+                    Bubble(m, circleId = circleId, isGroup = isGroup, relayReachable = relayReachable, onEdit = { msg ->
                         editingId = msg.id; secretMode = com.blaineam.haven.core.SecretMessages.isSecret(msg.body)
                         draft = com.blaineam.haven.core.SecretMessages.text(msg.body)
                     })
@@ -395,11 +468,25 @@ fun DmThread(circleId: String, partner: Contact, onBack: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Bubble(m: uniffi.haven_ffi.FeedItemFfi, circleId: String, onEdit: ((uniffi.haven_ffi.FeedItemFfi) -> Unit)? = null) {
+private fun Bubble(
+    m: uniffi.haven_ffi.FeedItemFfi,
+    circleId: String,
+    isGroup: Boolean = false,
+    relayReachable: Boolean = false,
+    onEdit: ((uniffi.haven_ffi.FeedItemFfi) -> Unit)? = null,
+) {
     val mine = m.isMe
     val text = m.body
     var showReact by remember(m.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+        // In a group DM, label each INCOMING message with who sent it (parity with iOS).
+        if (isGroup && !mine) {
+            Text(
+                HavenNet.displayName(m.authorShort), color = HavenTheme.pink,
+                fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
+            )
+        }
         Column(
             Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(18.dp))
                 .background(if (mine) HavenTheme.pink else HavenTheme.card)
@@ -440,6 +527,24 @@ private fun Bubble(m: uniffi.haven_ffi.FeedItemFfi, circleId: String, onEdit: ((
                 }
             }
         }
+        // Timestamp + (for own, sent messages) a delivery checkmark: outline when sent, filled when
+        // the circle's relay accepted it (store-and-forward delivered). Parity with iOS Messages.
+        Row(
+            Modifier.padding(top = 3.dp, start = 4.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(msgTime(m.createdAt), color = HavenTheme.textSecondary, fontSize = 10.sp)
+            if (m.edited && !m.unsent) Text("edited", color = HavenTheme.textSecondary, fontSize = 10.sp)
+            if (mine && !m.unsent) {
+                Icon(
+                    if (relayReachable) Icons.Filled.DoneAll else Icons.Filled.Check,
+                    contentDescription = if (relayReachable) "Delivered" else "Sent",
+                    tint = if (relayReachable) HavenTheme.pink else HavenTheme.textSecondary,
+                    modifier = Modifier.size(12.dp),
+                )
+            }
+        }
     }
     if (showReact) {
         AlertDialog(
@@ -467,5 +572,21 @@ private fun Bubble(m: uniffi.haven_ffi.FeedItemFfi, circleId: String, onEdit: ((
                 }
             },
         )
+    }
+}
+
+/** Short relative timestamp for a message (now / 5m / 3h / 2d / 1w). */
+private fun msgTime(createdAtMs: kotlin.ULong): String {
+    val diff = System.currentTimeMillis() - createdAtMs.toLong()
+    if (diff < 0) return "now"
+    val s = diff / 1000
+    return when {
+        s < 5 -> "now"
+        s < 60 -> "${s}s"
+        s < 3600 -> "${s / 60}m"
+        s < 86_400 -> "${s / 3600}h"
+        s < 604_800 -> "${s / 86_400}d"
+        s < 2_592_000 -> "${s / 604_800}w"
+        else -> "${s / 2_592_000}mo"
     }
 }
