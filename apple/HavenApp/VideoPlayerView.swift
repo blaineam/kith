@@ -72,9 +72,11 @@ struct GestureVideoPlayer: View {
     let player: AVPlayer
     var onTap: () -> Void = {}
     var onDoubleTap: () -> Void = {}
-    /// In a swipeable carousel, only a drag from the BOTTOM edge should scrub — a drag higher up must
+    /// In a swipeable carousel, only a drag in the bottom 1/3 should scrub — a drag in the top 2/3 must
     /// swipe between carousel items. Also lifts the scrub bar above the page dots. Off = scrub anywhere.
     var inCarousel: Bool = false
+    /// Reports scrub start/stop so the carousel can hide its page dots while the scrub bar is up.
+    var onScrubbing: (Bool) -> Void = { _ in }
 
     @State private var progress: Double = 0      // 0…1
     @State private var duration: Double = 0
@@ -91,6 +93,7 @@ struct GestureVideoPlayer: View {
         }
         .onAppear(perform: addObserver)
         .onDisappear(perform: removeObserver)
+        .onChange(of: scrubbing) { _, s in onScrubbing(s) }   // let the carousel hide its dots while scrubbing
     }
 
     @ViewBuilder private func content(_ geo: GeometryProxy) -> some View {
@@ -108,11 +111,11 @@ struct GestureVideoPlayer: View {
             // intercept the long-press.
             .highPriorityGesture(holdToPause)
         if inCarousel {
-            // Only a drag starting in the bottom strip scrubs; a horizontal drag higher up falls through
-            // to the carousel so it pages between items.
+            // Only a drag in the bottom 1/3 scrubs; a horizontal drag in the top 2/3 falls through to the
+            // carousel so it pages between items.
             base.overlay(alignment: .bottom) {
                 Color.clear
-                    .frame(height: max(56, geo.size.height * 0.24))
+                    .frame(height: max(56, geo.size.height / 3))
                     .contentShape(Rectangle())
                     .highPriorityGesture(scrub(width: geo.size.width))
             }

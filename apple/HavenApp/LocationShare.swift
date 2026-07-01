@@ -44,9 +44,13 @@ struct LocationMapView: View {
     var body: some View {
         Map(initialPosition: .region(MKCoordinateRegion(
             center: coord, latitudinalMeters: 700, longitudinalMeters: 700)),
-            interactionModes: []) {       // static preview — no scroll conflict in the feed
+            interactionModes: []) {       // static preview — no pan/zoom in the feed
             Marker(title, coordinate: coord).tint(HavenTheme.pink)
         }
+        // macOS: even with interactionModes:[] the Map's NSView eats scroll-wheel events, so the feed
+        // couldn't scroll while the cursor was over a map. Ignore hits on the map itself (the "Open in
+        // Maps" button is a separate overlay below, so it stays clickable) → scroll passes to the feed.
+        .allowsHitTesting(false)
         .frame(height: 200)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay(alignment: .topLeading) {

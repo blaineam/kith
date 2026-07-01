@@ -516,14 +516,11 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                // Bind the iroh transport to this DEVICE's unique key (NOT the account seed). Binding to the
-                // account seed made this device's node — and its in-process relay — share the account id with
-                // every sibling device, so a sibling's leak-guard (which refuses to dial the account id to
-                // avoid the 98GB self-connect loop) then refused to pull media from this device's relay. That
-                // broke iPhone→Android media sync + spawned a duplicate "account id" relay entry alongside
-                // the real per-device relay id. Per-device ids keep each device's relay uniquely dialable.
-                // (Friends reach us via the relay list, and own-device sync runs over the nearby mesh.)
-                let n = try await HavenNode.start(accountSeed: DeviceKeyStore.deviceAccount().secretSeed(), listener: bridge)
+                // Bind the iroh transport to the ACCOUNT seed, so our node id == the account id our invite
+                // link advertises — a friend who scans the link (account id, no relay yet) can dial us for
+                // the first hello. Correct for iOS/macOS and works. (The Android media-fetch problem is an
+                // Android-side relay bug, NOT this binding.)
+                let n = try await HavenNode.start(accountSeed: seed, listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true
@@ -2728,6 +2725,7 @@ struct PostCard: View {
 
     struct CommentReactTarget: Identifiable { let id: String }
     @State private var currentPage = 0
+    @State private var carouselScrubbing = false   // hides the carousel dots while a video is being scrubbed
     @State private var showHeart = false
     @State private var showReactionDetail = false
 
@@ -2866,22 +2864,12 @@ struct PostCard: View {
                 // Tap-to-zoom only for images. For a video, the player owns the single tap
                 // (mute) / hold (pause) / drag (scrub); a zoom tap here would swallow them.
                 .modifier(ConditionalTap(enabled: !video) { zoomTarget = ZoomTarget(refs: media, index: 0) })
-            } else if carouselSupported, media.count <= 7, allSameAspect(media) {
+            } else if media.count <= 7, allSameAspect(media) {
                 mediaCarousel(media)   // uniform-aspect set → a swipeable pager (autoplays the visible video)
             } else if !media.isEmpty {
-                masonry   // mixed aspects / a big set / macOS → the staggered grid; tap any to zoom
+                masonry   // mixed aspects or a big set → the staggered grid; tap any to zoom
             }
         }
-    }
-
-    /// The paged carousel uses TabView(.page), which only exists on iOS — on macOS a TabView renders its
-    /// pages as TAB-BAR items (the "dots" landed in the nav toolbar). So macOS uses the masonry grid.
-    private var carouselSupported: Bool {
-        #if os(iOS)
-        return true
-        #else
-        return false
-        #endif
     }
 
     /// True when a small media set all share (near-)equal aspect ratios — the case where a full-width
@@ -2895,20 +2883,47 @@ struct PostCard: View {
     /// swipe (playVisibleVideo keys off `currentPage`), matching the single-media behavior.
     @ViewBuilder private func mediaCarousel(_ media: [String]) -> some View {
         let aspect = singleAspect(media[0])
-        TabView(selection: $currentPage) {
-            ForEach(Array(media.enumerated()), id: \.offset) { i, ref in
-                ZStack(alignment: .bottomTrailing) {
-                    mediaPage(ref)
-                    if isVideo(ref) { muteButton }
+        // A ScrollView pager (NOT TabView) so it works on macOS too — a TabView renders its pages as
+        // tab-bar items on macOS, dumping the dots into the nav toolbar. Custom dots overlay the carousel.
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(Array(media.enumerated()), id: \.offset) { i, ref in
+                    ZStack(alignment: .bottomTrailing) {
+                        // The player scrubs only from the bottom 1/3 (top 2/3 pages the carousel); a photo
+                        // page has no scrub strip so the whole page pages.
+                        mediaPage(ref, inCarousel: true, onScrubbing: { carouselScrubbing = $0 })
+                        if isVideo(ref) { muteButton }
+                    }
+                    .containerRelativeFrame(.horizontal)   // each page == the carousel's width
+                    .modifier(ConditionalTap(enabled: !isVideo(ref)) { zoomTarget = ZoomTarget(refs: media, index: i) })
+                    .id(i)
                 }
-                .modifier(ConditionalTap(enabled: !isVideo(ref)) { zoomTarget = ZoomTarget(refs: media, index: i) })
-                .tag(i)
             }
+            .scrollTargetLayout()
         }
-        .havenPagedTabViewStyle(showsIndex: media.count > 1)
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: Binding<Int?>(get: { currentPage }, set: { currentPage = $0 ?? currentPage }))
+        .scrollIndicators(.hidden)
+        .scrollDisabled(carouselScrubbing)   // while scrubbing a video, don't let a swipe page the carousel
         .aspectRatio(aspect, contentMode: .fit)
         .frame(maxWidth: .infinity, maxHeight: singleMediaMaxHeight)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(alignment: .bottom) {
+            // Dots hide while scrubbing so the scrub bar doesn't collide with them.
+            if media.count > 1 && !carouselScrubbing { carouselDots(media.count) }
+        }
+    }
+
+    private func carouselDots(_ count: Int) -> some View {
+        HStack(spacing: 6) {
+            ForEach(0..<count, id: \.self) { i in
+                Circle().fill(.white.opacity(i == currentPage ? 0.95 : 0.4)).frame(width: 6, height: 6)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(.black.opacity(0.35), in: Capsule())
+        .padding(.bottom, 8)
+        .allowsHitTesting(false)
     }
 
     /// Horizontally-scrolling staggered gallery: items flow across two fixed-height rows and
@@ -2968,11 +2983,12 @@ struct PostCard: View {
         }
     }
 
-    @ViewBuilder private func mediaPage(_ ref: String) -> some View {
+    @ViewBuilder private func mediaPage(_ ref: String, inCarousel: Bool = false,
+                                        onScrubbing: @escaping (Bool) -> Void = { _ in }) -> some View {
         if isVideo(ref) {
             // No contextMenu for videos — the long-press is reserved for the player's
             // hold-to-pause. Save/Share live in the mute control's menu instead.
-            mediaPageContent(ref)
+            mediaPageContent(ref, inCarousel: inCarousel, onScrubbing: onScrubbing)
         } else {
             mediaPageContent(ref)
                 .contextMenu {
@@ -2990,14 +3006,17 @@ struct PostCard: View {
         return m.kind == .video ? m.videoURL : MediaStore.shared.storagePath(for: ref)
     }
 
-    @ViewBuilder private func mediaPageContent(_ ref: String) -> some View {
+    @ViewBuilder private func mediaPageContent(_ ref: String, inCarousel: Bool = false,
+                                               onScrubbing: @escaping (Bool) -> Void = { _ in }) -> some View {
         if let m = MediaStore.shared.item(ref) {
             if m.kind == .video, let url = m.videoURL {
                 // The player owns its gestures: tap → mute, double-tap → heart,
                 // hold → pause, horizontal drag → scrub. Letterboxed, loops continuously.
                 GestureVideoPlayer(player: playerFor(ref, url),
                                    onTap: { togglePostMute() },
-                                   onDoubleTap: { heartIt() })
+                                   onDoubleTap: { heartIt() },
+                                   inCarousel: inCarousel,
+                                   onScrubbing: onScrubbing)
             } else if let img = MediaStore.shared.thumbnail(ref, maxDimension: 1200) ?? m.image {
                 // A ~1200px thumbnail (not the 2560px original) keeps the single-image post crisp at the
                 // feed's ≤480pt frame without re-sampling a giant bitmap every scroll frame. Zoom uses full-res.
