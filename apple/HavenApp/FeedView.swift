@@ -866,6 +866,8 @@ final class FeedStore: ObservableObject {
                 let envs = social.exportRecentEnvelopes(circleId: cid, limit: 50)
                 if !envs.isEmpty { work.append((cid, envs)) }
             }
+            let total = work.reduce(0) { $0 + $1.1.count }
+            HavenLog.sync("export re-broadcast: \(total) envelopes across \(work.count)/\(cidsForNearby.count) circles")
             await MainActor.run {
                 guard let self else { return }
                 for (cid, envs) in work { for env in envs { self.nearbyBroadcast(1, self.eventPayload(cid, env)) } }
@@ -1932,7 +1934,9 @@ final class FeedStore: ObservableObject {
         let circleId = String(data: circleIdData, encoding: .utf8) ?? ""
         let envelope = payload.subdata(in: (payload.startIndex + off)..<payload.endIndex)
         guard !circleId.isEmpty, !envelope.isEmpty else { return }
-        if (try? social.receive(circleId: circleId, envelope: envelope)) == true {
+        let ingested = (try? social.receive(circleId: circleId, envelope: envelope)) == true
+        HavenLog.sync("event circle=\(circleId.prefix(18)) ingested=\(ingested) bytes=\(envelope.count)")
+        if ingested {
             // Hearing a message is proof of life — refresh "last seen" for a DM's partner.
             if circleId.hasPrefix("dm:"), let partner = dmPartnerHex(circleId) { recordHeard(partner) }
             schedulePersist()             // coalesced — a sync burst writes once, not per event
@@ -2878,14 +2882,17 @@ struct PostCard: View {
     @ViewBuilder private func masonryTile(_ ref: String, height: CGFloat) -> some View {
         // Use a downscaled thumbnail (≈3× the row height for retina), not the full-res image — rendering a
         // 2560px bitmap in a 150px tile was the scroll lag. Full-res stays for the zoom viewer.
-        if let m = MediaStore.shared.item(ref), let img = MediaStore.shared.thumbnail(ref, maxDimension: height * 3) {
+        // Use MediaKind(ref:) (a cheap string parse) for the play badge — NOT item(ref), which would
+        // generate the video poster on the main thread as each tile scrolls into view (the scroll lag).
+        // thumbnail(_:) now produces video posters off-main and fills them in via a refresh.
+        if let img = MediaStore.shared.thumbnail(ref, maxDimension: height * 3) {
             // Aspect width for the fixed row height, clamped so a panorama/portrait stays sane.
             let aspect = min(2.4, max(0.6, img.size.width / max(img.size.height, 1)))
             Image(platformImage: img).resizable().scaledToFill()
                 .frame(width: height * aspect, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(alignment: .center) {
-                    if m.kind == .video {
+                    if MediaKind(ref: ref) == .video {
                         Image(systemName: "play.circle.fill").font(.largeTitle)
                             .foregroundStyle(.white.opacity(0.9)).shadow(radius: 4)
                     }

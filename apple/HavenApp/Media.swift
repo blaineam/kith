@@ -607,6 +607,9 @@ final class MediaStore: ObservableObject {
     /// 2560px photo in a 56–150px slot makes SwiftUI re-sample a huge bitmap on the main thread every
     /// scroll frame — that's the feed/You-tab scroll lag. Downscale once to ~maxDimension, cache, and the
     /// tiles draw a tiny bitmap instead. The full image stays available via item(_:) for the zoom viewer.
+    /// Video refs whose poster is currently being generated off-main — so scroll doesn't kick off a second
+    /// generation for the same tile on every frame. Touched only on the main thread.
+    private var posterInFlight = Set<String>()
     private let thumbCache: NSCache<NSString, Boxed> = {
         let c = NSCache<NSString, Boxed>()
         c.totalCostLimit = 48 * 1024 * 1024   // ~48 MB of decoded thumbnails, then evict LRU
@@ -622,8 +625,29 @@ final class MediaStore: ObservableObject {
             // Decode a DOWNSAMPLED bitmap straight from the file via ImageIO — never materialize the full
             // 2560px image in memory (that spike OOM-jetsammed iOS on launch).
             t = Self.downsampled(at: url, maxPixel: maxDimension)
+        } else if kind == .video, let url = fileURL(ref), FileManager.default.fileExists(atPath: url.path) {
+            // Video poster generation (AVAssetImageGenerator) is EXPENSIVE and was running on the main thread
+            // the first time each video tile scrolled into view — that's the scroll choppiness. If it's
+            // already cached use it; otherwise generate OFF the main thread, cache, and nudge a refresh so the
+            // tile fills in a moment later. Return nil now (the tile shows its loading placeholder briefly).
+            if let poster = cacheGet(ref)?.image {
+                t = max(poster.size.width, poster.size.height) <= maxDimension ? poster : Self.downscale(poster, maxDimension: maxDimension)
+            } else {
+                if !posterInFlight.contains(ref) {
+                    posterInFlight.insert(ref)
+                    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                        guard let self else { return }
+                        let poster = Self.poster(for: url)
+                        DispatchQueue.main.async {
+                            self.posterInFlight.remove(ref)
+                            if let poster { self.cachePut(ref, MediaItem(id: ref, kind: .video, image: poster, videoURL: url)) }
+                            FeedStore.shared.scheduleRefresh()   // re-render so the now-cached poster shows
+                        }
+                    }
+                }
+                t = nil
+            }
         } else if let full = item(ref)?.image {
-            // Video poster (already small) / fallback.
             t = max(full.size.width, full.size.height) <= maxDimension ? full : Self.downscale(full, maxDimension: maxDimension)
         } else {
             t = nil

@@ -1065,8 +1065,24 @@ fn receive_key_commit(st: &mut NetState, idx: usize, body: &[u8]) -> Result<bool
     {
         let c = &mut st.circles[idx];
         if sender_hex == me_hex {
-            is_new = !c.my_epoch_keys.contains_key(&opened.epoch);
-            c.my_epoch_keys.entry(opened.epoch).or_insert(opened.epoch_key);
+            // OWN-DEVICE convergence. `ensure_epoch` mints a RANDOM key per epoch on each device, so my
+            // iPhone and Mac each generated a DIFFERENT key for the same circle+epoch. A plain `or_insert`
+            // kept my stale key and refused my other device's — so I could never open my sibling's events
+            // (the "my Mac never shows my iPhone's latest post / a received DM" bug: every event was
+            // buffered forever). Deterministically converge on the numerically-larger key — both devices
+            // pick the SAME winner independently — and count an adopted change as `new` so buffered events
+            // drain and future re-seals use the agreed key. The media circle-secret converges the same way.
+            let winner = match c.my_epoch_keys.get(&opened.epoch).copied() {
+                Some(k) if k >= opened.epoch_key => k,
+                _ => opened.epoch_key,
+            };
+            is_new = c.my_epoch_keys.get(&opened.epoch).copied() != Some(winner);
+            c.my_epoch_keys.insert(opened.epoch, winner);
+            if opened.circle_secret != [0u8; 32]
+                && (c.my_circle_secret == [0u8; 32] || opened.circle_secret > c.my_circle_secret)
+            {
+                c.my_circle_secret = opened.circle_secret;
+            }
             if opened.epoch > c.my_epoch {
                 c.my_epoch = opened.epoch;
             }
