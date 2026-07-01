@@ -29,6 +29,14 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeOff
@@ -77,6 +85,7 @@ import com.blaineam.haven.core.HavenNet
 import com.blaineam.haven.core.LocalMedia
 import com.blaineam.haven.core.ProfileStore
 import com.blaineam.haven.core.PendingRequest
+import com.blaineam.haven.core.SyncMetrics
 import com.blaineam.haven.core.loadAndDownscale
 import com.blaineam.haven.core.nowMs
 import kotlinx.coroutines.launch
@@ -821,29 +830,99 @@ private fun ConnectionDot() {
     }
 }
 
-/** A small green/yellow/red dot by the composer: can this circle's posts actually reach others right
- *  now? Green = a relay holds them or a member's nearby; yellow = mesh searching; red = device-only.
- *  Inline (no added height — addresses the "indicator makes the prompt too tall" feedback). */
+/** A small yellow/red pill by the composer: can this circle's posts actually reach others right now?
+ *  Yellow = still syncing (mesh searching); red = device-only. When everything is SYNCED the pill
+ *  collapses to nothing so it doesn't pad out the composer (iOS SyncStatusBadge parity). Tapping it
+ *  opens a compact bottom sheet with the live sent / received / waiting counters. Polls every 2.5s. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SyncStatusBadge(circleId: String) {
     var status by remember(circleId) { mutableStateOf(HavenNet.syncStatus(circleId)) }
+    var showDetail by remember { mutableStateOf(false) }
     LaunchedEffect(circleId) {
         while (true) {
             status = HavenNet.syncStatus(circleId)
             kotlinx.coroutines.delay(2500)
         }
     }
+    // Only surface the pill when there's something to know. Collapse to nothing when fully synced.
     val (color, label) = when (status) {
-        HavenNet.SyncStatus.SYNCED -> Color(0xFF22C55E) to null
+        HavenNet.SyncStatus.SYNCED -> return
         HavenNet.SyncStatus.SYNCING -> Color(0xFFF59E0B) to "Syncing"
         HavenNet.SyncStatus.LOCAL -> Color(0xFFEF4444) to "Device only"
     }
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp)) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(horizontal = 6.dp)
+            .clip(RoundedCornerShape(50))
+            .clickable { showDetail = true }
+            .background(HavenTheme.card)
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+    ) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        if (label != null) {
-            Spacer(Modifier.size(5.dp))
-            Text(label, color = HavenTheme.textSecondary, fontSize = 11.sp)
+        Spacer(Modifier.size(5.dp))
+        Text(label, color = HavenTheme.textSecondary, fontSize = 11.sp)
+    }
+    if (showDetail) {
+        ModalBottomSheet(
+            onDismissRequest = { showDetail = false },
+            sheetState = rememberModalBottomSheetState(),
+            containerColor = HavenTheme.card,
+        ) {
+            SyncDetailContent()
         }
+    }
+}
+
+/** The live "sync activity" detail behind the pill — surfaced only when the user taps it, so it's
+ *  there to monitor a sync but never clutters (or re-renders) the feed otherwise. Reads the
+ *  [SyncMetrics] Compose ints directly so a burst of media events recomposes ONLY this sheet
+ *  (iOS SyncDetailView parity: sent / received / waiting + nearby-devices line + live caption). */
+@Composable
+private fun SyncDetailContent() {
+    val out = SyncMetrics.mediaOut.intValue
+    val inn = SyncMetrics.mediaIn.intValue
+    val pending = SyncMetrics.mediaPending.intValue
+    val nearby = HavenNet.nearbyActive()
+    Column(
+        Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 28.dp, top = 4.dp),
+    ) {
+        Text("Sync activity", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.size(14.dp))
+        SyncDetailRow(Icons.Filled.ArrowUpward, "$out media sent")
+        Spacer(Modifier.size(10.dp))
+        SyncDetailRow(Icons.Filled.ArrowDownward, "$inn media received")
+        Spacer(Modifier.size(10.dp))
+        SyncDetailRow(Icons.Filled.AccessTime, "$pending media waiting")
+        Spacer(Modifier.size(14.dp))
+        androidx.compose.material3.HorizontalDivider(color = HavenTheme.cardBorder)
+        Spacer(Modifier.size(14.dp))
+        SyncDetailRow(
+            if (nearby) Icons.Filled.Wifi else Icons.Filled.WifiOff,
+            if (nearby) "Nearby devices: connected" else "Nearby devices: not connected",
+            tint = if (nearby) HavenTheme.pink else HavenTheme.textSecondary,
+            valueColor = if (nearby) Color.White else HavenTheme.textSecondary,
+        )
+        Spacer(Modifier.size(14.dp))
+        Text(
+            "Updates live while your devices and circles sync.",
+            color = HavenTheme.textSecondary, fontSize = 12.sp,
+        )
+    }
+}
+
+@Composable
+private fun SyncDetailRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    tint: Color = HavenTheme.textSecondary,
+    valueColor: Color = Color.White,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.size(10.dp))
+        Text(text, color = valueColor, fontSize = 15.sp)
     }
 }
 

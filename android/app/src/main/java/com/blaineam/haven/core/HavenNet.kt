@@ -3,6 +3,7 @@ package com.blaineam.haven.core
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
@@ -33,6 +34,23 @@ data class Contact(val idHex: String, val name: String, val verifyHex: String)
 
 /** Someone who said hello but we haven't approved yet. */
 data class PendingRequest(val idHex: String, val name: String, val verifyHex: String, val bundle: ByteArray)
+
+/**
+ * Live media-sync counters, kept OUT of [HavenNet.feedVersion] so incrementing them never
+ * re-renders the feed (that was the sync-time lag on iOS). Only the tap-to-open sync-detail
+ * sheet observes these, so a burst of media events recomposes just that sheet — parity with the
+ * iOS `SyncMetrics` observable (FeedView.swift). Backed by Compose `mutableIntStateOf` so a
+ * Composable that reads them is scoped to only itself.
+ */
+object SyncMetrics {
+    val mediaOut = mutableIntStateOf(0)       // media items served/pushed to a requester
+    val mediaIn = mutableIntStateOf(0)        // media items fully received + stored
+    val mediaPending = mutableIntStateOf(0)   // media refs still missing locally
+
+    fun incOut() { mediaOut.intValue += 1 }
+    fun incIn() { mediaIn.intValue += 1 }
+    fun setPending(n: Int) { mediaPending.intValue = n }
+}
 
 /**
  * The Android counterpart of the iOS FeedStore networking core: owns the [HavenSocial] engine
@@ -1559,6 +1577,7 @@ object HavenNet : InboundListener {
                 item.comments.forEach { cm -> cm.media.forEach { if (!LocalMedia.has(it)) missing.putIfAbsent(it, c.id) } }
             }
         }
+        SyncMetrics.setPending(missing.size)   // media refs still missing locally (iOS nbMediaPending)
         // THROTTLE: a missing ref used to be direct-requested from EVERY contact on every sweep, so a
         // backlog of missing media flooded the network with hundreds of thousands of frames per cycle
         // (drowning real delivery — the iOS flood bug). Direct-request each ref at most once per 5 min and
@@ -1633,6 +1652,7 @@ object HavenNet : InboundListener {
      */
     private suspend fun sendMediaChunks(ref: String, bytes: ByteArray, requesterHex: String) {
         val total = maxOf(1, (bytes.size + mediaChunkSize - 1) / mediaChunkSize)
+        SyncMetrics.incOut()   // a media item is being served/pushed (iOS nbMediaOut += 1)
         val refBytes = ref.toByteArray(Charsets.UTF_8)
         val isOwn = runCatching { social.myNodeHex() }.getOrNull() == requesterHex
         var index = 0
@@ -1700,6 +1720,7 @@ object HavenNet : InboundListener {
             }.isSuccess
             entry.chunks.clear()
             if (!ok) return
+            SyncMetrics.incIn()   // a media item was fully received + stored (iOS nbMediaIn += 1)
             scope.launch(Dispatchers.Main) { feedVersion.value++ }
             // "Save others' posts to Photos" — per-circle override (received media stores under the
             // default circle), falling back to the app-wide default.
