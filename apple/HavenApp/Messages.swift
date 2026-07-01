@@ -459,7 +459,7 @@ struct DMThreadView: View {
                     // Your most-used emoji as a single horizontal palette row (4 fits without
                     // wrapping to a second stacked row), then the full picker.
                     ControlGroup {
-                        ForEach(EmojiStore.shared.frequent(4), id: \.self) { e in
+                        ForEach(EmojiStore.shared.frequent(3), id: \.self) { e in
                             Button(e) { EmojiStore.shared.record(e); store.reactMessage(in: circleId, m.id, e) }
                         }
                     }

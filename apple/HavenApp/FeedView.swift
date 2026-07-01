@@ -3195,7 +3195,7 @@ struct PostCard: View {
                     .transition(.scale.combined(with: .opacity))
             }
             Spacer(minLength: 8)
-            ForEach(EmojiStore.shared.frequent(4), id: \.self) { e in
+            ForEach(EmojiStore.shared.frequent(3), id: \.self) { e in
                 Button(e) { react(e) }.font(.body).buttonStyle(PressableStyle())
             }
             Button { showReactionPicker = true } label: {
@@ -3264,7 +3264,7 @@ struct PostCard: View {
         .contextMenu {
             if !c.unsent {
                 ControlGroup {
-                    ForEach(EmojiStore.shared.frequent(4), id: \.self) { e in
+                    ForEach(EmojiStore.shared.frequent(3), id: \.self) { e in
                         Button(e) { EmojiStore.shared.record(e); feed.react(c.id, e) }
                     }
                 }

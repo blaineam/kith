@@ -675,7 +675,14 @@ final class MediaStore: ObservableObject {
            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
            let w = props[kCGImagePropertyPixelWidth] as? CGFloat, let h = props[kCGImagePropertyPixelHeight] as? CGFloat,
            w > 0, h > 0 {
-            let s = CGSize(width: w, height: h); sizeCache[ref] = s; return s
+            // Honor EXIF orientation: for a 90°/270° rotation (values 5–8) the DISPLAYED image is
+            // width↔height swapped from the raw pixels. Without this, a portrait photo that carries a
+            // rotation tag (common for media from another device / a story) reports as landscape here, so
+            // the feed sizes it into a short wide box even though it renders tall. (Orientation-baked
+            // photos report 1, so this is a no-op for them.)
+            let orientation = (props[kCGImagePropertyOrientation] as? Int) ?? 1
+            let s = (5...8).contains(orientation) ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
+            sizeCache[ref] = s; return s
         }
         if kind == .video, let poster = cacheGet(ref)?.image, poster.size.width > 0 {
             sizeCache[ref] = poster.size; return poster.size
