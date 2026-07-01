@@ -634,6 +634,22 @@ object HavenNet : InboundListener {
         runCatching { social.contactNodeIds(circleId) }.getOrDefault(emptyList())
             .map { hex -> contacts.firstOrNull { it.idHex == hex } ?: Contact(hex, displayName(hex), "") }
 
+    /** Node ids to DIAL to reach a circle's members: each member's ACCOUNT id (the user-facing contact
+     *  handle; still reaches a peer on the pre-device-seed build where account id == node id) PLUS their
+     *  DEVICE node ids from the signed roster — the actual reachable transport id, since under device-seed a
+     *  friend's account id no longer resolves to any node. Deduped, self-excluded. Parity with iOS dialTargets. */
+    private fun dialTargets(circleId: String): List<String> {
+        val mineAcct = runCatching { social.myNodeHex() }.getOrNull()?.lowercase()
+        val mineDev = runCatching { social.myDeviceNodeHex() }.getOrNull()?.lowercase()
+        val out = LinkedHashSet<String>()
+        fun add(h: String) { val l = h.lowercase(); if (l != mineAcct && l != mineDev) out.add(h) }
+        for (a in runCatching { social.contactNodeIds(circleId) }.getOrDefault(emptyList())) {
+            add(a)
+            for (d in runCatching { social.deviceNodeIdsFor(a) }.getOrDefault(emptyList())) add(d)
+        }
+        return out.toList()
+    }
+
     fun unblock(idHex: String) {
         blocked.removeAll { it == idHex }
         saveBlocked()
@@ -689,7 +705,7 @@ object HavenNet : InboundListener {
         if (!ready) return
         val nowMs = System.currentTimeMillis()
         val resendHistory = nowMs - lastHistoryResendMs > 180_000   // ~3 min, not every tick
-        val snapshot = contacts.map { it.idHex }
+        val snapshot = dialTargets(DEFAULT_CIRCLE)   // account id (handle) + device ids (actual reach)
         // Proactively announce MY device roster (type 27) so a friend can AUTHORIZE + dial my specific device
         // under the per-device transport — without it a freshly-flipped device stays "forbidden" at friends'
         // relays (the roster rode only rare circle key-commits before). Small, signed, idempotent. iOS parity.
@@ -795,7 +811,7 @@ object HavenNet : InboundListener {
         persist()
         scope.launch(Dispatchers.Main) { feedVersion.value++ }
         val payload = Wire.eventPayload(circleId, env)
-        for (idHex in social.contactNodeIds(circleId)) sendFrame(Wire.EVENT, payload, idHex)
+        for (idHex in dialTargets(circleId)) sendFrame(Wire.EVENT, payload, idHex)
         // Store-and-forward via the circle relay so offline members still get it.
         scope.launch { uploadEvent(circleId, env) }
         // Nearby mesh (never DMs — they stay point-to-point, matching iOS).
@@ -842,7 +858,7 @@ object HavenNet : InboundListener {
             val sealed = runCatching { social.sealCircleMedia(c.id, hex.toByteArray()) }.getOrNull() ?: continue
             val frame = Wire.eventPayload(c.id, sealed)  // [LP cid][sealed] — same layout as frame 19
             if (NearbyTransport.active) NearbyTransport.broadcast(Wire.frame(Wire.RELAY_NODE, frame))
-            for (idHex in runCatching { social.contactNodeIds(c.id) }.getOrDefault(emptyList())) {
+            for (idHex in dialTargets(c.id)) {
                 sendFrame(Wire.RELAY_NODE, frame, idHex)
             }
         }
@@ -1022,7 +1038,7 @@ object HavenNet : InboundListener {
                 val sealed = runCatching { social.sealCircleMedia(cid, hex.toByteArray()) }.getOrNull()
                 if (sealed != null) {
                     val frame = Wire.eventPayload(cid, sealed)  // [LP cid][sealed] — same layout as frame 19
-                    for (idHex in social.contactNodeIds(cid)) sendFrame(Wire.RELAY_NODE, frame, idHex)
+                    for (idHex in dialTargets(cid)) sendFrame(Wire.RELAY_NODE, frame, idHex)
                 }
                 backfillMailbox(cid)
             }
