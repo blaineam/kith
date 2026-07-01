@@ -77,6 +77,7 @@ final class CallManager: NSObject, ObservableObject {
     private var sessionId = ""
     /// All participant hexes INCLUDING me (canonical roster).
     private var roster: Set<String> = []
+    private var lastPeerState: [String: RTCIceConnectionState] = [:]   // for the grace-then-drop on .disconnected
     /// One pairwise connection per OTHER participant.
     private var peers: [String: PeerConn] = [:]
     /// Whether we've started media at all (after accept / first offer).
@@ -657,7 +658,19 @@ final class CallManager: NSObject, ObservableObject {
                     // there's nobody left.
                     self.dropPeer(peer)
                     if self.roster.subtracting([self.myHex]).isEmpty { self.endCall() }
+                } else if state == .disconnected {
+                    // The link went quiet — a transient blip, OR the peer left and their fire-and-forget
+                    // hangup frame never reached us (the "hanging up on Android didn't end the call on iOS"
+                    // case). WebRTC otherwise sits in .disconnected for a long ICE-failure timeout before
+                    // reaching .failed. Give it a short grace, then drop if it hasn't recovered.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+                        guard let self, self.peers[peer] != nil,
+                              self.lastPeerState[peer] == .disconnected else { return }
+                        self.dropPeer(peer)
+                        if self.roster.subtracting([self.myHex]).isEmpty { self.endCall() }
+                    }
                 }
+                self.lastPeerState[peer] = state
             }
         }
         // If video is already on, add our camera track to this new connection too.
@@ -676,6 +689,7 @@ final class CallManager: NSObject, ObservableObject {
         remoteScreenTracks[peer] = nil
         remoteCameraOff.remove(peer)
         roster.remove(peer)
+        lastPeerState[peer] = nil
         refreshParticipants()
     }
 
