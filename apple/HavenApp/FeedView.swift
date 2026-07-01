@@ -3171,21 +3171,25 @@ struct PostCard: View {
         HStack(spacing: 8) {
             ForEach(visibleReactions, id: \.emoji) { r in
                 // Tap a chip to toggle your own reaction; press-and-hold to see who reacted.
-                Text("\(r.emoji) \(r.count)")
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(r.mine ? AnyShapeStyle(HavenTheme.brandHorizontal.opacity(0.22)) : AnyShapeStyle(Color(.secondarySystemFill)), in: Capsule())
-                    .overlay(Capsule().strokeBorder(r.mine ? HavenTheme.pink.opacity(0.5) : .clear))
-                    .contentShape(Capsule())
-                    .onTapGesture { if r.mine { onUnreact(r.emoji) } else { react(r.emoji) } }
-                    .onLongPressGesture(minimumDuration: 0.3) { showReactionDetail = true }
-                    .transition(.scale.combined(with: .opacity))
+                HStack(spacing: 3) {
+                    Text(r.emoji).font(.caption)
+                    Text("\(r.count)").font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(r.mine ? AnyShapeStyle(HavenTheme.pink) : AnyShapeStyle(.secondary))
+                }
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(r.mine ? HavenTheme.pink.opacity(0.6) : Color.white.opacity(0.08), lineWidth: 1))
+                .contentShape(Capsule())
+                .onTapGesture { if r.mine { onUnreact(r.emoji) } else { react(r.emoji) } }
+                .onLongPressGesture(minimumDuration: 0.3) { showReactionDetail = true }
+                .transition(.scale.combined(with: .opacity))
             }
             if hiddenReactionCount > 0 {
                 Text("+\(hiddenReactionCount)")
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Color(.secondarySystemFill), in: Capsule())
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
                     .contentShape(Capsule())
                     .onTapGesture { showReactionDetail = true }
                     .transition(.scale.combined(with: .opacity))
