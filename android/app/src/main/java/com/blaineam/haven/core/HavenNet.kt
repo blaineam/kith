@@ -165,6 +165,13 @@ object HavenNet : InboundListener {
         CircleLock.init(appContext)
         CircleRemovals.init(appContext)
         DeviceKeyStore.init(appContext)
+        // Bind the engine to this device's UNIQUE identity (not the account id) — mirrors iOS configure().
+        // The account id stays the sealing/trust anchor + contact handle; a friend resolves it to our device
+        // node id via the roster (registerDevice) + contactDeviceNodeIds. Without this, every device on one
+        // account published the SAME iroh node id and collided on discovery, so its relay was unreachable.
+        social.useDeviceIdentity(DeviceKeyStore.deviceAccount().secretSeed())
+        social.registerDevice(DeviceKeyStore.deviceBundle(), DeviceKeyStore.deviceName,
+                              (System.currentTimeMillis() / 1000).toULong())
         DeviceCredentialStore.init(appContext)
         DeviceRosterManager.init(appContext)
         SelfSyncCoordinator.init(appContext)
@@ -187,7 +194,9 @@ object HavenNet : InboundListener {
         if (node != null) return
         scope.launch {
             try {
-                node = HavenNode.start(core.seed, this@HavenNet)
+                // Transport bound to the per-DEVICE seed (unique node/relay id), NOT the account seed —
+                // so this device never collides with a sibling on iroh discovery. Account id = anchor only.
+                node = HavenNode.start(DeviceKeyStore.deviceAccount().secretSeed(), this@HavenNet)
                 withContext(Dispatchers.Main) { started.value = true }
                 Log.i(TAG, "node started: ${node?.nodeIdHex()}")
                 syncWithContacts()
