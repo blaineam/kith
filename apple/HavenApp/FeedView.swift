@@ -3137,6 +3137,16 @@ struct PostCard: View {
         let visibleRef: String? = item.media.isEmpty
             ? nil
             : item.media[min(max(currentPage, 0), item.media.count - 1)]
+        #if os(iOS)
+        // A post's music plays on the system music player; without mixing, that music takes the audio
+        // session and INTERRUPTS the video's AVPlayer, so the (muted) video just froze. Mix so the video
+        // plays alongside the music. Safe when the video is unmuted too (it simply mixes its own audio).
+        if let visibleRef, isVideo(visibleRef) {
+            let s = AVAudioSession.sharedInstance()
+            try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try? s.setActive(true)
+        }
+        #endif
         for (ref, player) in players {
             if ref == visibleRef && isVideo(ref) {
                 player.seek(to: .zero)
