@@ -516,15 +516,13 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                // Bind the iroh transport to the per-DEVICE seed, so this device's node id (and therefore the
-                // relay it hosts) is UNIQUE per device — never the account id. On a multi-device account
-                // (iPhone + Mac) the account-id binding made both devices publish the SAME node id, so a friend
-                // couldn't pin the specific device holding media (the relay collided). The account id stays the
-                // trust/sealing anchor + contact handle; friends resolve it to our device node id(s) via the
-                // device roster (contact_device_node_ids). The engine already runs on the device identity
-                // (useDeviceIdentity above), so transport + engine now share one collision-free per-device id.
-                let deviceSeed = DeviceKeyStore.deviceAccount().secretSeed()
-                let n = try await HavenNode.start(accountSeed: deviceSeed, listener: bridge)
+                // TRANSPORT = ACCOUNT seed (REVERTED from the per-device seed 2026-07-01). Binding transport to
+                // the device seed made the relay id unique per device (the right end-state for the relay-id
+                // collision), BUT it re-triggered the 100GB iroh self-connect leak via path(s) not fully closed
+                // in-session (a stale relay-list entry == our account id + roster/messaging self-dials). Reverted
+                // to the known-good account-id transport to protect the Mac; redo device-seed as a FOCUSED effort
+                // with a full self-dial audit (relay client + every messaging send + nearby-mesh path feed).
+                let n = try await HavenNode.start(accountSeed: seed, listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true
@@ -860,8 +858,15 @@ final class FeedStore: ObservableObject {
             // reachable. Push my roster there so the relay-hosting friend learns + authorizes my device id
             // (that's what lets me then read their mailbox). Skip my own hosted relay.
             if !rosterWire.isEmpty {
-                for relayHex in RelayMailboxStore.shared.relays(forCircle: circle.id)
-                where relayHex != RelayHost.shared.nodeId && !relayHex.hasPrefix("s3:") {
+                // Exclude OUR OWN ids: sending to our device id (RelayHost.nodeId) or our account id is a
+                // self-dial. A stale relay-list entry == our account id (pre-device-seed leftover) that
+                // resolves back to us sends iroh path discovery into the runaway loop (the 100GB leak). We
+                // never need to announce our roster to ourselves anyway.
+                let myAcct = AccountStore.currentNodeHex().lowercased()
+                let myDev = RelayHost.shared.nodeId.lowercased()
+                for relayHex in RelayMailboxStore.shared.relays(forCircle: circle.id) {
+                    let h = relayHex.lowercased()
+                    if h == myDev || h == myAcct || h.hasPrefix("s3:") { continue }
                     sendIroh(27, rosterWire, to: relayHex)
                 }
             }
