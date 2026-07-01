@@ -516,13 +516,19 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                // Bind to this instance's UNIQUE id (its relay id). One endpoint per client → no leak; no
-                // two clients share an id → no discovery collision. Friends reach us via the relay list.
-                let n = try await HavenNode.start(accountSeed: DeviceKeyStore.deviceAccount().secretSeed(), listener: bridge)
+                // Bind the iroh transport to the ACCOUNT seed, so our node id == the account id that our
+                // invite link (haven_link) advertises. A friend who scans our link only has our account id
+                // and no relay yet, so their very first hello can ONLY dial that account id — if we were
+                // instead listening on a per-device id (the old device-seed binding), that hello hit a dead
+                // id and the connection request never arrived. This is why friends couldn't connect. Binding
+                // to the account seed makes us directly reachable via n0 discovery/relays with no
+                // pre-shared relay. (Own-device sync between our own devices runs over the nearby mesh, so
+                // the multi-device discovery collision on a shared account id doesn't break sibling sync.)
+                let n = try await HavenNode.start(accountSeed: seed, listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true
-                HavenLog.net("node started id=\(n.nodeIdHex().prefix(10))")
+                HavenLog.net("node started id=\(n.nodeIdHex().prefix(10)) account=\(social?.myNodeHex().prefix(10) ?? "?")")
                 // The node's reachable address (direct addrs + iroh relay url). If this is empty or has no
                 // relay, NOTHING can reach us regardless of identity — that's a network/discovery problem.
                 Task {
