@@ -137,8 +137,11 @@ fun loadAndDownscale(
     context: Context, uri: Uri,
     // Optimize per the active circle's override (falls back to the app-wide default) — media is
     // picked while composing for that circle.
-    maxDim: Int = if (CircleSettings.optimize(HavenNet.activeCircle.value)) 2560 else 4096,
-    quality: Int = if (CircleSettings.optimize(HavenNet.activeCircle.value)) 88 else 95,
+    // Auto-optimize → 2048px JPEG @ 70% (cross-platform share spec, iOS parity); off → original quality.
+    // Either way we re-encode from a decoded bitmap, which bakes the rotation into the pixels AND strips
+    // all EXIF (orientation, GPS, device) — so nothing sideways and no location leaks.
+    maxDim: Int = if (CircleSettings.optimize(HavenNet.activeCircle.value)) 2048 else 4096,
+    quality: Int = if (CircleSettings.optimize(HavenNet.activeCircle.value)) 70 else 95,
 ): ByteArray? = runCatching {
     val raw = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
         ?: return null.also { android.util.Log.w("LocalMedia", "openInputStream null for $uri") }
