@@ -410,9 +410,21 @@ final class FeedStore: ObservableObject {
         persist(); refreshCircles(); refresh()
     }
 
+    /// A per-DM "cleared before" watermark (ms). Deleting a conversation records now() here; because a DM's
+    /// circle id is deterministic, re-starting it re-syncs the old messages (from the relay / the other
+    /// party / your other device) — true network deletion is impossible in P2P. The watermark hides
+    /// everything from before the clear, so a re-started DM shows fresh. Persisted so it survives relaunch.
+    private var dmClearedBefore: [String: UInt64] {
+        get { (UserDefaults.standard.dictionary(forKey: "haven.dm.clearedBefore") as? [String: UInt64]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "haven.dm.clearedBefore") }
+    }
+    func clearDMBefore(_ circleId: String) { var m = dmClearedBefore; m[circleId] = now(); dmClearedBefore = m }
+
     /// Messages of a circle (for a DM thread) without disturbing the main feed.
     func messages(in circleId: String) -> [FeedItemFfi] {
-        social?.feed(circleId: circleId, nowMs: now(), viewerRetentionSecs: CircleSettingsStore.shared.retentionSecs(circleId)) ?? []
+        let all = social?.feed(circleId: circleId, nowMs: now(), viewerRetentionSecs: CircleSettingsStore.shared.retentionSecs(circleId)) ?? []
+        guard let cutoff = dmClearedBefore[circleId] else { return all }
+        return all.filter { $0.createdAt >= cutoff }   // hide messages exchanged before this DM was cleared
     }
 
     /// Send a text message into a DM circle + broadcast it.
@@ -445,6 +457,7 @@ final class FeedStore: ObservableObject {
     /// Delete a whole DM conversation locally (also clears any old contaminated thread).
     func deleteConversation(_ circleId: String) {
         guard let social, circleId.hasPrefix("dm:") else { return }
+        clearDMBefore(circleId)   // watermark so re-syncing (or re-starting) this DM won't restore old messages
         social.leaveCircle(id: circleId)
         persist(); refreshCircles(); refresh()
     }
@@ -1568,23 +1581,22 @@ final class FeedStore: ObservableObject {
         // missing media flooded the network with hundreds of thousands of frames per cycle (drowning real
         // delivery). Direct-request each ref at most once per 5 min, and only a handful per cycle — the
         // mailbox/relay restore below is the real path and it's idempotent.
-        var directBudget = 8
+        // Rate-limit the WHOLE request per ref (nearby + iroh + mailbox restore) to once per 90s, capped per
+        // cycle. Previously the nearby ask + a restore Task fired for EVERY missing ref EVERY cycle, so media
+        // neither device can reach (e.g. an offline friend's) was re-requested + re-served forever — it never
+        // settled. Available media still arrives quickly (a request lands within a cycle); unreachable media
+        // just retries occasionally instead of churning.
+        var budget = 12
         for ref in missing {
+            let stale = (mediaReqAt[ref].map { nowMs - $0 > 90_000 } ?? true)
+            guard stale, budget > 0 else { continue }
+            mediaReqAt[ref] = nowMs
+            budget -= 1
             var payload = Data(myHex.utf8)          // 64-byte requester id
             payload.append(Data(ref.utf8))
-            // Nearby is a single LOCAL broadcast — NOT a flood — and is how a linked Mac pulls media
-            // from the phone. Ask over nearby every cycle.
             nearbyBroadcast(3, payload)
-            // The per-contact IROH request × every missing ref × every cycle WAS the flood — throttle it
-            // (each ref at most once / 5 min, a handful per cycle). The idempotent mailbox restore below
-            // is the real cross-network path.
-            let stale = (mediaReqAt[ref].map { nowMs - $0 > 300_000 } ?? true)
-            if stale && directBudget > 0 {
-                mediaReqAt[ref] = nowMs
-                directBudget -= 1
-                for contact in ContactsStore.shared.contacts { sendIroh(3, payload, to: contact.idHex) }
-            }
-            // Always try the circle's mailbox (relay/S3) — content-addressed + idempotent, no flood.
+            for contact in ContactsStore.shared.contacts { sendIroh(3, payload, to: contact.idHex) }
+            // Also try the circle's mailbox (relay/S3) — content-addressed + idempotent.
             if circleIds.contains(where: { SharedStore.hasMailbox($0) }) {
                 Task { @MainActor in
                     if let data = await SharedStore.restore(ref: ref, circleIds: circleIds, social: social) {
