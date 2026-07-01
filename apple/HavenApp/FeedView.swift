@@ -516,15 +516,14 @@ final class FeedStore: ObservableObject {
         listener = bridge
         Task { @MainActor in
             do {
-                // Bind the iroh transport to the ACCOUNT seed, so our node id == the account id that our
-                // invite link (haven_link) advertises. A friend who scans our link only has our account id
-                // and no relay yet, so their very first hello can ONLY dial that account id — if we were
-                // instead listening on a per-device id (the old device-seed binding), that hello hit a dead
-                // id and the connection request never arrived. This is why friends couldn't connect. Binding
-                // to the account seed makes us directly reachable via n0 discovery/relays with no
-                // pre-shared relay. (Own-device sync between our own devices runs over the nearby mesh, so
-                // the multi-device discovery collision on a shared account id doesn't break sibling sync.)
-                let n = try await HavenNode.start(accountSeed: seed, listener: bridge)
+                // Bind the iroh transport to this DEVICE's unique key (NOT the account seed). Binding to the
+                // account seed made this device's node — and its in-process relay — share the account id with
+                // every sibling device, so a sibling's leak-guard (which refuses to dial the account id to
+                // avoid the 98GB self-connect loop) then refused to pull media from this device's relay. That
+                // broke iPhone→Android media sync + spawned a duplicate "account id" relay entry alongside
+                // the real per-device relay id. Per-device ids keep each device's relay uniquely dialable.
+                // (Friends reach us via the relay list, and own-device sync runs over the nearby mesh.)
+                let n = try await HavenNode.start(accountSeed: DeviceKeyStore.deviceAccount().secretSeed(), listener: bridge)
                 self.node = n
                 self.internetReady = true
                 self.online = true
