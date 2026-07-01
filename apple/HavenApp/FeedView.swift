@@ -2885,7 +2885,9 @@ struct PostCard: View {
         let aspect = singleAspect(media[0])
         // A ScrollView pager (NOT TabView) so it works on macOS too — a TabView renders its pages as
         // tab-bar items on macOS, dumping the dots into the nav toolbar. Custom dots overlay the carousel.
-        ScrollView(.horizontal) {
+        // showsIndicators:false in the initializer (not just the .scrollIndicators modifier) — on macOS the
+        // modifier alone doesn't suppress AppKit's legacy scroller, which showed an ugly bar under the dots.
+        ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(spacing: 0) {
                 ForEach(Array(media.enumerated()), id: \.offset) { i, ref in
                     ZStack(alignment: .bottomTrailing) {
