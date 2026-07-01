@@ -537,7 +537,7 @@ enum RelayClients {
         // the device-seed transport the guard above only catches our DEVICE id, so a stale relay entry equal
         // to our account id (left over from the pre-device-seed transport, when the relay WAS the account id)
         // would self-connect and leak. Skip it explicitly.
-        let myAccount = (FeedStore.shared.social?.myNodeHex() ?? "").lowercased()
+        let myAccount = AccountStore.currentNodeHex().lowercased()
         if !myAccount.isEmpty, nodeHex.lowercased() == myAccount { return nil }
         if RelayHost.shared.serving, !RelayHost.shared.nodeId.isEmpty, nodeHex == RelayHost.shared.nodeId {
             return nil
