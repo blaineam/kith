@@ -258,6 +258,25 @@ final class FeedStore: ObservableObject {
         return social.contactNodeIds(circleId: circleId).filter { $0 != myHex && !mine.contains($0) }
     }
 
+    /// Every node id to DIAL to reach a circle's members. The account id is the user-facing contact handle
+    /// (QR/invite/verification) — but under the per-device transport it no longer resolves to a node, so we
+    /// must dial each member's DEVICE node ids (learned from their signed roster) to actually reach them.
+    /// We include the account id too, so a peer still on the pre-device-seed build (account id == node id) is
+    /// reachable during cutover. De-duplicated, excludes self (both our account + device ids).
+    func dialTargets(_ circleId: String) -> [String] {
+        guard let social else { return [] }
+        let mineAcct = social.myNodeHex().lowercased()
+        let mineDev = social.myDeviceNodeHex().lowercased()
+        var out = [String]()
+        var seen = Set<String>()
+        func add(_ h: String) { let l = h.lowercased(); if l != mineAcct && l != mineDev && seen.insert(l).inserted { out.append(h) } }
+        for a in social.contactNodeIds(circleId: circleId) {
+            add(a)                                              // account id (contact handle; reaches old-build peers)
+            for d in social.deviceNodeIdsFor(accountHex: a) { add(d) }   // their device node ids (actual reach)
+        }
+        return out
+    }
+
     /// Add a member you can already see in some circle to your own My Circle (default), and
     /// record them as a contact — without needing a fresh invite.
     func addMemberToMyCircle(_ idHex: String) {
@@ -849,7 +868,7 @@ final class FeedStore: ObservableObject {
             let envs = resendHistory ? social.syncEnvelopes(circleId: circle.id) : []
             // The default circle bootstraps with ALL QR contacts (newly-added ones aren't
             // members yet — this is how we get their bundle). Other circles target members.
-            var targets = Set(social.contactNodeIds(circleId: circle.id))
+            var targets = Set(dialTargets(circle.id))   // account id (handle) + device ids (actual reach)
             if circle.id == "default" {
                 for c in ContactsStore.shared.contacts { targets.insert(c.idHex) }
             }
@@ -933,7 +952,7 @@ final class FeedStore: ObservableObject {
             guard let sealed = try? social.sealCircleMedia(circleId: ci.id, data: data) else { continue }
             var p = Data(); lpAppend(&p, Data(ci.id.utf8)); p.append(sealed)
             nearbyBroadcast(19, p)
-            originateRelay(dests: social.contactNodeIds(circleId: ci.id), inner: frame(19, p))
+            originateRelay(dests: dialTargets(ci.id), inner: frame(19, p))
         }
     }
 
@@ -988,7 +1007,7 @@ final class FeedStore: ObservableObject {
         guard let social else { return }
         for circle in circles {
             guard let hello = helloPayload(circleId: circle.id, circleName: circle.name) else { continue }
-            for hex in social.contactNodeIds(circleId: circle.id) { sendIroh(0, hello, to: hex) }
+            for hex in dialTargets(circle.id) { sendIroh(0, hello, to: hex) }
         }
     }
 
@@ -1009,8 +1028,10 @@ final class FeedStore: ObservableObject {
         let notifJSON = (try? JSONSerialization.data(withJSONObject: ["t": myName, "b": body, "c": circleId])) ?? Data()
         let eventB64 = env.base64EncodedString()   // the sealed circle event, for push-inline sync
         PushManager.shared.syncSelf(event: eventB64)   // multi-device: deliver to my own other devices
+        // Deliver the event to each member's DEVICE node ids (+ account id for old-build peers) — the account
+        // id alone no longer resolves under device-seed. Notification sealing below stays per-ACCOUNT recipient.
+        for t in dialTargets(circleId) { sendIroh(1, payload, to: t) }
         for nodeHex in members {
-            sendIroh(1, payload, to: nodeHex)
             // Seal + SIGN the banner to this recipient; the relay forwards it blind, their NSE
             // decrypts AND verifies it really came from us (audit H2).
             let sealed = notifJSON.isEmpty ? nil : try? social?.sealSignedNotification(recipientNodeHex: nodeHex, data: notifJSON)
@@ -1336,7 +1357,7 @@ final class FeedStore: ObservableObject {
             RelayMailboxStore.shared.add(circleId: cid, nodeHex: hex)   // ADD (append), don't replace
             guard let sealed = try? social.sealCircleMedia(circleId: cid, data: data) else { continue }
             var p = Data(); lpAppend(&p, Data(cid.utf8)); p.append(sealed)
-            let members = social.contactNodeIds(circleId: cid)
+            let members = dialTargets(cid)
             for m in members { sendIroh(19, p, to: m) }
             nearbyBroadcast(19, p)
             originateRelay(dests: members, inner: frame(19, p))
@@ -1485,7 +1506,7 @@ final class FeedStore: ObservableObject {
         guard let social, let data = getURL.data(using: .utf8),
               let sealed = try? social.sealCircleMedia(circleId: circleId, data: data) else { return }
         var p = Data(); lpAppend(&p, Data(circleId.utf8)); p.append(sealed)
-        let members = social.contactNodeIds(circleId: circleId)
+        let members = dialTargets(circleId)
         for m in members { sendIroh(20, p, to: m) }
         nearbyBroadcast(20, p)
         originateRelay(dests: members, inner: frame(20, p))
