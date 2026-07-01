@@ -1093,14 +1093,23 @@ fn receive_epoch_event(st: &mut NetState, idx: usize, body: &[u8]) -> Result<boo
         .map_err(|e| HavenError::Invalid { msg: format!("bad epoch envelope: {e}") })?;
     let sender_hex = env.sender_hex();
     let me_hex = hex(&st.me.public().node_id_bytes());
-    let sender = match st.circles[idx]
-        .members
-        .iter()
-        .find(|m| hex(&m.node_id_bytes()) == sender_hex)
-        .cloned()
-    {
-        Some(m) => Some(m),
-        None => authorized_device_bundle(st, idx, &sender_hex), // a member's authorized device
+    let sender = if sender_hex == me_hex {
+        // OWN-DEVICE sync: a linked device re-broadcasts events sealed by MY OWN account (both my posts and
+        // ones I RECEIVED from friends, forwarded via export_recent_envelopes). My account is NOT in the
+        // circle's member list (members are contacts), so without this those forwards were dropped — which
+        // is why a linked Mac never showed my latest post or a received DM. The event's INTERNAL author
+        // (me or the friend) is preserved on ingest. Mirrors receive_key_commit's self-acceptance.
+        Some(st.me.public())
+    } else {
+        match st.circles[idx]
+            .members
+            .iter()
+            .find(|m| hex(&m.node_id_bytes()) == sender_hex)
+            .cloned()
+        {
+            Some(m) => Some(m),
+            None => authorized_device_bundle(st, idx, &sender_hex), // a member's authorized device
+        }
     };
     let Some(sender) = sender else { return Ok(false) }; // unknown / removed sender → drop
     let Some(key) = st.circles[idx].key_for(&me_hex, &sender_hex, env.epoch) else {
@@ -1111,7 +1120,9 @@ fn receive_epoch_event(st: &mut NetState, idx: usize, body: &[u8]) -> Result<boo
         }
         return Ok(false);
     };
-    let event = match open_event_in_epoch(&sender, &key, &env) {
+    // allow_forwarded only for MY OWN self-forwards (own-device sync): a re-sealed friend event has
+    // author=friend but sender=me, which the author/sender bind would otherwise reject.
+    let event = match open_event_in_epoch(&sender, &key, &env, sender_hex == me_hex) {
         Ok(e) => e,
         Err(_) => return Ok(false),
     };

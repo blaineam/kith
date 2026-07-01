@@ -195,13 +195,18 @@ pub fn open_event_in_epoch(
     sender_pub: &HavenId,
     epoch_key: &[u8; 32],
     env: &EpochEnvelope,
+    allow_forwarded: bool,
 ) -> Result<Event> {
     sender_pub.verify(&env.transcript(), &env.signature)?;
     let event_key = derive_event_key(epoch_key, &env.salt, &env.circle_id, env.epoch);
     let plaintext = open(&event_key, &env.ciphertext)?;
     let event: Event =
         serde_json::from_slice(&plaintext).map_err(|_| CoreError::Encoding("event decode"))?;
-    if event.author != hex(&env.sender) {
+    // The author/sender bind stops a member re-attributing someone else's event. But OWN-DEVICE sync
+    // legitimately FORWARDS events (mine + ones I received) re-sealed by MY OWN account, so author (the
+    // original) differs from sender (me). The envelope signature is still verified, and only my own account
+    // can produce a `sender=me` envelope, so allowing the mismatch for self-forwards is safe.
+    if !allow_forwarded && event.author != hex(&env.sender) {
         return Err(CoreError::Crypto("author/sender mismatch"));
     }
     Ok(event)
@@ -236,11 +241,11 @@ mod tests {
         let env = seal_event_in_epoch(&alice, "c1", 0, &key, &ev).unwrap();
 
         // Bob holds the epoch key → opens it and authenticates Alice.
-        assert_eq!(open_event_in_epoch(&alice.public(), &key, &env).unwrap(), ev);
+        assert_eq!(open_event_in_epoch(&alice.public(), &key, &env, false).unwrap(), ev);
 
         // A different epoch key (what a removed member would be stuck on) cannot open it.
         let wrong = new_epoch_key();
-        assert!(open_event_in_epoch(&alice.public(), &wrong, &env).is_err());
+        assert!(open_event_in_epoch(&alice.public(), &wrong, &env, false).is_err());
         let _ = bob;
     }
 
@@ -278,9 +283,9 @@ mod tests {
         // A post in epoch 1 is therefore unreadable by Carol (she never learns e1), but readable by Bob.
         let ev = post(&alice, 200, "after carol left");
         let env = seal_event_in_epoch(&alice, "c1", 1, &e1, &ev).unwrap();
-        assert_eq!(open_event_in_epoch(&alice.public(), &e1, &env).unwrap(), ev);
+        assert_eq!(open_event_in_epoch(&alice.public(), &e1, &env, false).unwrap(), ev);
         // Carol only has e0 → derives the wrong key → open fails. Revocation is cryptographic.
-        assert!(open_event_in_epoch(&alice.public(), &e0, &env).is_err());
+        assert!(open_event_in_epoch(&alice.public(), &e0, &env, false).is_err());
     }
 
     #[test]
@@ -293,12 +298,12 @@ mod tests {
 
         // Flip a ciphertext byte → AEAD/signature rejects.
         env.ciphertext[0] ^= 0xff;
-        assert!(open_event_in_epoch(&alice.public(), &key, &env).is_err());
+        assert!(open_event_in_epoch(&alice.public(), &key, &env, false).is_err());
 
         // Verifying with the wrong sender key fails (Mallory didn't sign it).
         let ev2 = post(&alice, 101, "again");
         let env2 = seal_event_in_epoch(&alice, "c1", 0, &key, &ev2).unwrap();
-        assert!(open_event_in_epoch(&mallory.public(), &key, &env2).is_err());
+        assert!(open_event_in_epoch(&mallory.public(), &key, &env2, false).is_err());
     }
 
     #[test]
@@ -323,6 +328,6 @@ mod tests {
         let back = EpochEnvelope::from_bytes(&bytes).unwrap();
         assert_eq!(back.epoch, 7);
         assert_eq!(back.circle_id, "circle-xyz");
-        assert_eq!(open_event_in_epoch(&alice.public(), &key, &back).unwrap(), ev);
+        assert_eq!(open_event_in_epoch(&alice.public(), &key, &back, false).unwrap(), ev);
     }
 }
