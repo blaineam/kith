@@ -65,10 +65,11 @@ struct MessagesView: View {
     private func lastActivity(_ circleId: String) -> UInt64 {
         store.messages(in: circleId).map(\.createdAt).max() ?? 0
     }
-    /// Pinned ids that still exist, ordered most-recently-active first.
+    /// Pinned ids that still exist, in the user's chosen PIN ORDER (not recency — the whole point of
+    /// rearrange is manual control; re-sorting by activity here is what made Save look like a no-op).
     private var pinnedIds: [String] {
         let all = Set(store.dmCircles.map(\.id))
-        return pins.pinned.filter(all.contains).sorted { lastActivity($0) > lastActivity($1) }
+        return pins.pinned.filter(all.contains)
     }
     /// Everything not pinned, most-recently-active first.
     private var unpinnedIds: [String] {
