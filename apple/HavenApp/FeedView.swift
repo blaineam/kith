@@ -1425,6 +1425,17 @@ final class FeedStore: ObservableObject {
         // members automatically pool relays (more redundancy, no manual setup) — desktop parity.
         let wasNew = !RelayMailboxStore.shared.relays(forCircle: circleId).contains(lower)
         RelayMailboxStore.shared.add(circleId: circleId, nodeHex: nodeHex)
+        // SUPERSEDE stale account-id relays. Under the per-device transport a relay is ALWAYS a device id,
+        // never an account id. A relay-list entry equal to a member's (or our own) ACCOUNT id is a dead
+        // leftover from the pre-device-seed transport (when the relay WAS the account id) — nothing serves it,
+        // and every media fetch burns a full 30s timeout on it (the "2 relays, one is the account id" bug).
+        // Learning a real (device) relay for this circle means those account-id entries are obsolete → drop
+        // them so the reachable device relay is what gets dialed. (Safe under the all-devices-on-154 cutover.)
+        var staleAccounts = Set(memberHexes(circleId: circleId).map { $0.lowercased() })
+        staleAccounts.insert(AccountStore.currentNodeHex().lowercased())
+        for a in staleAccounts where a != lower && a.count == 64 {
+            RelayMailboxStore.shared.remove(circleId: circleId, nodeHex: a)
+        }
         if wasNew {
             backfillMailbox(circleIds: [circleId])        // mirror my past posts to the new relay…
             backfillMailboxMedia(circleIds: [circleId])   // …and their media, so it's a complete fallback

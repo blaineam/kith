@@ -967,6 +967,16 @@ object HavenNet : InboundListener {
         val list = relayNodes.getOrPut(circleId) { mutableListOf() }
         ensureRelayEntry(nodeHex, isS3 = false, activate = true)
         scope.launch(Dispatchers.Main) { bumpRelays() }   // recompose the Relays hub off the inbound thread
+        // SUPERSEDE stale account-id relays: under the per-device transport a relay is ALWAYS a device id,
+        // never an account id. A relay-list entry equal to a member's (or our own) ACCOUNT id is a dead
+        // pre-device-seed leftover — nothing serves it and every media fetch burns a 30s timeout on it (the
+        // "2 relays, one is the account id" bug). Learning a real device relay makes them obsolete → drop
+        // them so the reachable device relay is what gets dialed. iOS parity; safe under the 154 cutover.
+        val staleAccounts = (runCatching { social.contactNodeIds(circleId) }.getOrDefault(emptyList()) +
+                             listOf(runCatching { social.myNodeHex() }.getOrDefault(""))).map { it.lowercase() }.toSet()
+        var supersededAny = false
+        for (a in staleAccounts) if (a.length == 64 && a != nodeHex && list.remove(a)) { suppressedRelays.add(a); supersededAny = true }
+        if (supersededAny) saveRelayNodes()
         if (list.contains(nodeHex)) { saveRelayNodes(); return }
         list.add(nodeHex)
         saveRelayNodes()
