@@ -1489,7 +1489,10 @@ object HavenNet : InboundListener {
     private val pushedNearby = HashSet<String>()        // refs already pushed to nearby siblings this session
 
     private fun mediaKey(ref: String) = "haven/media/$ref"
-    private fun mediaChunkKey(ref: String, i: Int) = "haven/media/$ref/$i"
+    // Chunks live in a SIBLING dir "<ref>.p/", not nested under the manifest key "haven/media/<ref>":
+    // a disk relay maps each key segment to a directory, so "<ref>/<i>" would force "<ref>" to be both a
+    // manifest FILE and a chunk DIRECTORY (a collision that fails the manifest write). "<ref>.p" is distinct.
+    private fun mediaChunkKey(ref: String, i: Int) = "haven/media/$ref.p/$i"
 
     // ---- Chunked media transfer (large-blob fix) -----------------------------------------------
     // A relay/S3 blob is capped at MAX_BLOB = 256 MB (core/haven-net). Large sealed videos (600 MB+)

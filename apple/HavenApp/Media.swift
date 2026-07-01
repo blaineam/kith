@@ -540,10 +540,25 @@ final class MediaStore: ObservableObject {
         // its display orientation, so the output is upright with an identity transform. Otherwise the
         // rotation rides as track metadata that Android ignores → portrait iPhone video shows sideways.
         if let vTrack = try? await asset.loadTracks(withMediaType: .video).first,
+           let natural = try? await vTrack.load(.naturalSize),
            let xf = try? await vTrack.load(.preferredTransform), !xf.isIdentity {
-            export.videoComposition = AVMutableVideoComposition(asset: asset) { request in
-                request.finish(with: request.sourceImage, context: nil)
+            // A custom videoComposition's renderSize OVERRIDES the 1920x1080 preset's downscale — so without
+            // clamping it here, a portrait 4K clip re-encodes at full 4K (the 600MB "auto-optimize didn't
+            // shrink it" bug; landscape clips took the identity-transform path and downscaled fine). Fit the
+            // display-oriented size within 1920x1080 (preserve aspect, never upscale) and scale each frame
+            // (already display-oriented by the composition) to that renderSize.
+            let disp = natural.applying(xf)
+            let dw = abs(disp.width), dh = abs(disp.height)
+            let fit = dw > 0 && dh > 0 ? min(1, min(1920 / max(dw, dh), 1080 / min(dw, dh))) : 1
+            func even(_ v: CGFloat) -> CGFloat { let n = (v * fit).rounded(.down); return max(2, n - n.truncatingRemainder(dividingBy: 2)) }
+            let renderW = even(dw), renderH = even(dh)
+            let comp = AVMutableVideoComposition(asset: asset) { request in
+                let src = request.sourceImage
+                let s = min(renderW / src.extent.width, renderH / src.extent.height)
+                request.finish(with: src.transformed(by: CGAffineTransform(scaleX: s, y: s)), context: nil)
             }
+            comp.renderSize = CGSize(width: renderW, height: renderH)
+            export.videoComposition = comp
         }
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             export.exportAsynchronously { cont.resume() }

@@ -78,14 +78,18 @@ enum SharedStore {
     static var isVolunteering: Bool { mailboxClient() != nil }
 
     private static func key(_ ref: String) -> String { "haven/media/\(ref)" }
-    private static func chunkKey(_ ref: String, _ i: Int) -> String { "haven/media/\(ref)/\(i)" }
+    // Chunks live in a SIBLING directory "<ref>.p/", NOT nested under the manifest key. On a hierarchical
+    // disk relay (blobstore local_put maps each key segment to a directory) the manifest key "haven/media/<ref>"
+    // is a FILE, so chunks under "haven/media/<ref>/<i>" would force "<ref>" to be a directory too — a
+    // file-vs-dir collision that fails the manifest write. "<ref>.p" is a distinct name → no collision.
+    private static func chunkKey(_ ref: String, _ i: Int) -> String { "haven/media/\(ref).p/\(i)" }
 
     // MARK: - Chunked media transfer (large-blob fix)
     //
     // A relay/S3 blob is capped at MAX_BLOB = 256 MB (core/haven-net blobstore). Large videos
     // (600 MB+) sealed into ONE blob under "haven/media/<ref>" exceed that, so a GET truncates and
     // the receiver can't play them (photos, ~5 MB, worked). Fix: slice the SEALED bytes into 8 MB
-    // chunks under "haven/media/<ref>/<i>" and store a tiny manifest under "haven/media/<ref>". On
+    // chunks under "haven/media/<ref>.p/<i>" and store a tiny manifest under "haven/media/<ref>". On
     // download, fetch chunks IN ORDER and APPEND to a file on disk (streaming — never hold the full
     // sealed blob in RAM, which OOM-killed Android before). Small media (<= one chunk) stays a single
     // sealed blob (no manifest) for back-compat. This format is BYTE-IDENTICAL across iOS/macOS,

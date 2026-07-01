@@ -1856,8 +1856,11 @@ impl Engine {
     fn media_key(reference: &str) -> String {
         format!("haven/media/{reference}")
     }
+    // Chunks live in a SIBLING dir "<ref>.p/", not nested under the manifest key "haven/media/<ref>":
+    // a disk relay maps each key segment to a directory, so "<ref>/<i>" would force "<ref>" to be both a
+    // manifest FILE and a chunk DIRECTORY (a collision that fails the manifest write). "<ref>.p" is distinct.
     fn media_chunk_key(reference: &str, i: usize) -> String {
-        format!("haven/media/{reference}/{i}")
+        format!("haven/media/{reference}.p/{i}")
     }
 
     // ---- Chunked media transfer (large-blob fix) -----------------------------------------------
