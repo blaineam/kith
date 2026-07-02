@@ -105,7 +105,21 @@ impl Node {
     pub fn blob_client(&self, node_hex: &str) -> Result<crate::blobstore::BlobClient> {
         let bytes = decode_hex32(node_hex)?;
         let id = EndpointId::from_bytes(&bytes).map_err(|e| anyhow!("{e:?}"))?;
-        crate::blobstore::BlobClient::over_endpoint(self.endpoint.clone(), EndpointAddr::new(id))
+        crate::blobstore::BlobClient::over_endpoint(self.endpoint.clone(), self.dial_addr(id))
+    }
+
+    /// Build a dial address for `id` that includes OUR home relay, so the outbound connection can use the
+    /// DERP relay path immediately. Without it iroh starts the connect with relay_url=None and only tries
+    /// direct hole-punch candidates — which ALL fail when two peers are behind ONE NAT on isolated subnets
+    /// (same public IP won't hairpin; cross-subnet LAN is blocked) → a 30s TimedOut instead of relaying.
+    /// n0 relays forward between each other, so our home relay reaches the peer even if theirs differs.
+    fn dial_addr(&self, id: EndpointId) -> EndpointAddr {
+        use iroh::Watcher as _;
+        let mut addr = EndpointAddr::new(id);
+        if let Some(s) = self.endpoint.home_relay_status().get().first() {
+            addr = addr.with_relay_url(s.url().clone());
+        }
+        addr
     }
 
     // ---- In-process relay (blob mailbox) on THIS node's endpoint (no second iroh node) ----
@@ -192,7 +206,7 @@ impl Node {
     pub async fn send_to_node(&self, node_id_hex: &str, payload: &[u8]) -> Result<()> {
         let bytes = decode_hex32(node_id_hex)?;
         let id = EndpointId::from_bytes(&bytes).map_err(|e| anyhow!("{e:?}"))?;
-        self.send(EndpointAddr::new(id), payload).await
+        self.send(self.dial_addr(id), payload).await
     }
 
     /// Send a payload to a peer address (reusing a live connection if one exists).

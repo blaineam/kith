@@ -539,6 +539,11 @@ final class FeedStore: ObservableObject {
                 // account id is the sealing/trust anchor + contact handle only. The self-connect leak this
                 // re-triggered is defended at the CORE chokepoint now (haven-net Node refuses to open a
                 // connection to our OWN node id), so no app-level dial path can loop it.
+                // DIAGNOSTIC: capture iroh/noq connection-level logs to Application Support/iroh-trace.log
+                // BEFORE the node starts, so we can compare both sides of the multipath handshake.
+                if let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                    initLogging(dir: dir.path)
+                }
                 let deviceSeed = DeviceKeyStore.deviceAccount().secretSeed()
                 let n = try await HavenNode.start(accountSeed: deviceSeed, listener: bridge)
                 self.node = n
