@@ -1983,9 +1983,28 @@ impl Engine {
         let Some(blob) = self.media.raw_sealed(reference) else { return };
         let key = Self::media_key(reference);
         let chunked = blob.len() > MEDIA_CHUNK_BYTES;
-        // Mirror the sealed media blob to every relay (redundancy). Large blobs are sliced into 8 MB
-        // chunks under "<key>/<i>" with a manifest at <key> so a GET never exceeds MAX_BLOB.
+        // S3/HTTP bucket FIRST — the DEFAULT media transport. Plain HTTPS traverses any NAT, whereas
+        // the iroh blob ALPN (haven/blob/1) drops its outbound datagrams over a pure-relay cross-NAT
+        // path (noq/iroh fork bug): blob transfers that must cross a NAT stall and die even while
+        // messaging works over the same relay path.
+        if let Some(s3) = self.s3_client().await {
+            if chunked {
+                let mut sizes = Vec::new();
+                let mut ok = true;
+                for (i, slice) in blob.chunks(MEDIA_CHUNK_BYTES).enumerate() {
+                    if s3.put(&Self::media_chunk_key(reference, i), slice).await.is_err() { ok = false; break; }
+                    sizes.push(slice.len());
+                }
+                if ok { let _ = s3.put(&key, &Self::make_manifest(&sizes)).await; }
+            } else {
+                let _ = s3.put(&key, &blob).await;
+            }
+        }
+        // Then mirror to every iroh relay (redundancy + the LAN/hosted fast-path). Large blobs are
+        // sliced into 8 MB chunks under "<key>.p/<i>" with a manifest at <key> so a GET never
+        // exceeds MAX_BLOB. "s3:" pseudo-entries are the bucket handled above — they can't be dialed.
         for node_hex in self.relays_for(circle_id) {
+            if node_hex.starts_with("s3:") { continue; }
             if let Some(client) = self.relay_client_for(&node_hex).await {
                 let res: Result<(), ()> = async {
                     if chunked {
@@ -2006,25 +2025,36 @@ impl Engine {
                 }
             }
         }
-        if let Some(s3) = self.s3_client().await {
-            if chunked {
-                let mut sizes = Vec::new();
-                let mut ok = true;
-                for (i, slice) in blob.chunks(MEDIA_CHUNK_BYTES).enumerate() {
-                    if s3.put(&Self::media_chunk_key(reference, i), slice).await.is_err() { ok = false; break; }
-                    sizes.push(slice.len());
-                }
-                if ok { let _ = s3.put(&key, &Self::make_manifest(&sizes)).await; }
-            } else {
-                let _ = s3.put(&key, &blob).await;
-            }
-        }
     }
 
     async fn fetch_media_from_relay(self: &Arc<Self>, circle_id: &str, reference: &str) -> bool {
         let key = Self::media_key(reference);
-        // Try each relay in turn; the first that has the (manifest or) blob wins (graceful fallback).
+        // S3/HTTP bucket FIRST — the DEFAULT media transport (see upload_media): an iroh blob dial
+        // that must cross a NAT stalls ~30s and dies, so the bucket is tried before any dial.
+        if let Some(s3) = self.s3_client().await {
+            if let Ok(Some(head)) = s3.get(&key).await {
+                if let Some(count) = Self::parse_manifest(&head) {
+                    let part = self.media.new_sealed_part(reference);
+                    let mut ok = true;
+                    for i in 0..count {
+                        match s3.get(&Self::media_chunk_key(reference, i)).await {
+                            Ok(Some(chunk)) if self.media.append_sealed_part(&part, &chunk) => {}
+                            _ => { ok = false; break; }
+                        }
+                    }
+                    if ok && self.media.adopt_sealed_part(reference, &part) {
+                        return true;
+                    }
+                    let _ = std::fs::remove_file(&part);
+                } else {
+                    self.media.write_raw_sealed(reference, &head);
+                    return true;
+                }
+            }
+        }
+        // Then each iroh relay in turn — the opportunistic fast-path (graceful fallback).
         for node_hex in self.relays_for(circle_id) {
+            if node_hex.starts_with("s3:") { continue; }
             if let Some(client) = self.relay_client_for(&node_hex).await {
                 if let Some(head) = client.get(key.clone()).await {
                     if let Some(count) = Self::parse_manifest(&head) {
@@ -2045,27 +2075,6 @@ impl Engine {
                         continue;
                     }
                     self.mark_relay_ok(&node_hex);
-                    self.media.write_raw_sealed(reference, &head);
-                    return true;
-                }
-            }
-        }
-        if let Some(s3) = self.s3_client().await {
-            if let Ok(Some(head)) = s3.get(&key).await {
-                if let Some(count) = Self::parse_manifest(&head) {
-                    let part = self.media.new_sealed_part(reference);
-                    let mut ok = true;
-                    for i in 0..count {
-                        match s3.get(&Self::media_chunk_key(reference, i)).await {
-                            Ok(Some(chunk)) if self.media.append_sealed_part(&part, &chunk) => {}
-                            _ => { ok = false; break; }
-                        }
-                    }
-                    if ok && self.media.adopt_sealed_part(reference, &part) {
-                        return true;
-                    }
-                    let _ = std::fs::remove_file(&part);
-                } else {
                     self.media.write_raw_sealed(reference, &head);
                     return true;
                 }

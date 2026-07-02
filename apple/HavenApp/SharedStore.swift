@@ -148,69 +148,68 @@ enum SharedStore {
         guard let sealed else { HavenLog.sync("backup SEAL-FAIL ref=\(ref)"); return }
         let nodes = relayNodes(circleId)
         let chunked = sealed.count > mediaChunkBytes
-        HavenLog.sync("backup ref=\(ref) size=\(sealed.count) chunked=\(chunked) relays=\(nodes.count) s3=\(mailboxClient() != nil)")
-        if !nodes.isEmpty {
-            // Mirror to EVERY configured relay (redundancy). Content-addressed key → idempotent
-            // re-puts, and a relay in backoff is skipped (RelayClients is health-aware).
-            for node in nodes {
-                // Our OWN hosted relay: store the media directly in the local mailbox (no iroh self-dial).
-                if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
-                    if chunked {
-                        var sizes: [Int] = []
-                        var off = 0
-                        while off < sealed.count {
-                            let end = min(off + mediaChunkBytes, sealed.count)
-                            let slice = sealed.subdata(in: off..<end)
-                            _ = RelayHost.shared.localPut(chunkKey(ref, sizes.count), slice)
-                            sizes.append(slice.count); off = end
-                        }
-                        _ = RelayHost.shared.localPut(key(ref), makeManifest(sizes: sizes))
-                    } else {
-                        _ = RelayHost.shared.localPut(key(ref), sealed)
-                    }
-                    continue
-                }
-                guard let c = await RelayClients.client(node) else { continue }
-                if await c.has(key: key(ref)) { RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node); continue }
+        HavenLog.sync("backup ref=\(ref) size=\(sealed.count) chunked=\(chunked) relays=\(nodes.count) s3=\(mediaS3(for: circleId) != nil)")
+        var landed = false
+        // 1) S3/HTTP bucket FIRST — the DEFAULT media transport. Plain HTTPS traverses any NAT,
+        //    whereas the iroh blob ALPN (haven/blob/1) drops its outbound datagrams over a
+        //    pure-relay cross-NAT path (noq/iroh fork bug), so blob transfers that must cross a NAT
+        //    stall and die while messaging on the same relay path works. The bucket leg used to be
+        //    gated on "no relays configured" — now it always runs when a bucket is configured.
+        if let s3 = mediaS3(for: circleId) {
+            if await s3.headObject(key: key(ref)) { landed = true }
+            else {
                 do {
-                    if chunked {
-                        var sizes: [Int] = []
-                        var off = 0
-                        while off < sealed.count {
-                            let end = min(off + mediaChunkBytes, sealed.count)
-                            let slice = sealed.subdata(in: off..<end)
-                            try await c.put(key: chunkKey(ref, sizes.count), data: slice)
-                            sizes.append(slice.count); off = end
-                        }
-                        try await c.put(key: key(ref), data: makeManifest(sizes: sizes))
-                    } else {
-                        try await c.put(key: key(ref), data: sealed)
-                    }
-                    RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node)
+                    try await putMedia(ref: ref, sealed: sealed) { try await s3.putObject(key: $0, data: $1) }
+                    HavenLog.sync("backup s3-put OK ref=\(ref) size=\(sealed.count) chunked=\(chunked)")
+                    landed = true
                 }
-                catch { RelayHealth.shared.recordFailure(node); RelayClients.forget(node) }
+                catch { HavenLog.sync("backup s3-put FAIL ref=\(ref): \(error.localizedDescription)") }
             }
-            return
         }
-        guard let s3 = mailboxClient() else { HavenLog.sync("backup NO-DEST ref=\(ref)"); return }
-        if await s3.headObject(key: key(ref)) { HavenLog.sync("backup s3-have ref=\(ref)"); return }
-        do {
-            if chunked {
-                var sizes: [Int] = []
-                var off = 0
-                while off < sealed.count {
-                    let end = min(off + mediaChunkBytes, sealed.count)
-                    let slice = sealed.subdata(in: off..<end)
-                    try await s3.putObject(key: chunkKey(ref, sizes.count), data: slice)
-                    sizes.append(slice.count); off = end
-                }
-                try await s3.putObject(key: key(ref), data: makeManifest(sizes: sizes))
-            } else {
-                try await s3.putObject(key: key(ref), data: sealed)
+        // 2) Mirror to every iroh relay (redundancy + the LAN/hosted fast-path). Content-addressed
+        //    key → idempotent re-puts; a relay in backoff is skipped (RelayClients is health-aware).
+        //    "s3:" pseudo-entries are the bucket handled above — dialing them can only fail.
+        for node in nodes where !node.hasPrefix("s3:") {
+            // Our OWN hosted relay: store the media directly in the local mailbox (no iroh self-dial).
+            if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
+                try? await putMedia(ref: ref, sealed: sealed) { _ = RelayHost.shared.localPut($0, $1) }
+                landed = true
+                continue
             }
-            HavenLog.sync("backup s3-put OK ref=\(ref) size=\(sealed.count) chunked=\(chunked)")
+            guard let c = await RelayClients.client(node) else { continue }
+            if await c.has(key: key(ref)) { RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node); landed = true; continue }
+            do {
+                try await putMedia(ref: ref, sealed: sealed) { try await c.put(key: $0, data: $1) }
+                RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node)
+                landed = true
+            }
+            catch { RelayHealth.shared.recordFailure(node); RelayClients.forget(node) }
         }
-        catch { HavenLog.sync("backup s3-put FAIL ref=\(ref): \(error.localizedDescription)") }
+        if !landed { HavenLog.sync("backup NO-DEST ref=\(ref)") }
+    }
+
+    /// The bucket used for MEDIA in this circle: the owner's own creds for a circle whose pre-signed
+    /// pool we mint, else the shared/volunteer mailbox bucket. Same selection as `uploadEvent`.
+    private static func mediaS3(for circleId: String) -> S3Client? {
+        isOwner(circleId) ? ownerS3() : mailboxClient()
+    }
+
+    /// PUT one sealed media blob through a destination's key/value writer — sliced into 8 MB chunks
+    /// plus a manifest when large, a single blob otherwise (the shared wire format).
+    private static func putMedia(ref: String, sealed: Data, put: (String, Data) async throws -> Void) async throws {
+        if sealed.count > mediaChunkBytes {
+            var sizes: [Int] = []
+            var off = 0
+            while off < sealed.count {
+                let end = min(off + mediaChunkBytes, sealed.count)
+                let slice = sealed.subdata(in: off..<end)
+                try await put(chunkKey(ref, sizes.count), slice)
+                sizes.append(slice.count); off = end
+            }
+            try await put(key(ref), makeManifest(sizes: sizes))
+        } else {
+            try await put(key(ref), sealed)
+        }
     }
 
     /// A source that can serve the manifest+chunk keys for one media ref.
@@ -235,22 +234,28 @@ enum SharedStore {
         var chosen: MediaSource?
         var head: Data?
         var src = "none"
-        // Try every relay of every circle first (fallback reads), then the S3 bucket. We fetch the
-        // manifest key "haven/media/<ref>" first; whichever source serves it also serves the chunks.
-        outer: for cid in circleIds {
-            for node in relayNodes(cid) {
-                // OUR OWN hosted relay: read the media from the local store (a sibling/friend uploaded it
-                // to us) — we can't dial ourselves. This is what made a host's media show "all spinners".
-                if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
-                    if let s = RelayHost.shared.localGet(key(ref)) { head = s; chosen = .ownRelay; src = "own:\(node.prefix(8))"; break outer }
-                    continue
-                }
-                guard let c = await RelayClients.client(node) else { continue }
-                if let s = await c.get(key: key(ref)) { RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node); head = s; chosen = .relay(c, node); src = "dial:\(node.prefix(8))"; break outer }
-            }
+        // We fetch the manifest key "haven/media/<ref>" first; whichever source serves it also serves
+        // the chunks. Source order: (1) our OWN hosted relay's local store (instant, no dial),
+        // (2) the S3/HTTP bucket — the DEFAULT media transport (plain HTTPS traverses any NAT),
+        // (3) dialed iroh relays — the opportunistic fast-path (the blob ALPN stalls ~30s and dies
+        // when the dial must cross a NAT over pure relay, so it's tried LAST, not first).
+        if RelayHost.shared.serving,
+           circleIds.contains(where: { relayNodes($0).contains(RelayHost.shared.nodeId) }),
+           let s = RelayHost.shared.localGet(key(ref)) {
+            head = s; chosen = .ownRelay; src = "own:\(RelayHost.shared.nodeId.prefix(8))"
         }
-        if head == nil, let s3 = mailboxClient() {
+        if head == nil, let s3 = circleIds.compactMap({ mediaS3(for: $0) }).first {
             if let s = try? await s3.getObject(key: key(ref)) { head = s; chosen = .s3(s3); src = "s3" }
+        }
+        if head == nil {
+            outer: for cid in circleIds {
+                for node in relayNodes(cid) where !node.hasPrefix("s3:") {
+                    // Our own hosted relay was already consulted above; never dial ourselves.
+                    if RelayHost.shared.serving, node == RelayHost.shared.nodeId { continue }
+                    guard let c = await RelayClients.client(node) else { continue }
+                    if let s = await c.get(key: key(ref)) { RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node); head = s; chosen = .relay(c, node); src = "dial:\(node.prefix(8))"; break outer }
+                }
+            }
         }
         guard let head, let source = chosen else {
             HavenLog.relay("media restore \(ref.prefix(12)): NOT FOUND on any relay/S3")

@@ -1735,12 +1735,22 @@ object HavenNet : InboundListener {
         if (mediaReqAt.size > 4000) mediaReqAt.clear()   // bound the throttle map
     }
 
-    /** Mirror a sealed media blob to EVERY circle relay (redundancy) so members can fetch offline. */
+    /**
+     * Relay order for MEDIA transfers: S3/HTTP buckets FIRST, iroh relays after. A bucket is plain
+     * HTTPS so it traverses ANY NAT — it's the DEFAULT media transport. The iroh blob ALPN
+     * (haven/blob/1) is kept as an opportunistic fast-path only: the noq/iroh fork drops its
+     * outbound SendDatagram over a pure-relay (cross-NAT) path, so a blob dial that has to cross a
+     * NAT stalls 30s and dies while messaging on the same relay path works. Stable within groups.
+     */
+    private fun mediaRelaysFor(circleId: String): List<String> =
+        relaysFor(circleId).sortedByDescending { it.startsWith("s3:") }
+
+    /** Mirror a sealed media blob to EVERY circle relay (S3 first — see mediaRelaysFor). */
     suspend fun uploadMedia(circleId: String, ref: String) {
         val blob = LocalMedia.rawSealed(ref) ?: return
         val key = mediaKey(ref)
         val chunked = blob.size > mediaChunkBytes
-        for (nodeHex in relaysFor(circleId)) {
+        for (nodeHex in mediaRelaysFor(circleId)) {
             // S3-BUCKET relay: put via the S3 FFI (relayClientFor can't dial an "s3:" pseudo-node).
             if (nodeHex.startsWith("s3:")) {
                 val cfg = StorageStore.s3Config(appContext) ?: continue
@@ -1783,7 +1793,7 @@ object HavenNet : InboundListener {
 
     private suspend fun fetchMediaFromRelay(circleId: String, ref: String): Boolean {
         val key = mediaKey(ref)   // "haven/media/<ref>" — matches the iOS S3 upload key
-        val relays = relaysFor(circleId)
+        val relays = mediaRelaysFor(circleId)   // S3/HTTP first (default), iroh blob = fast-path
         val mineId = runCatching { node?.nodeIdHex() ?: social.myNodeHex() }.getOrNull()?.take(12)
         android.util.Log.i("MediaSync", "fetch ref=$ref circle=$circleId relays=${relays.map { it.take(12) }} mine=$mineId")
         // Try each relay in turn; the first that has the (manifest or) blob wins (graceful fallback).

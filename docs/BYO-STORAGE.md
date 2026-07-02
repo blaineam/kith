@@ -17,7 +17,17 @@ S3-compatible bucket**:
 The S3 path works with **AWS S3, Cloudflare R2, Backblaze B2, MinIO**, rclone serve s3,
 etc.
 
-## Security posture
+## Media transport order (S3 first, iroh fast-path)
+
+When a circle has **both** an S3 bucket and Haven relays configured, media transfers
+(upload mirror + fetch) try the **bucket first** and the iroh relays after — on every
+platform (iOS/macOS, Android, desktop). Rationale: the bucket is plain HTTPS and
+traverses any NAT, while the iroh **blob** ALPN (`haven/blob/1`) currently drops its
+outbound datagrams over a pure-relay cross-NAT path (noq/iroh fork bug — see
+`reference_haven_multipath_drop`), stalling ~30 s per attempt even though *messaging*
+works over the same DERP path. The iroh blob path is kept as an opportunistic
+fast-path (own hosted relay's local store, LAN peers) and as the only path when no
+bucket is configured. Events/mailbox polling are unchanged.
 
 - Media is **end-to-end encrypted before it is stored** anywhere — the storage
   backend (a Haven relay or the user's own bucket) only ever holds ciphertext.

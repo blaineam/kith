@@ -7,7 +7,23 @@ by dated waves (a batch of work committed together and rolled into the next buil
 
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — 2026-06-30
+## [Unreleased] — 2026-07-02
+
+Media-transport wave: S3/HTTP bucket becomes the DEFAULT media path (iOS/macOS, Android, desktop).
+
+### Fixed
+- **Cross-NAT media sync (videos) now lands via the bucket.** The iroh **blob** ALPN
+  (`haven/blob/1`) drops its outbound datagrams over a pure-relay cross-NAT path (noq/iroh 1.0
+  fork bug, proven by two-sided connection traces) — so posts synced but videos/large photos
+  timed out forever. Media upload + fetch now try a configured **S3/HTTP bucket first** (plain
+  HTTPS, traverses any NAT) and the iroh relays after, on all platforms. The iroh blob path
+  stays as an opportunistic fast-path (own hosted relay local store, LAN) and as the only path
+  when no bucket is configured. Apple additionally stops gating the bucket leg on "no relays
+  configured" (media never reached the bucket once any relay existed) and skips un-dialable
+  `s3:` pseudo relay entries in the dial loops (Apple + desktop). See
+  `docs/BYO-STORAGE.md` → "Media transport order".
+
+## [2026-06-30]
 
 Multi-device and Messages wave (iOS/iPadOS, macOS, Android, and desktop, all sharing the Rust core).
 
