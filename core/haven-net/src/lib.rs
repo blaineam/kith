@@ -120,6 +120,15 @@ impl Node {
             .alpns(vec![ALPN.to_vec(), blobstore::BLOB_ALPN.to_vec()])
             .transport_config(iroh::endpoint::QuicTransportConfig::builder().max_concurrent_multipath_paths(16).build())
             .path_selector(std::sync::Arc::new(RelayPreferringSelector))
+            // RELAY-ONLY: remove the IP/UDP transport entirely. Two peers behind one NAT on isolated subnets
+            // can only reach each other via DERP; iroh would otherwise open the working relay path, try to
+            // hole-punch a direct path to unreachable candidates, fail multipath negotiation, and DROP the
+            // outbound blob datagrams (`RemoteStateActor inbox dropped message msg=SendDatagram` +
+            // `MultipathNotNegotiated`, proven by trace) — so posts (tiny streams) sync but videos die. With
+            // no IP transport there are NO direct candidates, NO hole-punch, NO multipath churn: every packet
+            // rides the DERP relay (a separate transport that stays up). Nearby self-sync uses the Multipeer
+            // mesh, not this, so LAN speed is unaffected. Trades direct-path speed for cross-NAT reliability.
+            .clear_ip_transports()
             .bind()
             .await
             .ah()?;

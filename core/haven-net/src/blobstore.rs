@@ -230,6 +230,8 @@ impl BlobServer {
             .secret_key(SecretKey::from_bytes(&secret))
             .alpns(vec![BLOB_ALPN.to_vec()])
             .path_selector(std::sync::Arc::new(crate::RelayPreferringSelector))
+            // RELAY-ONLY (see Node::spawn): no IP transport → no hole-punch → no dropped blob datagrams.
+            .clear_ip_transports()
             .bind()
             .await
             .ah()?;
