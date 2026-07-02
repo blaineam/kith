@@ -102,6 +102,12 @@ async fn handle_conn(stream: TcpStream, root: &PathBuf, token: &str) -> Result<(
             Err(_) => return Ok(()),
         };
         let clen: u64 = header(&headers, "content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+        // Honor `Connection: close` — a client that reads to EOF (rather than by Content-Length)
+        // waits for us to close, so we MUST close the socket after answering it, or it hangs. Also
+        // HTTP/1.0 defaults to close. Otherwise keep the connection alive for the next request.
+        let keep_alive = header(&headers, "connection")
+            .map(|v| !v.eq_ignore_ascii_case("close"))
+            .unwrap_or(true);
 
         // Bearer auth (constant across all verbs). Read+discard the body on failure so
         // keep-alive framing survives, then answer 401.
@@ -109,7 +115,8 @@ async fn handle_conn(stream: TcpStream, root: &PathBuf, token: &str) -> Result<(
             || header(&headers, "authorization").map(|v| v.trim() == format!("Bearer {token}")).unwrap_or(false);
         if !authed {
             discard(&mut r, clen).await?;
-            respond(&mut w, 401, "unauthorized", b"").await?;
+            respond(&mut w, 401, "unauthorized", keep_alive, b"").await?;
+            if !keep_alive { return Ok(()); }
             continue;
         }
 
@@ -117,47 +124,46 @@ async fn handle_conn(stream: TcpStream, root: &PathBuf, token: &str) -> Result<(
             Route::Get(key) => {
                 match checked(root, &key) {
                     Some(k) => match local_get(root, &k) {
-                        Some(body) => respond(&mut w, 200, "OK", &body).await?,
-                        None => respond(&mut w, 404, "not found", b"").await?,
+                        Some(body) => respond(&mut w, 200, "OK", keep_alive, &body).await?,
+                        None => respond(&mut w, 404, "not found", keep_alive, b"").await?,
                     },
-                    None => respond(&mut w, 403, "forbidden", b"").await?,
+                    None => respond(&mut w, 403, "forbidden", keep_alive, b"").await?,
                 }
             }
             Route::Head(key) => {
                 let hit = checked(root, &key).map(|k| local_get(root, &k).is_some()).unwrap_or(false);
-                head_respond(&mut w, if hit { 200 } else { 404 }).await?;
+                head_respond(&mut w, if hit { 200 } else { 404 }, keep_alive).await?;
             }
             Route::Put(key) => {
                 if clen > MAX_BLOB {
                     discard(&mut r, clen.min(MAX_BLOB)).await.ok();
-                    respond(&mut w, 413, "too large", b"").await?;
+                    respond(&mut w, 413, "too large", false, b"").await?;
                     return Ok(()); // oversized body: drop the connection rather than drain it
                 }
                 let mut body = vec![0u8; clen as usize];
                 r.read_exact(&mut body).await?;
                 match checked(root, &key) {
-                    Some(k) if local_put(root, &k, &body).is_ok() => respond(&mut w, 200, "OK", b"OK").await?,
-                    Some(_) => respond(&mut w, 500, "write failed", b"").await?,
-                    None => respond(&mut w, 403, "forbidden", b"").await?,
+                    Some(k) if local_put(root, &k, &body).is_ok() => respond(&mut w, 200, "OK", keep_alive, b"OK").await?,
+                    Some(_) => respond(&mut w, 500, "write failed", keep_alive, b"").await?,
+                    None => respond(&mut w, 403, "forbidden", keep_alive, b"").await?,
                 }
             }
             Route::List(prefix) => {
-                let keys = match checked(root, &prefix) {
-                    Some(p) => local_list(root, &p),
-                    None => {
-                        respond(&mut w, 403, "forbidden", b"").await?;
-                        continue;
+                match checked(root, &prefix) {
+                    Some(p) => {
+                        let mut keys = local_list(root, &p);
+                        keys.sort();
+                        respond(&mut w, 200, "OK", keep_alive, keys.join("\n").as_bytes()).await?;
                     }
-                };
-                let mut keys = keys;
-                keys.sort();
-                respond(&mut w, 200, "OK", keys.join("\n").as_bytes()).await?;
+                    None => respond(&mut w, 403, "forbidden", keep_alive, b"").await?,
+                }
             }
             Route::Bad => {
                 discard(&mut r, clen).await?;
-                respond(&mut w, 404, "no route", b"").await?;
+                respond(&mut w, 404, "no route", keep_alive, b"").await?;
             }
         }
+        if !keep_alive { return Ok(()); }
     }
 }
 
@@ -249,9 +255,10 @@ async fn discard<R: tokio::io::AsyncRead + Unpin>(r: &mut BufReader<R>, mut n: u
     Ok(())
 }
 
-async fn respond<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, code: u16, reason: &str, body: &[u8]) -> Result<()> {
+async fn respond<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, code: u16, reason: &str, keep_alive: bool, body: &[u8]) -> Result<()> {
+    let conn = if keep_alive { "keep-alive" } else { "close" };
     let head = format!(
-        "HTTP/1.1 {code} {reason}\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: keep-alive\r\n\r\n",
+        "HTTP/1.1 {code} {reason}\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: {conn}\r\n\r\n",
         body.len()
     );
     w.write_all(head.as_bytes()).await?;
@@ -260,8 +267,9 @@ async fn respond<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, code: u16, reason:
     Ok(())
 }
 
-async fn head_respond<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, code: u16) -> Result<()> {
-    let head = format!("HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n");
+async fn head_respond<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, code: u16, keep_alive: bool) -> Result<()> {
+    let conn = if keep_alive { "keep-alive" } else { "close" };
+    let head = format!("HTTP/1.1 {code} X\r\nContent-Length: 0\r\nConnection: {conn}\r\n\r\n");
     w.write_all(head.as_bytes()).await?;
     w.flush().await?;
     Ok(())
