@@ -77,6 +77,73 @@ final class RelayHost: ObservableObject {
         // Tell my circles to use this device (its account node id) as their mailbox.
         FeedStore.shared.broadcastRelayNode(nodeId)
         HavenLog.relay("hosting relay=\(nodeId.prefix(10)) serving=\(serving)")
+        startHttpInterface(h)
+    }
+
+    /// Serve the relay's store over plain HTTP — the DEFAULT cross-NAT media transport (the iroh
+    /// blob ALPN drops its datagrams over a pure-relay cross-NAT path, so blob dials that must
+    /// cross a NAT stall ~30s and die while messaging works). Bearer-token gated; the token travels
+    /// ONLY inside the sealed frame-19 announce, so only circle members hold it. Reachable URLs =
+    /// the optional user-configured public URL (UserDefaults `haven.relay.publicURL` — set it when
+    /// this host is port-forwarded / reverse-proxied / tunneled) first, then every LAN IPv4.
+    private func startHttpInterface(_ h: RelayServerHandle) {
+        let token = httpToken()
+        Task { [weak self] in
+            var port: UInt16?
+            do { port = try await h.serveHttp(bind: "0.0.0.0:8674", token: token) }
+            catch { port = try? await h.serveHttp(bind: "0.0.0.0:0", token: token) }   // port taken → ephemeral
+            guard let self, let port else { HavenLog.relay("relay http serve FAILED"); return }
+            let urls = Self.reachableHttpUrls(port: port)
+            HavenLog.relay("relay http on :\(port) urls=\(urls.joined(separator: " "))")
+            guard !urls.isEmpty, !self.nodeId.isEmpty else { return }
+            RelayMailboxStore.shared.setHttpInterface(self.nodeId, urls: urls, token: token)
+            FeedStore.shared.reannounceOwnRelay()   // re-announce WITH the http interface attached
+        }
+    }
+
+    /// The persisted bearer token for OUR hosted relay's HTTP interface (generated once).
+    private func httpToken() -> String {
+        if let t = d.string(forKey: "haven.relay.httpToken"), !t.isEmpty { return t }
+        var bytes = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let tok = bytes.map { String(format: "%02x", $0) }.joined()
+        d.set(tok, forKey: "haven.relay.httpToken")
+        return tok
+    }
+
+    /// URLs peers can reach our HTTP interface at: the configured public URL first, then LAN IPv4s.
+    static func reachableHttpUrls(port: UInt16) -> [String] {
+        var out: [String] = []
+        if let pub = UserDefaults.standard.string(forKey: "haven.relay.publicURL")?
+            .trimmingCharacters(in: .whitespacesAndNewlines), pub.hasPrefix("http") {
+            out.append(pub.hasSuffix("/") ? String(pub.dropLast()) : pub)
+        }
+        for ip in lanIPv4s() { out.append("http://\(ip):\(port)") }
+        return out
+    }
+
+    /// Every up, non-loopback, non-link-local IPv4 on this device (getifaddrs).
+    static func lanIPv4s() -> [String] {
+        var out: [String] = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0 else { return out }
+        defer { freeifaddrs(ifaddr) }
+        var ptr = ifaddr
+        while let p = ptr {
+            defer { ptr = p.pointee.ifa_next }
+            guard let sa = p.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+            let flags = Int32(p.pointee.ifa_flags)
+            guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
+            var addr = sockaddr_in()
+            memcpy(&addr, sa, MemoryLayout<sockaddr_in>.size)
+            var sin = addr.sin_addr
+            var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            if inet_ntop(AF_INET, &sin, &buf, socklen_t(INET_ADDRSTRLEN)) != nil {
+                let ip = String(cString: buf)
+                if !ip.hasPrefix("169.254."), !out.contains(ip) { out.append(ip) }
+            }
+        }
+        return out
     }
 
     /// Store one of OUR OWN sealed events/media into the in-process mailbox directly (no iroh
@@ -217,6 +284,12 @@ struct RelayEntry: Codable, Identifiable, Equatable {
     var active: Bool
     var lastSeenMs: UInt64
     var isS3: Bool
+    /// Plain-HTTP interface of this relay (LAN + optional public URLs) — the DEFAULT cross-NAT
+    /// media transport (the iroh blob ALPN drops datagrams on pure-relay cross-NAT paths).
+    /// Learned from the sealed frame-19 announce; nil/empty = iroh-only relay.
+    var httpUrls: [String]?
+    /// Bearer token the relay's HTTP interface requires (travels ONLY inside sealed announces).
+    var httpToken: String?
     var id: String { hex }
 }
 
@@ -344,6 +417,25 @@ final class RelayMailboxStore: ObservableObject {
                                       active: activate ? true : true, lastSeenMs: nowMs(), isS3: isS3)
         }
         persistEntries()
+    }
+
+    /// Record a relay's plain-HTTP media interface (from our own host start, or a sealed announce).
+    func setHttpInterface(_ hex: String, urls: [String], token: String) {
+        ensureEntry(hex, activate: true)
+        guard var e = entries[hex] else { return }
+        if e.httpUrls == urls, e.httpToken == token { return }
+        e.httpUrls = urls
+        e.httpToken = token
+        entries[hex] = e
+        persistEntries()
+        objectWillChange.send()
+    }
+
+    /// The relay's HTTP interface (urls + token), or nil for an iroh-only relay.
+    func httpInterface(_ hex: String) -> (urls: [String], token: String)? {
+        guard let e = entries[hex], let t = e.httpToken, !t.isEmpty,
+              let u = e.httpUrls, !u.isEmpty else { return nil }
+        return (u, t)
     }
 
     /// Stamp a relay as just-seen (a successful op). Cheap; persisted so "last seen" survives a restart.

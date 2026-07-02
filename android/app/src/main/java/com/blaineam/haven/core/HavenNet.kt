@@ -105,6 +105,12 @@ object HavenNet : InboundListener {
         val active: Boolean,
         val lastSeenMs: Long,
         val isS3: Boolean,
+        /** Plain-HTTP interface of this relay (LAN + optional public URLs) — the DEFAULT cross-NAT
+         *  media transport (the iroh blob ALPN drops datagrams on pure-relay cross-NAT paths).
+         *  Learned from the sealed announce; empty = iroh-only relay. */
+        val httpUrls: List<String> = emptyList(),
+        /** Bearer token the relay's HTTP interface requires (travels ONLY inside sealed announces). */
+        val httpToken: String = "",
     )
     /** Per-relay metadata records, keyed by hex. The config survives deactivation here. */
     private val relayEntries = HashMap<String, RelayEntry>()
@@ -707,7 +713,7 @@ object HavenNet : InboundListener {
         }
         // Tell this peer about EVERY relay I know for the circle, so we pool all mailboxes.
         for (nodeHex in relaysFor(circleId)) {
-            val sealed = runCatching { social.sealCircleMedia(circleId, nodeHex.toByteArray()) }.getOrNull()
+            val sealed = relayAnnounceBlob(circleId, nodeHex)
             if (sealed != null) sendFrame(Wire.RELAY_NODE, Wire.eventPayload(circleId, sealed), toNodeHex)
         }
     }
@@ -875,7 +881,7 @@ object HavenNet : InboundListener {
         val hex = runCatching { relayHost?.nodeIdHex() }.getOrNull() ?: return
         if (hex.length != 64) return
         for (c in runCatching { social.circles() }.getOrDefault(emptyList())) {
-            val sealed = runCatching { social.sealCircleMedia(c.id, hex.toByteArray()) }.getOrNull() ?: continue
+            val sealed = relayAnnounceBlob(c.id, hex) ?: continue
             val frame = Wire.eventPayload(c.id, sealed)  // [LP cid][sealed] — same layout as frame 19
             if (NearbyTransport.active) NearbyTransport.broadcast(Wire.frame(Wire.RELAY_NODE, frame))
             for (idHex in dialTargets(c.id)) {
@@ -977,7 +983,26 @@ object HavenNet : InboundListener {
 
     // ---- Circle relay / mailbox (store-and-forward, so posts cross even when not both online) ----
 
-    /** Frame 19: [LP circleId][sealCircleMedia(relay node hex)]. Store the relay + backfill/poll. */
+    /**
+     * The sealed frame-19 payload for one relay: the legacy bare 64-hex node id, or — when we know the
+     * relay's plain-HTTP interface — a JSON `{"node":hex,"urls":[…],"token":…}` so members learn the
+     * reliable cross-NAT media path too. Sealed to the circle either way; legacy receivers that expect
+     * a bare hex simply ignore the JSON form (wrong length), so mixed versions stay compatible.
+     */
+    private fun relayAnnounceBlob(circleId: String, nodeHex: String): ByteArray? {
+        val e = relayEntries[nodeHex]
+        val payload = if (e != null && e.httpUrls.isNotEmpty() && e.httpToken.isNotEmpty()) {
+            org.json.JSONObject()
+                .put("node", nodeHex)
+                .put("urls", JSONArray(e.httpUrls))
+                .put("token", e.httpToken)
+                .toString().toByteArray(Charsets.UTF_8)
+        } else nodeHex.toByteArray(Charsets.UTF_8)
+        return runCatching { social.sealCircleMedia(circleId, payload) }.getOrNull()
+    }
+
+    /** Frame 19: [LP circleId][sealCircleMedia(relay node hex | {"node","urls","token"} JSON)].
+     *  Store the relay (+ its HTTP interface when announced) + backfill/poll. */
     private fun handleRelayNode(body: ByteArray) {
         val r = Wire.Reader(body)
         val cidBytes = r.lp() ?: return
@@ -985,7 +1010,18 @@ object HavenNet : InboundListener {
         val sealed = r.rest()
         if (circleId.isEmpty() || sealed.isEmpty()) return
         val open = runCatching { social.openCircleMedia(circleId, sealed) }.getOrNull() ?: return
-        val nodeHex = String(open, Charsets.UTF_8).trim().lowercase()
+        val text = String(open, Charsets.UTF_8).trim()
+        // Extended announce: JSON {node, urls, token} carries the relay's HTTP media interface.
+        var announcedUrls: List<String> = emptyList()
+        var announcedToken = ""
+        val nodeHex: String = if (text.startsWith("{")) {
+            val o = runCatching { JSONObject(text) }.getOrNull() ?: return
+            announcedUrls = o.optJSONArray("urls")?.let { a ->
+                (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { u -> u.startsWith("http") } }
+            } ?: emptyList()
+            announcedToken = o.optString("token", "")
+            o.optString("node", "").trim().lowercase()
+        } else text.lowercase()
         if (nodeHex.length != 64) return
         // A contact (often your OWN other device) RE-ANNOUNCED their circle relay. Previously a relay
         // the user had deactivated/forgot stayed in `suppressed` and was permanently ignored here — so
@@ -1002,6 +1038,15 @@ object HavenNet : InboundListener {
         // replace — parity with desktop handle_relay_node.
         val list = relayNodes.getOrPut(circleId) { mutableListOf() }
         ensureRelayEntry(nodeHex, isS3 = false, activate = true)
+        // Record the relay's announced HTTP media interface (the reliable cross-NAT path).
+        if (announcedUrls.isNotEmpty() && announcedToken.isNotEmpty()) {
+            val e = relayEntries[nodeHex]
+            if (e != null && (e.httpUrls != announcedUrls || e.httpToken != announcedToken)) {
+                relayEntries[nodeHex] = e.copy(httpUrls = announcedUrls, httpToken = announcedToken)
+                saveRelayNodes()
+                Log.i(TAG, "learned relay http interface for ${nodeHex.take(8)}: ${announcedUrls.size} url(s)")
+            }
+        }
         scope.launch(Dispatchers.Main) { bumpRelays() }   // recompose the Relays hub off the inbound thread
         // SUPERSEDE stale account-id relays: under the per-device transport a relay is ALWAYS a device id,
         // never an account id. A relay-list entry equal to a member's (or our own) ACCOUNT id is a dead
@@ -1055,7 +1100,7 @@ object HavenNet : InboundListener {
                 val list = relayNodes.getOrPut(cid) { mutableListOf() }
                 if (!list.contains(hex)) list.add(hex)
                 // Tell members (sealed) so they use the same mailbox.
-                val sealed = runCatching { social.sealCircleMedia(cid, hex.toByteArray()) }.getOrNull()
+                val sealed = relayAnnounceBlob(cid, hex)
                 if (sealed != null) {
                     val frame = Wire.eventPayload(cid, sealed)  // [LP cid][sealed] — same layout as frame 19
                     for (idHex in dialTargets(cid)) sendFrame(Wire.RELAY_NODE, frame, idHex)
@@ -1305,8 +1350,63 @@ object HavenNet : InboundListener {
             val nodeHex = h.nodeIdHex()   // == the account node id now
             Log.i(TAG, "hosting circle relay (shared endpoint): ${nodeHex.take(8)}")
             authorizeMembership()   // lock the mailbox to circle members before announcing it
+            startRelayHttp(h, nodeHex)   // plain-HTTP media interface (the reliable cross-NAT path)
             adoptRelay(nodeHex)     // use it + tell contacts via frame 19
         }
+    }
+
+    /**
+     * Serve the hosted relay's store over plain HTTP — the DEFAULT cross-NAT media transport (the
+     * iroh blob ALPN drops datagrams on pure-relay cross-NAT paths, so blob dials that must cross a
+     * NAT stall ~30s and die). Bearer-token gated; the token travels only inside the sealed frame-19
+     * announce, so only circle members ever hold it. The reachable URLs (LAN + an optional
+     * user-configured public URL for port-forward/reverse-proxy/tunnel setups, prefs key
+     * `relayPublicUrl`) are stored on our own RelayEntry so every announce carries them.
+     */
+    private suspend fun startRelayHttp(h: uniffi.haven_ffi.RelayServerHandle, nodeHex: String) {
+        val token = relayHttpToken()
+        // serveHttp returns the bound port (UShort). Try the fixed port first; if it's taken, fall
+        // back to an ephemeral one (0.0.0.0:0). null from BOTH → serve failed.
+        val port: Int = (runCatching { h.serveHttp("0.0.0.0:$RELAY_HTTP_PORT", token) }.getOrNull()
+            ?: runCatching { h.serveHttp("0.0.0.0:0", token) }.getOrNull())?.toInt()
+            ?: run { Log.e(TAG, "relay http serve failed"); return }
+        val urls = relayHttpUrls(port)
+        if (urls.isEmpty()) { Log.w(TAG, "relay http up on :$port but no reachable URL found"); return }
+        Log.i(TAG, "relay http interface on :$port → $urls")
+        val e = relayEntries[nodeHex]
+        relayEntries[nodeHex] = (e ?: RelayEntry(nodeHex, shortRelayName(nodeHex), true, relayNow(), false))
+            .copy(httpUrls = urls, httpToken = token)
+        saveRelayNodes()
+    }
+
+    private val RELAY_HTTP_PORT = 8674
+
+    /** The persisted bearer token for OUR hosted relay's HTTP interface (generated once). */
+    private fun relayHttpToken(): String {
+        prefs.getString("relayHttpToken", null)?.takeIf { it.isNotEmpty() }?.let { return it }
+        val bytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        val tok = bytes.joinToString("") { "%02x".format(it) }
+        prefs.edit().putString("relayHttpToken", tok).apply()
+        return tok
+    }
+
+    /** URLs peers can reach our HTTP interface at: every non-loopback IPv4 + the optional public URL. */
+    private fun relayHttpUrls(port: Int): List<String> {
+        val out = LinkedHashSet<String>()
+        // A user-configured public URL (port-forward / reverse proxy / tunnel) goes FIRST — it's the
+        // one that works across the internet; LAN addresses follow for same-network peers.
+        prefs.getString("relayPublicUrl", null)?.trim()?.takeIf { it.startsWith("http") }?.let { out.add(it.trimEnd('/')) }
+        runCatching {
+            for (ni in java.net.NetworkInterface.getNetworkInterfaces()) {
+                if (!ni.isUp || ni.isLoopback) continue
+                for (addr in ni.inetAddresses) {
+                    if (addr is java.net.Inet4Address && !addr.isLoopbackAddress) {
+                        out.add("http://${addr.hostAddress}:$port")
+                    }
+                }
+            }
+        }
+        return out.toList()
     }
 
     /**
@@ -1671,6 +1771,7 @@ object HavenNet : InboundListener {
 
     /** Enqueue a media blob to mirror to the circle's relays — serialized (one in RAM at a time). */
     private fun enqueueBackup(circleId: String, ref: String) {
+        if (LocalMedia.isSynthetic(ref)) return   // geo: pins et al. carry no bytes — never relay-storable
         val job = MediaJob.Backup(ref, circleId)
         if (!offerMediaJob(jobKey(job))) return
         ensureMediaQueueDraining()
@@ -1679,6 +1780,7 @@ object HavenNet : InboundListener {
 
     /** Enqueue a missing media blob to fetch from the circle's relays — serialized (one at a time). */
     private fun enqueueRestore(circleId: String, ref: String) {
+        if (LocalMedia.isSynthetic(ref)) return   // geo: pins et al. carry no bytes — nothing to fetch
         val job = MediaJob.Restore(ref, circleId)
         if (!offerMediaJob(jobKey(job))) return
         ensureMediaQueueDraining()
@@ -1704,8 +1806,10 @@ object HavenNet : InboundListener {
         for (c in social.circles()) {
             val feed = runCatching { social.feed(c.id, nowMs(), null) }.getOrDefault(emptyList())
             for (item in feed) {
-                item.media.forEach { if (!LocalMedia.has(it)) missing.putIfAbsent(it, c.id) }
-                item.comments.forEach { cm -> cm.media.forEach { if (!LocalMedia.has(it)) missing.putIfAbsent(it, c.id) } }
+                // Skip synthetic refs (geo: location pins): they carry no fetchable bytes, so counting
+                // them keeps the pending metric pinned above 0 forever and fires a doomed fetch each sweep.
+                item.media.forEach { if (!LocalMedia.isSynthetic(it) && !LocalMedia.has(it)) missing.putIfAbsent(it, c.id) }
+                item.comments.forEach { cm -> cm.media.forEach { if (!LocalMedia.isSynthetic(it) && !LocalMedia.has(it)) missing.putIfAbsent(it, c.id) } }
             }
         }
         SyncMetrics.setPending(missing.size)   // media refs still missing locally (iOS nbMediaPending)
@@ -1736,20 +1840,90 @@ object HavenNet : InboundListener {
     }
 
     /**
-     * Relay order for MEDIA transfers: S3/HTTP buckets FIRST, iroh relays after. A bucket is plain
-     * HTTPS so it traverses ANY NAT — it's the DEFAULT media transport. The iroh blob ALPN
-     * (haven/blob/1) is kept as an opportunistic fast-path only: the noq/iroh fork drops its
-     * outbound SendDatagram over a pure-relay (cross-NAT) path, so a blob dial that has to cross a
-     * NAT stalls 30s and dies while messaging on the same relay path works. Stable within groups.
+     * Relay order for MEDIA transfers: relays with a plain-HTTP interface FIRST (the DEFAULT
+     * cross-NAT media transport), then S3 buckets (only present when the user configured one —
+     * rare), then iroh-only relays. HTTP/S3 are plain HTTP(S) so they traverse ANY NAT; the iroh
+     * blob ALPN (haven/blob/1) is kept as an opportunistic fast-path only: the noq/iroh fork drops
+     * its outbound SendDatagram over a pure-relay (cross-NAT) path, so a blob dial that has to
+     * cross a NAT stalls 30s and dies while messaging on the same relay path works. Stable sort.
      */
     private fun mediaRelaysFor(circleId: String): List<String> =
-        relaysFor(circleId).sortedByDescending { it.startsWith("s3:") }
+        relaysFor(circleId).sortedByDescending { hex ->
+            when {
+                relayEntries[hex]?.httpUrls?.isNotEmpty() == true -> 2
+                hex.startsWith("s3:") -> 1
+                else -> 0
+            }
+        }
 
-    /** Mirror a sealed media blob to EVERY circle relay (S3 first — see mediaRelaysFor). */
+    // ---- Relay plain-HTTP media interface (client side) ------------------------------------------
+    // GET/PUT against a relay's HTTP interface (see core httprelay.rs): `<base>/k/<key>` with the
+    // relay's bearer token. Result semantics: failure = URL unreachable (back it off + try the next
+    // URL), success(null) = relay reached but doesn't hold the key (a real MISS — the iroh path
+    // serves the same store, so don't bother dialing it for the same key).
+
+    private val httpUrlBad = HashMap<String, Long>()   // url -> retry-after epoch ms (2-min backoff)
+    private fun httpUrlsFor(e: RelayEntry): List<String> =
+        if (e.httpToken.isEmpty()) emptyList()
+        else e.httpUrls.filter { (httpUrlBad[it] ?: 0L) < System.currentTimeMillis() }
+    private fun markHttpUrlBad(url: String) { httpUrlBad[url] = System.currentTimeMillis() + 120_000 }
+
+    private fun httpKeyUrl(base: String, key: String) = "${base.trimEnd('/')}/k/${android.net.Uri.encode(key, "/")}"
+
+    private fun relayHttpGet(base: String, token: String, key: String): Result<ByteArray?> = runCatching {
+        val c = (java.net.URL(httpKeyUrl(base, key)).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 4000; readTimeout = 60000
+            setRequestProperty("Authorization", "Bearer $token")
+        }
+        try {
+            when (c.responseCode) {
+                in 200..299 -> c.inputStream.use { it.readBytes() }
+                404 -> null
+                else -> throw java.io.IOException("http ${c.responseCode}")
+            }
+        } finally { c.disconnect() }
+    }
+
+    private fun relayHttpPut(base: String, token: String, key: String, body: ByteArray): Boolean = runCatching {
+        val c = (java.net.URL(httpKeyUrl(base, key)).openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "PUT"; doOutput = true; connectTimeout = 4000; readTimeout = 120000
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/octet-stream")
+            setFixedLengthStreamingMode(body.size)
+        }
+        try {
+            c.outputStream.use { it.write(body) }
+            c.responseCode in 200..299
+        } finally { c.disconnect() }
+    }.getOrDefault(false)
+
+    /** PUT one media blob (chunked wire format) to a relay's HTTP interface. True if it landed. */
+    private fun httpUploadMedia(e: RelayEntry, ref: String, key: String, blob: ByteArray, chunked: Boolean): Boolean {
+        for (base in httpUrlsFor(e)) {
+            val ok = if (chunked) {
+                val sizes = ArrayList<Int>()
+                var all = true
+                for ((i, range) in chunkOffsets(blob.size).withIndex()) {
+                    val (from, to) = range
+                    if (!relayHttpPut(base, e.httpToken, mediaChunkKey(ref, i), blob.copyOfRange(from, to))) { all = false; break }
+                    sizes.add(to - from)
+                }
+                all && relayHttpPut(base, e.httpToken, key, makeManifest(sizes))
+            } else {
+                relayHttpPut(base, e.httpToken, key, blob)
+            }
+            if (ok) return true
+            markHttpUrlBad(base)
+        }
+        return false
+    }
+
+    /** Mirror a sealed media blob to EVERY circle relay (HTTP first — see mediaRelaysFor). */
     suspend fun uploadMedia(circleId: String, ref: String) {
         val blob = LocalMedia.rawSealed(ref) ?: return
         val key = mediaKey(ref)
         val chunked = blob.size > mediaChunkBytes
+        val hostedHex = runCatching { relayHost?.nodeIdHex() }.getOrNull()
         for (nodeHex in mediaRelaysFor(circleId)) {
             // S3-BUCKET relay: put via the S3 FFI (relayClientFor can't dial an "s3:" pseudo-node).
             if (nodeHex.startsWith("s3:")) {
@@ -1766,6 +1940,30 @@ object HavenNet : InboundListener {
                 }.onSuccess { markRelaySeen(nodeHex) }
                     .onFailure { android.util.Log.d(TAG, "s3 media put failed ($nodeHex): ${it.message}") }
                 continue
+            }
+            // Our OWN hosted relay: write straight into the local store (never dial/HTTP ourselves).
+            if (hostedHex != null && nodeHex == hostedHex) {
+                runCatching {
+                    if (chunked) {
+                        val sizes = chunkOffsets(blob.size).mapIndexed { i, (from, to) ->
+                            relayHost?.localPut(mediaChunkKey(ref, i), blob.copyOfRange(from, to)); to - from
+                        }
+                        relayHost?.localPut(key, makeManifest(sizes))
+                    } else {
+                        relayHost?.localPut(key, blob)
+                    }
+                }
+                continue
+            }
+            // Relay HTTP interface — the DEFAULT cross-NAT path. Success = done for this relay
+            // (the iroh path serves the same store); unreachable → fall back to the iroh put.
+            val entry = relayEntries[nodeHex]
+            if (entry != null && httpUrlsFor(entry).isNotEmpty()) {
+                if (httpUploadMedia(entry, ref, key, blob, chunked)) {
+                    markRelaySeen(nodeHex)
+                    android.util.Log.i("MediaSync", "HTTP uploaded ref=$ref to ${nodeHex.take(8)}")
+                    continue
+                }
             }
             val client = relayClientFor(nodeHex) ?: continue
             runCatching {
@@ -1811,6 +2009,30 @@ object HavenNet : InboundListener {
                 android.util.Log.i("MediaSync", "S3 fetched ref=$ref headBytes=${head.size}")
                 return true
             }
+            // Relay HTTP interface — the DEFAULT cross-NAT path. A reachable relay that answers 404
+            // is a real MISS: the iroh blob path serves the SAME store, so skip the doomed ~30s dial
+            // for this relay and move on. Only an UNREACHABLE URL falls through to the iroh dial.
+            val entry = relayEntries[nodeHex]
+            val httpBases = entry?.let { httpUrlsFor(it) } ?: emptyList()
+            var httpMiss = false
+            var httpDone = false
+            for (base in httpBases) {
+                val r = relayHttpGet(base, entry!!.httpToken, key)
+                if (r.isFailure) {
+                    android.util.Log.i("MediaSync", "  http $base unreachable (${r.exceptionOrNull()?.message})")
+                    markHttpUrlBad(base); continue
+                }
+                val head = r.getOrNull()
+                if (head == null) { httpMiss = true; break }
+                val ok = reassembleInto(ref, head) { i -> relayHttpGet(base, entry.httpToken, mediaChunkKey(ref, i)).getOrNull() }
+                if (!ok) continue
+                markRelaySeen(nodeHex)
+                android.util.Log.i("MediaSync", "HTTP fetched ref=$ref via $base headBytes=${head.size}")
+                httpDone = true
+                break
+            }
+            if (httpDone) return true
+            if (httpMiss) { android.util.Log.i("MediaSync", "  node=${nodeHex.take(12)} http MISS — skipping iroh dial"); continue }
             val client = relayClientFor(nodeHex)
             if (client == null) { android.util.Log.i("MediaSync", "  node=${nodeHex.take(12)} client=NULL (self-dial guard / backoff / connect-fail)"); continue }
             val head = runCatching { client.get(key) }.getOrNull()
@@ -2067,6 +2289,10 @@ object HavenNet : InboundListener {
                         active = o.optBoolean("active", true),
                         lastSeenMs = o.optLong("lastSeenMs", relayNow()),
                         isS3 = o.optBoolean("isS3", hex.startsWith("s3:")),
+                        httpUrls = o.optJSONArray("httpUrls")?.let { a ->
+                            (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.isNotEmpty() } }
+                        } ?: emptyList(),
+                        httpToken = o.optString("httpToken", ""),
                     )
                 }
             }
@@ -2083,6 +2309,8 @@ object HavenNet : InboundListener {
             entriesArr.put(JSONObject().apply {
                 put("hex", e.hex); put("name", e.name); put("active", e.active)
                 put("lastSeenMs", e.lastSeenMs); put("isS3", e.isS3)
+                if (e.httpUrls.isNotEmpty()) put("httpUrls", JSONArray(e.httpUrls))
+                if (e.httpToken.isNotEmpty()) put("httpToken", e.httpToken)
             })
         }
         // Write the new format and clear the legacy key (completes the migration).

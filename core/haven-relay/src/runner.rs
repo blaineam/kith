@@ -44,6 +44,7 @@ pub async fn run(cfg: Config) -> Result<()> {
     let mut _blob_guard: Option<std::sync::Arc<BlobServer>> = None;
     let mut _s3_guard: Option<std::sync::Arc<S3Server>> = None;
     let mut _rclone_guard: Option<RcloneChild> = None;
+    let mut _http_guard: Option<haven_net::httprelay::HttpRelay> = None;
 
     match &cfg.backend {
         StoreBackend::Local => {
@@ -77,6 +78,27 @@ pub async fn run(cfg: Config) -> Result<()> {
                         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                     }
                 });
+            }
+
+            // Plain-HTTP blob interface — the DEFAULT cross-NAT media transport (the iroh blob
+            // ALPN drops datagrams on pure-relay cross-NAT paths). Serves the SAME store dir;
+            // bearer-token gated; blobs are E2E-sealed so the wire carries only ciphertext.
+            if let Some(bind) = &cfg.http_bind {
+                let http = haven_net::httprelay::serve(store.clone(), bind, cfg.http_token.clone())
+                    .await
+                    .map_err(|e| anyhow!("start http blob interface: {e}"))?;
+                let port = http.port();
+                println!("✓ http media interface live on {bind} (port {port}).");
+                match &cfg.http_url {
+                    Some(url) => println!("  public URL : {url}"),
+                    None => println!(
+                        "  reachable at http://<this-host>:{port} — port-forward / reverse-proxy \
+                         (TLS) / tunnel it to serve members across the internet, then pass \
+                         --http-url <public url>."
+                    ),
+                }
+                println!("  http token : {}", cfg.http_token);
+                _http_guard = Some(http);
             }
             _blob_guard = Some(blob);
         }

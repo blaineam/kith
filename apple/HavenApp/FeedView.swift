@@ -949,16 +949,29 @@ final class FeedStore: ObservableObject {
     /// backfill. frame 19 used to fire only once at relay start, so a sibling/friend that wasn't reachable
     /// at that instant never learned the relay — which is why the iPhone "sees the Mac nearby but won't
     /// show its relay." Cheap (one sealed announce per circle), so it's safe every sync tick + on connect.
-    private func reannounceOwnRelay() {
+    func reannounceOwnRelay() {
         guard let social, RelayHost.shared.serving else { return }
         let hex = RelayHost.shared.nodeId
-        guard hex.count == 64, let data = hex.data(using: .utf8) else { return }
+        guard hex.count == 64 else { return }
+        let data = relayAnnounceData(hex)
         for ci in circles {
             guard let sealed = try? social.sealCircleMedia(circleId: ci.id, data: data) else { continue }
             var p = Data(); lpAppend(&p, Data(ci.id.utf8)); p.append(sealed)
             nearbyBroadcast(19, p)
             originateRelay(dests: dialTargets(ci.id), inner: frame(19, p))
         }
+    }
+
+    /// The frame-19 announce body for one relay: the legacy bare 64-hex node id, or — once the
+    /// relay's plain-HTTP interface is known — JSON `{"node":hex,"urls":[…],"token":…}` so members
+    /// also learn the reliable cross-NAT media path. Sealed to the circle either way; a legacy
+    /// receiver that expects a bare hex simply ignores the JSON form (wrong length).
+    private func relayAnnounceData(_ hex: String) -> Data {
+        if let http = RelayMailboxStore.shared.httpInterface(hex),
+           let json = try? JSONSerialization.data(withJSONObject: ["node": hex, "urls": http.urls, "token": http.token]) {
+            return json
+        }
+        return Data(hex.utf8)
     }
 
     /// A nearby peer just connected over Bluetooth/Wi-Fi — say hello + back-fill (all circles).
@@ -1355,7 +1368,8 @@ final class FeedStore: ObservableObject {
     /// every present + future circle inherits). Each circle's members are told over frame 19.
     func adoptRelayNode(_ nodeHex: String, circleIds: [String], setDefault: Bool) {
         let hex = nodeHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard let social, hex.count == 64, let data = hex.data(using: .utf8) else { return }
+        guard let social, hex.count == 64 else { return }
+        let data = relayAnnounceData(hex)
         RelayMailboxStore.shared.unforget(hex)   // explicit adoption overrides a prior Forget
         if setDefault { RelayMailboxStore.shared.defaultNodeHex = hex }
         for cid in circleIds {
@@ -1448,7 +1462,18 @@ final class FeedStore: ObservableObject {
         let sealed = payload.subdata(in: (payload.startIndex + off)..<payload.endIndex)
         guard !circleId.isEmpty, !sealed.isEmpty,
               let data = social.openCircleMedia(circleId: circleId, sealed: sealed),
-              let nodeHex = String(data: data, encoding: .utf8), nodeHex.count == 64 else { return }
+              var nodeHex = String(data: data, encoding: .utf8) else { return }
+        // Extended announce: JSON {node, urls, token} also carries the relay's plain-HTTP media
+        // interface (the reliable cross-NAT path). Legacy announces are the bare 64-hex id.
+        var announcedUrls: [String] = []
+        var announcedToken = ""
+        if nodeHex.hasPrefix("{"),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            announcedUrls = (obj["urls"] as? [String] ?? []).filter { $0.hasPrefix("http") }
+            announcedToken = obj["token"] as? String ?? ""
+            nodeHex = (obj["node"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard nodeHex.count == 64 else { return }
         // A contact (often your OWN other device) RE-ANNOUNCED their circle relay. Previously a relay the
         // user had deactivated/forgot stayed in `suppressed` and was permanently ignored here — so deleting
         // your Mac's relay on your iPhone meant it never came back even when the Mac re-announced it. Now a
@@ -1462,6 +1487,10 @@ final class FeedStore: ObservableObject {
         // members automatically pool relays (more redundancy, no manual setup) — desktop parity.
         let wasNew = !RelayMailboxStore.shared.relays(forCircle: circleId).contains(lower)
         RelayMailboxStore.shared.add(circleId: circleId, nodeHex: nodeHex)
+        // Record the relay's announced HTTP media interface (the reliable cross-NAT path).
+        if !announcedUrls.isEmpty, !announcedToken.isEmpty {
+            RelayMailboxStore.shared.setHttpInterface(lower, urls: announcedUrls, token: announcedToken)
+        }
         // SUPERSEDE stale account-id relays. Under the per-device transport a relay is ALWAYS a device id,
         // never an account id. A relay-list entry equal to a member's (or our own) ACCOUNT id is a dead
         // leftover from the pre-device-seed transport (when the relay WAS the account id) — nothing serves it,
@@ -1639,7 +1668,7 @@ final class FeedStore: ObservableObject {
     /// store. Safe to call repeatedly — re-sent chunks just fill the gaps a lossy transfer
     /// left, which is what large videos need (one dropped chunk otherwise hangs forever).
     func requestMedia(_ ref: String) {
-        guard let social, !MediaStore.shared.has(ref) else { return }
+        guard let social, !MediaStore.isSynthetic(ref), !MediaStore.shared.has(ref) else { return }
         let myHex = social.myNodeHex()
         var payload = Data(myHex.utf8); payload.append(Data(ref.utf8))
         for contact in ContactsStore.shared.contacts { sendIroh(3, payload, to: contact.idHex) }
@@ -1657,9 +1686,11 @@ final class FeedStore: ObservableObject {
         guard let social, node != nil || nearby != nil else { return }
         let myHex = social.myNodeHex()
         var missing = Set<String>()
+        // Skip synthetic refs (geo: location pins): they carry no fetchable bytes, so counting them
+        // keeps nbMediaPending pinned above 0 forever and fires a doomed restore each sweep.
         for item in items {
-            for ref in item.media where !MediaStore.shared.has(ref) { missing.insert(ref) }
-            for c in item.comments { for ref in c.media where !MediaStore.shared.has(ref) { missing.insert(ref) } }
+            for ref in item.media where !MediaStore.isSynthetic(ref) && !MediaStore.shared.has(ref) { missing.insert(ref) }
+            for c in item.comments { for ref in c.media where !MediaStore.isSynthetic(ref) && !MediaStore.shared.has(ref) { missing.insert(ref) } }
         }
         let circleIds = circles.map { $0.id }
         SyncMetrics.shared.nbMediaPending = missing.count

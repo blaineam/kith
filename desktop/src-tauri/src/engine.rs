@@ -99,6 +99,11 @@ pub struct Engine {
     /// Per-relay backoff health, keyed by node hex — drives graceful fallback.
     relay_health: StdMutex<HashMap<String, crate::relayhealth::RelayHealth>>,
     s3: TokioMutex<Option<Arc<S3Mailbox>>>,
+    /// Client for relays' plain-HTTP media interfaces — the DEFAULT cross-NAT media transport.
+    http: reqwest::Client,
+    /// HTTP relay URLs that recently failed to answer → retry-after epoch ms (2-min backoff), so a
+    /// dead LAN address doesn't cost a connect-timeout per chunk.
+    http_url_bad: StdMutex<HashMap<String, u64>>,
 }
 
 const MEDIA_CHUNK_SIZE: usize = 512 * 1024;
@@ -144,6 +149,11 @@ impl Engine {
             relay_clients: TokioMutex::new(HashMap::new()),
             relay_health: StdMutex::new(HashMap::new()),
             s3: TokioMutex::new(None),
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(4))
+                .build()
+                .unwrap_or_default(),
+            http_url_bad: StdMutex::new(HashMap::new()),
         }))
     }
 
@@ -1164,7 +1174,28 @@ impl Engine {
             return;
         }
         let Some(open) = self.social.open_circle_media(circle_id.clone(), sealed) else { return };
-        let node_hex = String::from_utf8_lossy(&open).trim().to_string();
+        let text = String::from_utf8_lossy(&open).trim().to_string();
+        // Extended announce: JSON {node, urls, token} also carries the relay's plain-HTTP media
+        // interface (the reliable cross-NAT path). Legacy announces are the bare 64-hex id.
+        let mut announced_urls: Vec<String> = Vec::new();
+        let mut announced_token = String::new();
+        let node_hex = if text.starts_with('{') {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+            announced_urls = v["urls"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|u| u.as_str())
+                        .filter(|u| u.starts_with("http"))
+                        .map(|u| u.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            announced_token = v["token"].as_str().unwrap_or_default().to_string();
+            v["node"].as_str().unwrap_or_default().trim().to_lowercase()
+        } else {
+            text.to_lowercase()
+        };
         if node_hex.len() != 64 {
             return;
         }
@@ -1186,6 +1217,10 @@ impl Engine {
             let list = p.relays.entry(circle_id.clone()).or_default();
             if !list.contains(&node_hex) {
                 list.push(node_hex.clone());
+            }
+            // Record the relay's announced HTTP media interface (the reliable cross-NAT path).
+            if !announced_urls.is_empty() && !announced_token.is_empty() {
+                p.set_relay_http(&node_hex, announced_urls.clone(), announced_token.clone());
             }
             let _ = p.save(&self.paths);
             // Clear any stale backoff so a just-reactivated relay is retried immediately.
@@ -1235,13 +1270,86 @@ impl Engine {
         std::fs::create_dir_all(&dir).ok();
         let handle = RelayServerHandle::attach(node, dir.to_string_lossy().to_string());
         let node_hex = handle.node_id_hex();
-        *self.relay_host.lock().unwrap() = Some(handle);
+        *self.relay_host.lock().unwrap() = Some(handle.clone());
         self.dyn_state.lock().unwrap().hosting = true;
         // Lock the mailbox to circle members before announcing it (audit transport-F4).
         self.authorize_membership();
+        // Plain-HTTP media interface — the DEFAULT cross-NAT media transport (the iroh blob ALPN
+        // drops datagrams on pure-relay cross-NAT paths). Token-gated; the token travels only
+        // inside the sealed frame-19 announce.
+        self.start_relay_http(&handle, &node_hex).await;
         self.adopt_relay(node_hex.clone()).await;
         self.emit_changed();
         Ok(node_hex)
+    }
+
+    /// Serve the hosted relay's store over HTTP and record our URLs+token on our own RelayEntry so
+    /// every announce carries them. URLs = the optional configured public URL first, then the LAN IP.
+    async fn start_relay_http(self: &Arc<Self>, handle: &Arc<RelayServerHandle>, node_hex: &str) {
+        let token = {
+            let mut p = self.prefs.lock().unwrap();
+            if p.relay_http_token.is_empty() {
+                use rand::RngCore;
+                let mut bytes = [0u8; 16];
+                rand::rngs::OsRng.fill_bytes(&mut bytes);
+                p.relay_http_token = bytes.iter().map(|b| format!("{b:02x}")).collect();
+                let _ = p.save(&self.paths);
+            }
+            p.relay_http_token.clone()
+        };
+        let port = match handle.serve_http("0.0.0.0:8674".into(), token.clone()).await {
+            Ok(p) => p,
+            Err(_) => match handle.serve_http("0.0.0.0:0".into(), token.clone()).await {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("relay http serve failed: {e}");
+                    return;
+                }
+            },
+        };
+        let mut urls = Vec::new();
+        {
+            let p = self.prefs.lock().unwrap();
+            if p.relay_public_url.starts_with("http") {
+                urls.push(p.relay_public_url.trim_end_matches('/').to_string());
+            }
+        }
+        if let Some(ip) = Self::primary_lan_ip() {
+            urls.push(format!("http://{ip}:{port}"));
+        }
+        log::info!("relay http on :{port} urls={urls:?}");
+        if urls.is_empty() {
+            return;
+        }
+        let mut p = self.prefs.lock().unwrap();
+        if p.set_relay_http(node_hex, urls, token) {
+            let _ = p.save(&self.paths);
+        }
+    }
+
+    /// This machine's primary LAN IPv4 (UDP-connect trick — no packet is actually sent).
+    fn primary_lan_ip() -> Option<String> {
+        let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        s.connect("8.8.8.8:80").ok()?;
+        let ip = s.local_addr().ok()?.ip();
+        if ip.is_loopback() {
+            return None;
+        }
+        Some(ip.to_string())
+    }
+
+    /// The frame-19 announce body for one relay: the legacy bare 64-hex node id, or — once the
+    /// relay's plain-HTTP interface is known — JSON `{"node":hex,"urls":[…],"token":…}` so members
+    /// also learn the reliable cross-NAT media path. A legacy receiver ignores the JSON form.
+    fn relay_announce_body(&self, hex: &str) -> Vec<u8> {
+        if let Some((urls, token)) = self.prefs.lock().unwrap().relay_http(hex) {
+            if let Ok(json) = serde_json::to_vec(&serde_json::json!({
+                "node": hex, "urls": urls, "token": token,
+            })) {
+                return json;
+            }
+        }
+        hex.as_bytes().to_vec()
     }
 
     /// Push current circle membership to the in-process relay so each circle's mailbox is served ONLY
@@ -1279,8 +1387,9 @@ impl Engine {
         if hex.len() != 64 {
             return;
         }
+        let body = self.relay_announce_body(&hex);
         for c in self.social.circles() {
-            let Ok(sealed) = self.social.seal_circle_media(c.id.clone(), hex.clone().into_bytes()) else { continue };
+            let Ok(sealed) = self.social.seal_circle_media(c.id.clone(), body.clone()) else { continue };
             let frame = wire::event_payload(&c.id, &sealed);
             for id_hex in self.social.contact_node_ids(c.id.clone()) {
                 self.send_frame(wire::RELAY_NODE, &frame, &id_hex);
@@ -1308,13 +1417,13 @@ impl Engine {
                     continue; // only MY media — others' media is mirrored by their own devices
                 }
                 for r in item.media {
-                    if self.media.has(&r) && !refs.contains(&r) {
+                    if !LocalMedia::is_synthetic(&r) && self.media.has(&r) && !refs.contains(&r) {
                         refs.push(r);
                     }
                 }
                 for cm in item.comments {
                     for r in cm.media {
-                        if self.media.has(&r) && !refs.contains(&r) {
+                        if !LocalMedia::is_synthetic(&r) && self.media.has(&r) && !refs.contains(&r) {
                             refs.push(r);
                         }
                     }
@@ -1350,7 +1459,7 @@ impl Engine {
                 }
                 let _ = p.save(&self.paths);
             }
-            if let Ok(sealed) = self.social.seal_circle_media(c.id.clone(), hex.clone().into_bytes()) {
+            if let Ok(sealed) = self.social.seal_circle_media(c.id.clone(), self.relay_announce_body(&hex)) {
                 let frame = wire::event_payload(&c.id, &sealed);
                 for id_hex in self.social.contact_node_ids(c.id.clone()) {
                     self.send_frame(wire::RELAY_NODE, &frame, &id_hex);
@@ -1908,14 +2017,16 @@ impl Engine {
         for c in self.social.circles() {
             let feed = self.social.feed(c.id.clone(), now_ms(), None);
             for item in feed {
+                // Skip synthetic refs (geo: location pins): they carry no fetchable bytes, so a sweep
+                // would fire a doomed S3-404 + ~30s iroh dial for them every cycle and never converge.
                 for r in item.media {
-                    if !self.media.has(&r) && !missing.iter().any(|(rr, _)| rr == &r) {
+                    if !LocalMedia::is_synthetic(&r) && !self.media.has(&r) && !missing.iter().any(|(rr, _)| rr == &r) {
                         missing.push((r, c.id.clone()));
                     }
                 }
                 for cm in item.comments {
                     for r in cm.media {
-                        if !self.media.has(&r) && !missing.iter().any(|(rr, _)| rr == &r) {
+                        if !LocalMedia::is_synthetic(&r) && !self.media.has(&r) && !missing.iter().any(|(rr, _)| rr == &r) {
                             missing.push((r, c.id.clone()));
                         }
                     }
@@ -1979,6 +2090,43 @@ impl Engine {
         }
     }
 
+    // ---- Relay plain-HTTP media interface (client side) -----------------------------------------
+    // GET/PUT against a relay's HTTP interface (core httprelay.rs): `<base>/k/<key>` with the relay's
+    // bearer token (learned from the sealed frame-19 announce). This is the DEFAULT cross-NAT media
+    // transport; a URL that doesn't answer is backed off 2 minutes so a dead LAN address doesn't cost
+    // a connect-timeout per chunk. Keys are already URL-path-safe (haven/media/… ascii), so no encoding.
+
+    fn http_url_bad(&self, base: &str) -> bool {
+        self.http_url_bad.lock().unwrap().get(base).map(|&t| t > now_ms()).unwrap_or(false)
+    }
+    fn mark_http_url_bad(&self, base: &str) {
+        self.http_url_bad.lock().unwrap().insert(base.to_string(), now_ms() + 120_000);
+    }
+    fn http_key_url(base: &str, key: &str) -> String {
+        format!("{}/k/{}", base.trim_end_matches('/'), key)
+    }
+    /// GET one key. `Ok(Some)` = bytes, `Ok(None)` = reachable but 404 (a real MISS — the iroh path
+    /// serves the same store, so skip dialing it), `Err(())` = unreachable.
+    async fn http_get(&self, base: &str, token: &str, key: &str) -> Result<Option<Vec<u8>>, ()> {
+        let resp = self.http.get(Self::http_key_url(base, key)).bearer_auth(token).send().await.map_err(|_| ())?;
+        match resp.status().as_u16() {
+            200..=299 => Ok(Some(resp.bytes().await.map_err(|_| ())?.to_vec())),
+            404 => Ok(None),
+            _ => Err(()),
+        }
+    }
+    async fn http_put(&self, base: &str, token: &str, key: &str, body: Vec<u8>) -> bool {
+        self.http
+            .put(Self::http_key_url(base, key))
+            .bearer_auth(token)
+            .header("content-type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+
     async fn upload_media(self: &Arc<Self>, circle_id: &str, reference: &str) {
         let Some(blob) = self.media.raw_sealed(reference) else { return };
         let key = Self::media_key(reference);
@@ -2000,11 +2148,39 @@ impl Engine {
                 let _ = s3.put(&key, &blob).await;
             }
         }
-        // Then mirror to every iroh relay (redundancy + the LAN/hosted fast-path). Large blobs are
-        // sliced into 8 MB chunks under "<key>.p/<i>" with a manifest at <key> so a GET never
-        // exceeds MAX_BLOB. "s3:" pseudo-entries are the bucket handled above — they can't be dialed.
+        // Then mirror to every relay (redundancy + the LAN/hosted fast-path). Per relay, its plain-HTTP
+        // interface is tried FIRST (the reliable cross-NAT path); the iroh blob dial is the fallback.
+        // Large blobs are sliced into 8 MB chunks under "<key>.p/<i>" with a manifest at <key> so a GET
+        // never exceeds MAX_BLOB. "s3:" pseudo-entries are the bucket handled above — can't be dialed.
         for node_hex in self.relays_for(circle_id) {
             if node_hex.starts_with("s3:") { continue; }
+            // Relay HTTP interface — the DEFAULT cross-NAT path. Bind out of the lock FIRST so the
+            // MutexGuard is dropped before any `.await` below (a guard held across await isn't Send).
+            let http_iface = self.prefs.lock().unwrap().relay_http(&node_hex);
+            if let Some((urls, token)) = http_iface {
+                let mut put = false;
+                for base in urls.iter().filter(|u| !self.http_url_bad(u)) {
+                    let ok = if chunked {
+                        let mut sizes = Vec::new();
+                        let mut all = true;
+                        for (i, slice) in blob.chunks(MEDIA_CHUNK_BYTES).enumerate() {
+                            if !self.http_put(base, &token, &Self::media_chunk_key(reference, i), slice.to_vec()).await {
+                                all = false;
+                                break;
+                            }
+                            sizes.push(slice.len());
+                        }
+                        all && self.http_put(base, &token, &key, Self::make_manifest(&sizes)).await
+                    } else {
+                        self.http_put(base, &token, &key, blob.clone()).await
+                    };
+                    if ok { put = true; break; } else { self.mark_http_url_bad(base); }
+                }
+                if put {
+                    self.mark_relay_ok(&node_hex);
+                    continue; // the iroh path serves the SAME store — done with this relay
+                }
+            }
             if let Some(client) = self.relay_client_for(&node_hex).await {
                 let res: Result<(), ()> = async {
                     if chunked {
@@ -2052,9 +2228,48 @@ impl Engine {
                 }
             }
         }
-        // Then each iroh relay in turn — the opportunistic fast-path (graceful fallback).
+        // Then each relay in turn. Per relay, its plain-HTTP interface is tried FIRST (the reliable
+        // cross-NAT path); the iroh blob dial is the fallback/fast-path.
         for node_hex in self.relays_for(circle_id) {
             if node_hex.starts_with("s3:") { continue; }
+            // Relay HTTP interface — the DEFAULT cross-NAT path. Bind out of the lock FIRST so the
+            // MutexGuard is dropped before any `.await` below (a guard held across await isn't Send).
+            let http_iface = self.prefs.lock().unwrap().relay_http(&node_hex);
+            if let Some((urls, token)) = http_iface {
+                let mut http_miss = false;
+                for base in urls.iter().filter(|u| !self.http_url_bad(u)) {
+                    match self.http_get(base, &token, &key).await {
+                        Err(()) => { self.mark_http_url_bad(base); continue; }
+                        Ok(None) => { http_miss = true; break; } // reachable, doesn't hold it
+                        Ok(Some(head)) => {
+                            if let Some(count) = Self::parse_manifest(&head) {
+                                let part = self.media.new_sealed_part(reference);
+                                let mut ok = true;
+                                for i in 0..count {
+                                    match self.http_get(base, &token, &Self::media_chunk_key(reference, i)).await {
+                                        Ok(Some(chunk)) if self.media.append_sealed_part(&part, &chunk) => {}
+                                        _ => { ok = false; break; }
+                                    }
+                                }
+                                if ok && self.media.adopt_sealed_part(reference, &part) {
+                                    self.mark_relay_ok(&node_hex);
+                                    return true;
+                                }
+                                let _ = std::fs::remove_file(&part);
+                            } else {
+                                self.mark_relay_ok(&node_hex);
+                                self.media.write_raw_sealed(reference, &head);
+                                return true;
+                            }
+                            http_miss = true; // served the manifest but reassembly failed — don't dial
+                            break;
+                        }
+                    }
+                }
+                // Reachable HTTP relay that answered 404 (or a completed HTTP attempt): the iroh path
+                // serves the SAME store, so skip the ~30s doomed dial for this relay.
+                if http_miss { continue; }
+            }
             if let Some(client) = self.relay_client_for(&node_hex).await {
                 if let Some(head) = client.get(key.clone()).await {
                     if let Some(count) = Self::parse_manifest(&head) {

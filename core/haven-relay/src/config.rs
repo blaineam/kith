@@ -54,6 +54,16 @@ pub struct Config {
     /// same), so the circle's mailbox self-heals and any relay can join/leave freely. Only the
     /// local-disk store backend meshes (S3/rclone backends are external). `--peer <hex>` (repeatable).
     pub peers: Vec<String>,
+    /// Bind address for the plain-HTTP blob interface — the DEFAULT cross-NAT media transport
+    /// (the iroh blob ALPN drops datagrams on pure-relay cross-NAT paths). `None` = disabled
+    /// (`--no-http`). Local-disk backend only.
+    pub http_bind: Option<String>,
+    /// Public URL clients should use to reach the HTTP interface (port-forward / reverse proxy /
+    /// tunnel), e.g. `https://relay.example.com`. Printed for the operator to hand to circle
+    /// members; defaults to the LAN address when unset.
+    pub http_url: Option<String>,
+    /// Bearer token the HTTP interface requires (generated once, persisted next to the seed).
+    pub http_token: String,
 }
 
 /// On-disk JSON config (the `--config` form), all fields optional except `link`.
@@ -77,6 +87,12 @@ struct FileConfig {
     /// Sibling relay node ids (64-hex) to mesh-replicate the mailbox with.
     #[serde(default)]
     peers: Option<Vec<String>>,
+    /// HTTP blob-interface bind address ("0.0.0.0:8674" default; "off" disables).
+    #[serde(default)]
+    http_bind: Option<String>,
+    /// Public URL for the HTTP interface (reverse proxy / port-forward / tunnel).
+    #[serde(default)]
+    http_url: Option<String>,
 }
 
 fn default_s3_port() -> u16 {
@@ -143,8 +159,18 @@ impl Config {
             .filter(|h| h.len() == 64)
             .collect();
 
+        // HTTP blob interface: on by default (the default cross-NAT media transport);
+        // `--no-http` disables, `--http <bind>` overrides the bind address.
+        let http_bind = if args.iter().any(|a| a == "--no-http") {
+            None
+        } else {
+            Some(arg_value(args, "--http").unwrap_or_else(|| DEFAULT_HTTP_BIND.to_string()))
+        };
+        let http_url = arg_value(args, "--http-url");
+
         let seed = load_or_create_seed(&data_dir)?;
-        Ok(Self { link, data_dir, seed, backend, s3_port, rclone_bin, rclone_config, peers })
+        let http_token = load_or_create_http_token(&data_dir)?;
+        Ok(Self { link, data_dir, seed, backend, s3_port, rclone_bin, rclone_config, peers, http_bind, http_url, http_token })
     }
 
     fn from_file(path: &str) -> Result<Self> {
@@ -172,6 +198,12 @@ impl Config {
         // Persist the link so later zero-arg `haven-relay run` works too.
         save_link(&data_dir, &link)?;
 
+        let http_bind = match fc.http_bind.as_deref() {
+            Some("off") | Some("none") => None,
+            Some(b) => Some(b.to_string()),
+            None => Some(DEFAULT_HTTP_BIND.to_string()),
+        };
+        let http_token = load_or_create_http_token(&data_dir)?;
         Ok(Self {
             link,
             data_dir,
@@ -187,8 +219,34 @@ impl Config {
                 .map(|h| h.trim().to_lowercase())
                 .filter(|h| h.len() == 64)
                 .collect(),
+            http_bind,
+            http_url: fc.http_url,
+            http_token,
         })
     }
+}
+
+/// Default bind for the HTTP blob interface.
+pub const DEFAULT_HTTP_BIND: &str = "0.0.0.0:8674";
+
+/// The HTTP bearer token, generated once and persisted (owner-only) next to the seed so the
+/// relay's token — like its node id — is stable across restarts.
+pub fn load_or_create_http_token(data_dir: &(impl AsRef<Path> + ?Sized)) -> Result<String> {
+    let dir = data_dir.as_ref();
+    std::fs::create_dir_all(dir).map_err(|e| anyhow!("create {}: {e}", dir.display()))?;
+    let path = dir.join("http_token");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let tok = raw.trim().to_string();
+        if !tok.is_empty() {
+            return Ok(tok);
+        }
+    }
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    let tok: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::write(&path, &tok).map_err(|e| anyhow!("write http token: {e}"))?;
+    set_owner_only(&path);
+    Ok(tok)
 }
 
 /// Persisted circle link, so `haven-relay run` (no args) is restart-safe.

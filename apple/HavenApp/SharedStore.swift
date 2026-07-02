@@ -50,6 +50,7 @@ final class MediaBackupQueue {
     private var pending: [(ref: String, cid: String)] = []
     private var draining = false
     func enqueue(_ ref: String, circleId: String, social: HavenSocial) {
+        if MediaStore.isSynthetic(ref) { return }   // geo: pins et al. carry no bytes — never relay-storable
         if pending.contains(where: { $0.ref == ref && $0.cid == circleId }) { return }
         pending.append((ref, circleId))
         if pending.count > 10_000 { pending.removeFirst(pending.count - 10_000) }   // bound the queue itself
@@ -166,15 +167,38 @@ enum SharedStore {
                 catch { HavenLog.sync("backup s3-put FAIL ref=\(ref): \(error.localizedDescription)") }
             }
         }
-        // 2) Mirror to every iroh relay (redundancy + the LAN/hosted fast-path). Content-addressed
+        // 2) Mirror to every relay (redundancy + the LAN/hosted fast-path). Content-addressed
         //    key → idempotent re-puts; a relay in backoff is skipped (RelayClients is health-aware).
         //    "s3:" pseudo-entries are the bucket handled above — dialing them can only fail.
+        //    Per relay: its plain-HTTP interface is tried FIRST (the reliable cross-NAT path); the
+        //    iroh blob dial is the fallback/fast-path when no HTTP interface is known/reachable.
         for node in nodes where !node.hasPrefix("s3:") {
             // Our OWN hosted relay: store the media directly in the local mailbox (no iroh self-dial).
             if RelayHost.shared.serving, node == RelayHost.shared.nodeId {
                 try? await putMedia(ref: ref, sealed: sealed) { _ = RelayHost.shared.localPut($0, $1) }
                 landed = true
                 continue
+            }
+            if let http = RelayMailboxStore.shared.httpInterface(node) {
+                var put = false
+                for base in http.urls where !httpUrlBad(base) {
+                    if case .success(let existing) = await httpGet(base, http.token, key(ref)), existing != nil {
+                        put = true; break   // already mirrored (content-addressed, idempotent)
+                    }
+                    do {
+                        try await putMedia(ref: ref, sealed: sealed) { k, d in
+                            guard await httpPut(base, http.token, k, d) else { throw URLError(.cannotConnectToHost) }
+                        }
+                        put = true
+                    } catch { markHttpUrlBad(base) }
+                    if put { break }
+                }
+                if put {
+                    RelayMailboxStore.shared.markSeen(node)
+                    HavenLog.sync("backup http-put OK ref=\(ref) relay=\(node.prefix(8))")
+                    landed = true
+                    continue   // the iroh path serves the SAME store — done with this relay
+                }
             }
             guard let c = await RelayClients.client(node) else { continue }
             if await c.has(key: key(ref)) { RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node); landed = true; continue }
@@ -217,6 +241,7 @@ enum SharedStore {
         case ownRelay                              // our own hosted relay (local store)
         case relay(RelayClient, String)            // dialed relay client + node hex
         case s3(S3Client)                          // shared/owner bucket
+        case http(String, String)                  // relay plain-HTTP interface (base url, token)
     }
     /// Fetch one key's bytes from a source (nil = miss).
     private static func fetch(_ src: MediaSource, _ key: String) async -> Data? {
@@ -224,7 +249,53 @@ enum SharedStore {
         case .ownRelay: return RelayHost.shared.localGet(key)
         case .relay(let c, _): return await c.get(key: key)
         case .s3(let s3): return try? await s3.getObject(key: key)
+        case .http(let base, let token): return (try? await httpGet(base, token, key).get()) ?? nil
         }
+    }
+
+    // MARK: - Relay plain-HTTP media interface (client side)
+    //
+    // GET/PUT against a relay's HTTP interface (core httprelay.rs): `<base>/k/<key>` with the
+    // relay's bearer token (learned from the sealed frame-19 announce). This is the DEFAULT
+    // cross-NAT media transport; a URL that doesn't answer is backed off for 2 minutes so a dead
+    // LAN address doesn't cost a connect-timeout per chunk.
+
+    private static var httpUrlBadUntil: [String: Date] = [:]
+    private static func httpUrlBad(_ base: String) -> Bool { (httpUrlBadUntil[base] ?? .distantPast) > Date() }
+    private static func markHttpUrlBad(_ base: String) { httpUrlBadUntil[base] = Date().addingTimeInterval(120) }
+
+    private static func httpKeyURL(_ base: String, _ key: String) -> URL? {
+        let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
+        let enc = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
+        return URL(string: "\(trimmed)/k/\(enc)")
+    }
+
+    /// GET one key. `.success(nil)` = relay reached but doesn't hold it (a real MISS — the iroh
+    /// path serves the same store, so don't dial it for the same key); `.failure` = unreachable.
+    private static func httpGet(_ base: String, _ token: String, _ key: String) async -> Result<Data?, Error> {
+        guard let url = httpKeyURL(base, key) else { return .failure(URLError(.badURL)) }
+        var req = URLRequest(url: url, timeoutInterval: 60)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            switch (resp as? HTTPURLResponse)?.statusCode ?? 0 {
+            case 200...299: return .success(data)
+            case 404: return .success(nil)
+            default: return .failure(URLError(.badServerResponse))
+            }
+        } catch { return .failure(error) }
+    }
+
+    private static func httpPut(_ base: String, _ token: String, _ key: String, _ body: Data) async -> Bool {
+        guard let url = httpKeyURL(base, key) else { return false }
+        var req = URLRequest(url: url, timeoutInterval: 120)
+        req.httpMethod = "PUT"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        do {
+            let (_, resp) = try await URLSession.shared.upload(for: req, from: body)
+            return (200...299).contains((resp as? HTTPURLResponse)?.statusCode ?? 0)
+        } catch { return false }
     }
 
     /// Fetch a media blob from the circle's mailbox and open it for whichever circle it belongs to.
@@ -236,13 +307,39 @@ enum SharedStore {
         var src = "none"
         // We fetch the manifest key "haven/media/<ref>" first; whichever source serves it also serves
         // the chunks. Source order: (1) our OWN hosted relay's local store (instant, no dial),
-        // (2) the S3/HTTP bucket — the DEFAULT media transport (plain HTTPS traverses any NAT),
-        // (3) dialed iroh relays — the opportunistic fast-path (the blob ALPN stalls ~30s and dies
+        // (2) each relay's plain-HTTP interface — the DEFAULT cross-NAT media transport,
+        // (3) the S3 bucket (only present when the user configured one — rare),
+        // (4) dialed iroh relays — the opportunistic fast-path (the blob ALPN stalls ~30s and dies
         // when the dial must cross a NAT over pure relay, so it's tried LAST, not first).
         if RelayHost.shared.serving,
            circleIds.contains(where: { relayNodes($0).contains(RelayHost.shared.nodeId) }),
            let s = RelayHost.shared.localGet(key(ref)) {
             head = s; chosen = .ownRelay; src = "own:\(RelayHost.shared.nodeId.prefix(8))"
+        }
+        // Relays whose HTTP interface answered 404: the iroh path serves the same store — skip dialing.
+        var httpMissed = Set<String>()
+        if head == nil {
+            httpOuter: for cid in circleIds {
+                for node in relayNodes(cid) {
+                    if RelayHost.shared.serving, node == RelayHost.shared.nodeId { continue }
+                    guard let http = RelayMailboxStore.shared.httpInterface(node) else { continue }
+                    for base in http.urls where !httpUrlBad(base) {
+                        switch await httpGet(base, http.token, key(ref)) {
+                        case .success(let s):
+                            if let s {
+                                RelayMailboxStore.shared.markSeen(node)
+                                head = s; chosen = .http(base, http.token); src = "http:\(node.prefix(8))"
+                                break httpOuter
+                            }
+                            httpMissed.insert(node)   // reachable, doesn't hold it
+                        case .failure:
+                            markHttpUrlBad(base)
+                            continue
+                        }
+                        break   // reached the relay (miss) → don't try its other URLs
+                    }
+                }
+            }
         }
         if head == nil, let s3 = circleIds.compactMap({ mediaS3(for: $0) }).first {
             if let s = try? await s3.getObject(key: key(ref)) { head = s; chosen = .s3(s3); src = "s3" }
@@ -252,6 +349,7 @@ enum SharedStore {
                 for node in relayNodes(cid) where !node.hasPrefix("s3:") {
                     // Our own hosted relay was already consulted above; never dial ourselves.
                     if RelayHost.shared.serving, node == RelayHost.shared.nodeId { continue }
+                    if httpMissed.contains(node) { continue }   // same store already said MISS over HTTP
                     guard let c = await RelayClients.client(node) else { continue }
                     if let s = await c.get(key: key(ref)) { RelayHealth.shared.recordSuccess(node); RelayMailboxStore.shared.markSeen(node); head = s; chosen = .relay(c, node); src = "dial:\(node.prefix(8))"; break outer }
                 }

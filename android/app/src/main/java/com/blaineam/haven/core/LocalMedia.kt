@@ -54,34 +54,106 @@ object LocalMedia {
 
     fun isVideo(ref: String): Boolean = ref.startsWith("vid_") || ref.startsWith("v:")
     fun isAudio(ref: String): Boolean = ref.startsWith("aud_")
+
+    // ---- Memory guard (low-heap devices) --------------------------------------------------------
+    // Decrypt (openCircleMedia) is all-in-RAM: it takes the whole sealed blob and returns the whole
+    // plaintext, so peak memory is ~2× the media size. On a low-heap phone (e.g. the Nokia 6.1's
+    // ~512 MB heap) a large synced VIDEO (400 MB+) blows the heap the instant the feed tries to render
+    // or play it — an OutOfMemoryError that crashes the app ON LAUNCH (the feed renders immediately).
+    // Since a device physically cannot decrypt media larger than its heap can hold, we SKIP such media
+    // gracefully (return null) rather than crash. It still lives sealed on disk + on the relay, and a
+    // higher-memory device (iPhone/Mac/desktop) plays it fine.
+
+    /** Max plaintext we'll hold in RAM to decrypt for display/playback — a quarter of this process's
+     *  max heap, so decrypt's ~2× peak stays well under the limit. */
+    fun maxInMemoryBytes(): Long = Runtime.getRuntime().maxMemory() / 4
+
+    /** The at-rest sealed file size for [ref] (≈ plaintext size; AEAD overhead is a few bytes), or -1. */
+    fun sealedSize(ref: String): Long {
+        val f = File(dir, bareId(ref))
+        return if (f.exists()) f.length() else -1L
+    }
+
+    /** True when [ref] exists and is small enough to safely decrypt into RAM on this device. */
+    fun fitsInMemory(ref: String): Boolean {
+        val s = sealedSize(ref)
+        return s in 0..maxInMemoryBytes()
+    }
     // Strip the kind prefix (ours or iOS's) to the on-disk storage key. Legacy v:/i: kept for
     // already-stored local media.
     private fun bareId(ref: String): String =
         ref.removePrefix("v:").removePrefix("i:")
             .removePrefix("img_").removePrefix("vid_").removePrefix("aud_")
 
-    /** Load + decrypt a stored media ref, or null if we don't have it. */
+    /** Load + decrypt a stored media ref, or null if we don't have it (or it's too big to hold in
+     *  RAM on this device — see [fitsInMemory]; oversized media is skipped, never OOM-crashed). */
     fun load(circleId: String, ref: String): ByteArray? {
         val f = File(dir, bareId(ref))
         if (!f.exists()) return null
+        if (f.length() > maxInMemoryBytes()) return null   // too big to decrypt in RAM here → skip
         val stored = f.readBytes()
         return runCatching { HavenNet.engine.openCircleMedia(circleId, stored) }.getOrNull() ?: stored
     }
 
-    /** Decrypt a video ref to a cache file VideoView/MediaPlayer can read; null if missing. */
+    /** Decrypt a video ref to a cache file VideoView/MediaPlayer can read; null if missing or too
+     *  large to decrypt in RAM on this device (a huge video is skipped rather than OOM-crashing). */
     fun videoFile(circleId: String, ref: String): File? {
-        val bytes = load(circleId, ref) ?: return null
         val out = File(dir.parentFile, "vid_${bareId(ref)}.mp4")
-        if (!out.exists()) runCatching { out.writeBytes(bytes) } else Unit
+        if (out.exists()) return out
+        val bytes = load(circleId, ref) ?: return null   // load() enforces the in-memory size guard
+        runCatching { out.writeBytes(bytes) }
         return if (out.exists()) out else null
+    }
+
+    /** Decode a stored IMAGE ref to a DOWNSAMPLED bitmap (long edge ≤ [reqDim]) so even a large
+     *  photo can't OOM the render. Null if missing, oversized (see the memory guard), or not an
+     *  image. Videos must use [videoPoster] — decoding a video's bytes as a bitmap both fails and,
+     *  worse, reads the whole file into RAM first (the launch-crash on low-heap phones). */
+    fun imageBitmap(circleId: String, ref: String, reqDim: Int = 2048): Bitmap? {
+        if (isVideo(ref) || isAudio(ref)) return null
+        val bytes = load(circleId, ref) ?: return null   // size-guarded
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            var sample = 1
+            while (max(bounds.outWidth, bounds.outHeight) / sample > reqDim) sample *= 2
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
+                BitmapFactory.Options().apply { inSampleSize = sample })
+        }.getOrNull()
+    }
+
+    /** A poster frame for a VIDEO ref, read memory-safely via MediaMetadataRetriever from the
+     *  decrypted cache file. Null when the video is too large to decrypt on this device (the caller
+     *  then shows a play-glyph tile with no still) or a frame can't be read. */
+    fun videoPoster(circleId: String, ref: String): Bitmap? {
+        val file = videoFile(circleId, ref) ?: return null   // size-guarded via load()
+        val mmr = android.media.MediaMetadataRetriever()
+        return runCatching {
+            mmr.setDataSource(file.absolutePath)
+            mmr.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        }.getOrNull().also { runCatching { mmr.release() } }
     }
 
     fun has(ref: String): Boolean = File(dir, bareId(ref)).exists()
 
-    /** Load decrypted bytes trying each circle's key (for serving a media request). */
+    /**
+     * True if [ref] is a synthetic, non-fetchable attachment (e.g. a `geo:<lat>,<lon>,<label>`
+     * location pin) rather than real media bytes. Location shares ride inside a post's `media`
+     * array, but no peer or relay can EVER serve them — blobstore safe_path (core/haven-net) rejects
+     * ':' in a key component, so such a key was never storable — so the missing-media sweeps would
+     * re-enqueue a doomed S3-404 + ~30s iroh dial for them every cycle and the pending count would
+     * never settle to 0. Real media refs are `img_`/`vid_`/`aud_` or a bare content hash; the legacy
+     * single-letter media schemes `v:`/`i:`/`a:` stay fetchable, so we key off a MULTI-char URI
+     * scheme (a ':' at index > 1) rather than a bare "contains ':'".
+     */
+    fun isSynthetic(ref: String): Boolean = ref.indexOf(':') > 1
+
+    /** Load decrypted bytes trying each circle's key (for serving a media request). Null if the
+     *  media is too big to hold in RAM here (skipped rather than OOM — a relay/other device serves it). */
     fun loadAnyCircle(ref: String): ByteArray? {
         val f = File(dir, bareId(ref))
         if (!f.exists()) return null
+        if (f.length() > maxInMemoryBytes()) return null
         val stored = f.readBytes()
         for (c in HavenNet.engine.circles()) {
             runCatching { HavenNet.engine.openCircleMedia(c.id, stored) }.getOrNull()?.let { return it }
@@ -95,10 +167,14 @@ object LocalMedia {
         runCatching { File(dir, bareId(ref)).writeBytes(toWrite) }
     }
 
-    /** The at-rest sealed blob for a ref — uploaded to the relay verbatim (same form iOS stores). */
+    /** The at-rest sealed blob for a ref — uploaded to the relay verbatim (same form iOS stores).
+     *  Null when the blob is too big to hold in RAM on this device: a low-heap phone skips mirroring
+     *  media it can't even load (the source device + relay already hold it) instead of OOM-crashing
+     *  during background backfill. */
     fun rawSealed(ref: String): ByteArray? {
         val f = File(dir, bareId(ref))
-        return if (f.exists()) f.readBytes() else null
+        if (!f.exists() || f.length() > maxInMemoryBytes()) return null
+        return f.readBytes()
     }
 
     /** Write a sealed blob fetched from the relay straight to disk (load() opens it on read). */

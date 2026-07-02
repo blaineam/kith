@@ -608,24 +608,36 @@ private fun PendingCard(req: PendingRequest) {
     }
 }
 
-/** Decode a stored (sealed) media id into an Image, off the main thread. Shows nothing until ready. */
+/**
+ * Decode a stored (sealed) media id into an Image thumbnail, off the main thread. IMAGES are decoded
+ * DOWNSAMPLED; VIDEOS get a poster frame via MediaMetadataRetriever (never decoded as an image — that
+ * both fails and reads the whole file into RAM, which OOM-crashed the feed on low-heap phones when a
+ * large synced video rendered). Media too big to decrypt on this device yields no bitmap: we show a
+ * plain tile (a video overlays its play glyph) instead of an endless spinner.
+ */
 @Composable
 fun MediaImage(circleId: String, id: String, modifier: Modifier = Modifier,
                contentScale: ContentScale = ContentScale.FillWidth) {
     var bmp by remember(id) { mutableStateOf<ImageBitmap?>(null) }
+    var done by remember(id) { mutableStateOf(false) }
     LaunchedEffect(id, circleId) {
         bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val bytes = LocalMedia.load(circleId, id) ?: return@withContext null
-            runCatching {
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-            }.getOrNull()
+            val b = if (LocalMedia.isVideo(id)) LocalMedia.videoPoster(circleId, id)
+                    else LocalMedia.imageBitmap(circleId, id)
+            b?.asImageBitmap()
         }
+        done = true
     }
-    bmp?.let { Image(it, contentDescription = "Photo", modifier = modifier, contentScale = contentScale) }
-        ?: Box(modifier.background(HavenTheme.card), contentAlignment = Alignment.Center) {
+    when {
+        bmp != null -> Image(bmp!!, contentDescription = "Photo", modifier = modifier, contentScale = contentScale)
+        // Finished loading with no bitmap (video with no poster, or media too big to decode here) →
+        // a plain tile, NOT a perpetual spinner. MediaThumb overlays the play glyph for videos.
+        done -> Box(modifier.background(HavenTheme.card))
+        else -> Box(modifier.background(HavenTheme.card), contentAlignment = Alignment.Center) {
             androidx.compose.material3.CircularProgressIndicator(
                 color = HavenTheme.pink, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
         }
+    }
 }
 
 /** A small media thumbnail (image or a video tile with a play glyph), tappable to open. */

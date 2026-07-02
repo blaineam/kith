@@ -77,6 +77,18 @@ impl LocalMedia {
         reference.starts_with("a:")
     }
 
+    /// True if `reference` is a synthetic, non-fetchable attachment (e.g. a `geo:<lat>,<lon>,<label>`
+    /// location pin) rather than real media bytes. Location shares ride inside a post's `media`
+    /// array, but no peer or relay can EVER serve them — blobstore safe_path (core/haven-net) rejects
+    /// ':' in a key component, so such a key was never storable — so the missing-media sweep would
+    /// re-enqueue a doomed S3-404 + ~30s iroh dial for them every cycle and the pending count would
+    /// never settle to 0. Real media refs are `img_`/`vid_`/`aud_` or a bare content hash; the legacy
+    /// single-letter media schemes `v:`/`i:`/`a:` stay fetchable, so we key off a MULTI-char URI
+    /// scheme (a ':' at index > 1) rather than a bare "contains ':'".
+    pub fn is_synthetic(reference: &str) -> bool {
+        reference.find(':').is_some_and(|i| i > 1)
+    }
+
     /// Store plaintext bytes sealed to `circle_id` under a typed ref.
     pub fn store_kind(&self, social: &Arc<HavenSocial>, circle_id: &str, bytes: &[u8], kind: MediaKind) -> String {
         let hash = sha256_hex(bytes);
@@ -188,6 +200,20 @@ mod tests {
         assert!(LocalMedia::is_audio("a:abc"));
         assert!(!LocalMedia::is_audio("v:abc"));
         assert!(!LocalMedia::is_audio("abc"));
+    }
+
+    #[test]
+    fn synthetic_excludes_geo_but_keeps_media() {
+        // geo: location pins carry no bytes and were never relay-storable → skip in sweeps.
+        assert!(LocalMedia::is_synthetic("geo:36.213,-118.687,Place Name"));
+        // Real media refs stay fetchable — img_/vid_/aud_, bare hashes, and legacy v:/i:/a:.
+        assert!(!LocalMedia::is_synthetic("img_deadbeef"));
+        assert!(!LocalMedia::is_synthetic("vid_deadbeef"));
+        assert!(!LocalMedia::is_synthetic("aud_deadbeef"));
+        assert!(!LocalMedia::is_synthetic("deadbeefcafe"));
+        assert!(!LocalMedia::is_synthetic("v:deadbeef"));
+        assert!(!LocalMedia::is_synthetic("i:deadbeef"));
+        assert!(!LocalMedia::is_synthetic("a:deadbeef"));
     }
 
     #[test]

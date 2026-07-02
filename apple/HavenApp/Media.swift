@@ -578,6 +578,19 @@ final class MediaStore: ObservableObject {
         return ref
     }
 
+    /// True if `ref` is a synthetic, non-fetchable attachment (e.g. a `geo:<lat>,<lon>,<label>`
+    /// location pin) rather than real media bytes. Location shares ride inside a post's `media`
+    /// array, but no peer or relay can EVER serve them — blobstore safe_path (core/haven-net) rejects
+    /// ':' in a key component, so such a key was never storable — so the missing-media sweeps would
+    /// re-enqueue a doomed S3-404 + ~30s iroh dial for them every cycle and `nbMediaPending` would
+    /// never settle to 0. Real media refs are `img_`/`vid_`/`aud_` or a bare content hash; the legacy
+    /// single-letter media schemes `v:`/`i:`/`a:` stay fetchable, so we key off a MULTI-char URI
+    /// scheme (a ':' at index > 1) rather than a bare "contains ':'".
+    nonisolated static func isSynthetic(_ ref: String) -> Bool {
+        guard let i = ref.firstIndex(of: ":") else { return false }
+        return ref.distance(from: ref.startIndex, to: i) > 1
+    }
+
     /// Do we already hold the bytes for this ref?
     func has(_ ref: String) -> Bool {
         if cacheGet(ref) != nil { return true }

@@ -59,6 +59,7 @@ impl PathSelector for RelayPreferringSelector {
 }
 
 pub mod blobstore;
+pub mod httprelay;
 pub mod relay;
 pub mod s3tunnel;
 
@@ -91,6 +92,9 @@ impl<T, E: std::fmt::Debug> IntoAnyhow<T> for std::result::Result<T, E> {
 struct RelayCfg {
     root: std::path::PathBuf,
     auth: Arc<Mutex<blobstore::RelayAuth>>,
+    /// Plain-HTTP interface to the same store — the default cross-NAT media transport
+    /// (the iroh blob ALPN drops datagrams over pure-relay cross-NAT paths).
+    http: Option<Arc<httprelay::HttpRelay>>,
 }
 
 /// A peer-to-peer node.
@@ -190,12 +194,33 @@ impl Node {
     pub fn enable_relay(&self, root: std::path::PathBuf) {
         let mut g = lock(&self.relay);
         if g.is_none() {
-            *g = Some(RelayCfg { root, auth: Arc::new(Mutex::new(blobstore::RelayAuth::default())) });
+            *g = Some(RelayCfg { root, auth: Arc::new(Mutex::new(blobstore::RelayAuth::default())), http: None });
         }
     }
-    /// Stop hosting (drop the relay attachment).
+    /// Stop hosting (drop the relay attachment — also stops the HTTP interface if serving).
     pub fn disable_relay(&self) {
         *lock(&self.relay) = None;
+    }
+
+    /// Serve the hosted relay's store over plain HTTP on `bind` (see [`httprelay`]) — the default
+    /// cross-NAT media transport. `token` is the bearer token clients must present (distributed to
+    /// circle members inside the sealed relay announce). Returns the bound port. Idempotent while
+    /// already serving (returns the existing port). Errors if no relay is hosted here.
+    pub async fn relay_serve_http(&self, bind: &str, token: &str) -> Result<u16> {
+        let root = {
+            let g = lock(&self.relay);
+            let Some(cfg) = g.as_ref() else { return Err(anyhow!("relay not hosted")) };
+            if let Some(h) = cfg.http.as_ref() {
+                return Ok(h.port());
+            }
+            cfg.root.clone()
+        };
+        let server = httprelay::serve(root, bind, token.to_string()).await?;
+        let port = server.port();
+        if let Some(cfg) = lock(&self.relay).as_mut() {
+            cfg.http = Some(Arc::new(server));
+        }
+        Ok(port)
     }
     pub fn relay_enabled(&self) -> bool {
         lock(&self.relay).is_some()

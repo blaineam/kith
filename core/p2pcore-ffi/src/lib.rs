@@ -483,6 +483,19 @@ impl RelayServerHandle {
         self.node.node.relay_local_list(&prefix)
     }
 
+    /// Serve this relay's store over plain HTTP on `bind` (e.g. "0.0.0.0:8674"; port 0 =
+    /// ephemeral) with `token` as the required bearer token — the DEFAULT cross-NAT media
+    /// transport (the iroh blob ALPN drops datagrams on pure-relay cross-NAT paths). Returns
+    /// the bound port. Idempotent while serving. The token is distributed to circle members
+    /// inside the sealed relay announce; `self/…` keys are never served over HTTP.
+    pub async fn serve_http(&self, bind: String, token: String) -> Result<u16, HavenError> {
+        self.node
+            .node
+            .relay_serve_http(&bind, &token)
+            .await
+            .map_err(|e| HavenError::Invalid { msg: format!("serve http: {e}") })
+    }
+
     /// Stop hosting the relay on this node (drops the attachment).
     pub fn disable(&self) {
         self.node.node.disable_relay();

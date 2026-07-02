@@ -53,6 +53,9 @@ thiserror = "1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 sha2 = "0.10"
+# Client for relays' plain-HTTP media interfaces (the default cross-NAT media transport) — same
+# version/features as haven-s3, so it's already in the dependency tree.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # HKDF for the own-device media key (HKDF-SHA256 over the account seed) — symmetric-seal own-device
 # media chunks so a sibling can open them (KEM-to-self doesn't decap reliably). Matches iOS.
 hkdf = "0.12"

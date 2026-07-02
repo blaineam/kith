@@ -79,6 +79,11 @@ fn print_help() {
          --s3                      run `rclone serve s3` of a local dir over haven/s3/1\n  \
          --rclone-remote <r:path>  serve any rclone remote (rclone owns the provider auth)\n  \
          --no-storage              connection relay only (no media mailbox)\n\n\
+         HTTP MEDIA INTERFACE (default = ON, the reliable cross-NAT media path):\n  \
+         --http <bind>             bind address (default 0.0.0.0:8674)\n  \
+         --http-url <url>          public URL members reach it at (port-forward/proxy/tunnel)\n  \
+         --no-http                 disable the HTTP interface\n  \
+         Requests need the bearer token printed at start (persisted in <data>/http_token).\n\n\
          COMMON FLAGS:  --data DIR  --s3-port PORT  --rclone PATH  --rclone-config FILE\n\n\
          The relay never holds any key that can read your circle's content. It forwards\n\
          sealed frames and serves sealed blobs it cannot open. No logs are written.\n"

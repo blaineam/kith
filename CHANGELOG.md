@@ -9,19 +9,45 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — 2026-07-02
 
-Media-transport wave: S3/HTTP bucket becomes the DEFAULT media path (iOS/macOS, Android, desktop).
+Media-transport wave: the Haven relay gains a plain-HTTP interface as the DEFAULT cross-NAT media
+path; S3 stays as the rarely-needed BYO-bucket option (iOS/macOS, Android, desktop, `haven-relay`).
+
+### Added
+- **Relay HTTP media interface — the default cross-NAT media transport.** The in-app relay host
+  (and the standalone `haven-relay` daemon) now serves its blob store over ordinary HTTP/1.1
+  (`core/haven-net/src/httprelay.rs`), alongside the iroh blob ALPN. Because plain HTTP traverses
+  any NAT the moment the host is reachable, this is what makes cross-NAT media (videos, large
+  photos) actually land — the iroh blob ALPN drops its datagrams over a pure-relay cross-NAT path
+  (noq/iroh fork bug). Blobs are E2E-sealed before they hit the wire, so the interface carries only
+  ciphertext; it's **bearer-token gated** (one token per relay, generated once and persisted), and
+  the token is distributed to circle members ONLY inside the *sealed* frame-19 relay announce.
+  `self/…` self-sync slots are never served over HTTP (they stay on the identity-verified iroh
+  path). The host advertises its reachable URLs (LAN IPv4s + an optional operator-set public URL
+  for port-forward / reverse-proxy / tunnel setups) in the announce; members fetch + upload media
+  over HTTP first and fall back to the iroh blob dial only when no HTTP URL is reachable.
+  `haven-relay` flags: `--http <bind>` (default `0.0.0.0:8674`), `--http-url <url>`, `--no-http`.
+- **S3/HTTP bucket is now an opt-in BYO option, not the default.** A user-configured S3 bucket is
+  still supported and still tried before the iroh blob dial, but the relay's own HTTP interface is
+  the zero-config default so most users never touch S3.
 
 ### Fixed
-- **Cross-NAT media sync (videos) now lands via the bucket.** The iroh **blob** ALPN
-  (`haven/blob/1`) drops its outbound datagrams over a pure-relay cross-NAT path (noq/iroh 1.0
-  fork bug, proven by two-sided connection traces) — so posts synced but videos/large photos
-  timed out forever. Media upload + fetch now try a configured **S3/HTTP bucket first** (plain
-  HTTPS, traverses any NAT) and the iroh relays after, on all platforms. The iroh blob path
-  stays as an opportunistic fast-path (own hosted relay local store, LAN) and as the only path
-  when no bucket is configured. Apple additionally stops gating the bucket leg on "no relays
-  configured" (media never reached the bucket once any relay existed) and skips un-dialable
-  `s3:` pseudo relay entries in the dial loops (Apple + desktop). See
-  `docs/BYO-STORAGE.md` → "Media transport order".
+- **Android launch crash (OOM) on a large synced video.** Once cross-NAT sync started delivering
+  big videos, the feed's `MediaImage` thumbnail read the *entire* decrypted file into a `ByteArray`
+  for **every** media ref — including videos — so a ~423 MB video blew the Nokia's ~512 MB heap the
+  instant the feed rendered, crashing the app on launch. Fixed: `MediaImage` now decodes IMAGES
+  downsampled and renders a VIDEO poster frame via `MediaMetadataRetriever` (never decoding a video
+  as a bitmap), and `LocalMedia` skips any media too large to decrypt in RAM on this device
+  (`maxInMemoryBytes` guard) rather than OOM-crashing — it still lives sealed on disk + on the relay
+  and plays on a higher-memory device.
+- **Cross-NAT media sync (videos) now lands.** The iroh **blob** ALPN (`haven/blob/1`) drops its
+  outbound datagrams over a pure-relay cross-NAT path (noq/iroh 1.0 fork bug, proven by two-sided
+  connection traces) — so posts synced but videos/large photos timed out forever. Media upload +
+  fetch now try the relay's **HTTP interface first**, then a configured S3 bucket, and the iroh blob
+  dial last (as an opportunistic fast-path / the only path when nothing else is configured), on all
+  platforms. Apple also stops gating the bucket leg on "no relays configured", and Apple + desktop
+  skip un-dialable `s3:` pseudo relay entries in the dial loops. A reachable HTTP relay that answers
+  404 for a key is treated as a real MISS (the iroh path serves the same store), so we don't waste a
+  ~30 s doomed dial on it. See `docs/BYO-STORAGE.md` → "Media transport order".
 
 ## [2026-06-30]
 

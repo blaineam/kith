@@ -108,6 +108,14 @@ pub struct RelayEntry {
     pub last_seen_ms: u64,
     #[serde(default)]
     pub is_s3: bool,
+    /// Plain-HTTP interface of this relay (LAN + optional public URLs) — the DEFAULT cross-NAT
+    /// media transport (the iroh blob ALPN drops datagrams on pure-relay cross-NAT paths).
+    /// Learned from the sealed frame-19 announce; empty = iroh-only relay.
+    #[serde(default)]
+    pub http_urls: Vec<String>,
+    /// Bearer token the relay's HTTP interface requires (travels ONLY inside sealed announces).
+    #[serde(default)]
+    pub http_token: String,
 }
 
 /// Erase an inactive+unseen relay entry after this long (7 days), matching iOS `staleAfterMs`.
@@ -165,6 +173,13 @@ pub struct Prefs {
     /// `RelayMailboxStore.entries` (UserDefaults key `haven.relay.entries`).
     #[serde(default)]
     pub relay_entries: std::collections::HashMap<String, RelayEntry>,
+    /// Bearer token for OUR hosted relay's plain-HTTP interface (generated once at first host).
+    #[serde(default)]
+    pub relay_http_token: String,
+    /// Optional public URL for OUR hosted relay's HTTP interface (port-forward / reverse proxy /
+    /// tunnel) — announced ahead of the LAN address when set.
+    #[serde(default)]
+    pub relay_public_url: String,
     /// The all-circles DEFAULT relay hex (every present + future circle inherits it). Empty = none.
     /// Mirrors iOS `haven.relay.default`.
     #[serde(default)]
@@ -234,7 +249,15 @@ impl Prefs {
                 let is_s3 = hex.starts_with("s3:");
                 self.relay_entries.insert(
                     hex.clone(),
-                    RelayEntry { name: relay_short_name(&hex), active: true, last_seen_ms: now, is_s3, hex },
+                    RelayEntry {
+                        name: relay_short_name(&hex),
+                        active: true,
+                        last_seen_ms: now,
+                        is_s3,
+                        http_urls: Vec::new(),
+                        http_token: String::new(),
+                        hex,
+                    },
                 );
             }
         }
@@ -270,10 +293,36 @@ impl Prefs {
                         active: true,
                         last_seen_ms: now,
                         is_s3,
+                        http_urls: Vec::new(),
+                        http_token: String::new(),
                     },
                 );
             }
         }
+    }
+
+    /// Record a relay's plain-HTTP media interface (from our own host start or a sealed announce).
+    /// Returns true when something changed (caller saves + may re-announce).
+    pub fn set_relay_http(&mut self, hex: &str, urls: Vec<String>, token: String) -> bool {
+        self.ensure_relay_entry(hex, None, hex.starts_with("s3:"), true);
+        if let Some(e) = self.relay_entries.get_mut(hex) {
+            if e.http_urls == urls && e.http_token == token {
+                return false;
+            }
+            e.http_urls = urls;
+            e.http_token = token;
+            return true;
+        }
+        false
+    }
+
+    /// The relay's HTTP interface (urls, token), or None for an iroh-only relay.
+    pub fn relay_http(&self, hex: &str) -> Option<(Vec<String>, String)> {
+        let e = self.relay_entries.get(hex)?;
+        if e.http_urls.is_empty() || e.http_token.is_empty() {
+            return None;
+        }
+        Some((e.http_urls.clone(), e.http_token.clone()))
     }
 
     /// Stamp a relay as just-seen (a successful op). Mirrors iOS `markSeen`.

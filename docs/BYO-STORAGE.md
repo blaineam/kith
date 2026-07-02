@@ -17,17 +17,31 @@ S3-compatible bucket**:
 The S3 path works with **AWS S3, Cloudflare R2, Backblaze B2, MinIO**, rclone serve s3,
 etc.
 
-## Media transport order (S3 first, iroh fast-path)
+## Media transport order (relay HTTP first, then S3, iroh blob last)
 
-When a circle has **both** an S3 bucket and Haven relays configured, media transfers
-(upload mirror + fetch) try the **bucket first** and the iroh relays after — on every
-platform (iOS/macOS, Android, desktop). Rationale: the bucket is plain HTTPS and
-traverses any NAT, while the iroh **blob** ALPN (`haven/blob/1`) currently drops its
-outbound datagrams over a pure-relay cross-NAT path (noq/iroh fork bug — see
-`reference_haven_multipath_drop`), stalling ~30 s per attempt even though *messaging*
-works over the same DERP path. The iroh blob path is kept as an opportunistic
-fast-path (own hosted relay's local store, LAN peers) and as the only path when no
-bucket is configured. Events/mailbox polling are unchanged.
+Media transfers (upload mirror + fetch) try transports in this order, per relay, on
+every platform (iOS/macOS, Android, desktop):
+
+1. **The relay's own plain-HTTP interface** — the zero-config **default**. A relay host
+   (in-app or the `haven-relay` daemon) serves its sealed blob store over HTTP/1.1
+   (`/k/<key>`, bearer-token gated); plain HTTP traverses any NAT the moment the host is
+   reachable. Members learn the relay's URLs + token from the *sealed* frame-19 announce.
+2. **A user-configured S3/HTTP bucket** — the opt-in BYO-storage option (rare). Still
+   plain HTTPS, so it also traverses any NAT.
+3. **The iroh blob ALPN (`haven/blob/1`)** — an opportunistic fast-path (own hosted
+   relay's local store, LAN peers) and the only path when nothing above is configured.
+
+Rationale: the iroh blob ALPN currently drops its outbound datagrams over a pure-relay
+cross-NAT path (noq/iroh fork bug — see `reference_haven_multipath_drop`), stalling
+~30 s per attempt even though *messaging* works over the same DERP path. The HTTP paths
+sidestep it entirely. A reachable HTTP relay that answers 404 for a key is a real MISS
+(the iroh path serves the same store), so we don't waste a doomed dial on it.
+Events/mailbox polling are unchanged.
+
+The relay HTTP interface is **on by default**. Blobs are E2E-sealed before they touch
+the wire, so the interface only ever moves ciphertext; expose it to the internet behind
+TLS (reverse proxy / tunnel) and pass the public URL to the daemon with `--http-url`
+(the LAN address is advertised automatically for same-network members).
 
 - Media is **end-to-end encrypted before it is stored** anywhere — the storage
   backend (a Haven relay or the user's own bucket) only ever holds ciphertext.
