@@ -15,9 +15,48 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use data_encoding::BASE32_NOPAD;
 use iroh::{
-    endpoint::{presets::N0, Connection, Endpoint},
+    endpoint::{
+        presets::N0,
+        transports::{PathSelection, PathSelectionContext, PathSelector},
+        Connection, Endpoint,
+    },
     EndpointAddr, EndpointId, SecretKey,
 };
+
+/// A [`PathSelector`] that PINS a connection to its relay (DERP) path whenever one is open, overriding
+/// iroh's default "prefer the lowest-RTT direct path" policy. Two peers behind ONE NAT on isolated subnets
+/// (e.g. a router's main + guest SSIDs, or many cellular/CGNAT setups) can reach each other ONLY via the
+/// DERP relay: every direct hole-punch candidate — cross-subnet LAN, the hairpin public IP, a Tailscale
+/// address — is unreachable. iroh still TRIES to upgrade the working relay path to a direct one; the upgrade
+/// fails and, because multipath isn't negotiated, it tears the WHOLE connection down as TimedOut mid-stream
+/// (tiny messaging streams finish before the ~2s hole-punch, so they survive; a blob/video transfer needs
+/// the path to live longer, so it dies — exactly the "posts sync but videos don't" symptom, proven by an
+/// iroh connection trace showing path::open Relay → do_holepunching → conn::closed TimedOut). Pinning to the
+/// relay path keeps the connection on the transport that actually works. Falls back to lowest-RTT when no
+/// relay path is open (e.g. genuine same-LAN peers). Trades some direct-path speed for cross-NAT reliability.
+#[derive(Debug)]
+pub(crate) struct RelayPreferringSelector;
+
+impl PathSelector for RelayPreferringSelector {
+    fn select(&self, ctx: &PathSelectionContext<'_>) -> PathSelection {
+        let mut selection = PathSelection::none();
+        // First choice: a relay path, if any is open — never flap off it to a doomed direct candidate.
+        if let Some(p) = ctx.paths().find(|p| p.network_path().is_relay()) {
+            selection.set(&p);
+            return selection;
+        }
+        // No relay path: fall back to the lowest-RTT open path (paths without stats are still forming).
+        if let Some(p) = ctx
+            .paths()
+            .filter_map(|p| p.stats().map(|s| (p, s.rtt)))
+            .min_by_key(|(_, rtt)| *rtt)
+            .map(|(p, _)| p)
+        {
+            selection.set(&p);
+        }
+        selection
+    }
+}
 
 pub mod blobstore;
 pub mod relay;
@@ -80,6 +119,7 @@ impl Node {
             .secret_key(SecretKey::from_bytes(&secret))
             .alpns(vec![ALPN.to_vec(), blobstore::BLOB_ALPN.to_vec()])
             .transport_config(iroh::endpoint::QuicTransportConfig::builder().max_concurrent_multipath_paths(16).build())
+            .path_selector(std::sync::Arc::new(RelayPreferringSelector))
             .bind()
             .await
             .ah()?;
@@ -121,6 +161,18 @@ impl Node {
         }
         addr
     }
+
+    /// Our current home relay URL (the DERP relay we're registered on), if established. Peers can be told
+    /// this so they seed their own address book and never depend on pkarr/DNS resolving us.
+    pub fn home_relay_url(&self) -> Option<String> {
+        use iroh::Watcher as _;
+        self.endpoint
+            .home_relay_status()
+            .get()
+            .first()
+            .map(|s| s.url().to_string())
+    }
+
 
     // ---- In-process relay (blob mailbox) on THIS node's endpoint (no second iroh node) ----
 

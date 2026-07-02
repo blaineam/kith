@@ -229,6 +229,7 @@ impl BlobServer {
         let endpoint = Endpoint::builder(N0)
             .secret_key(SecretKey::from_bytes(&secret))
             .alpns(vec![BLOB_ALPN.to_vec()])
+            .path_selector(std::sync::Arc::new(crate::RelayPreferringSelector))
             .bind()
             .await
             .ah()?;
@@ -547,6 +548,7 @@ impl BlobClient {
             // Enable QUIC multipath (min 13) — without it iroh's path manager drops datagrams over a relay
             // path (MultipathNotNegotiated), the cross-network relay-GET timeout. Matches Node::spawn.
             .transport_config(iroh::endpoint::QuicTransportConfig::builder().max_concurrent_multipath_paths(16).build())
+            .path_selector(std::sync::Arc::new(crate::RelayPreferringSelector))
             .bind()
             .await
             .ah()?;
